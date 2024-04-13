@@ -128,8 +128,38 @@ class CarController(CarControllerBase):
                                                                        self.angle_limit_counter, self.maxAngleFrames,
                                                                        MAX_ANGLE_CONSECUTIVE_FRAMES)
 
+    apply_angle = apply_std_steer_angle_limits(actuators.steeringAngleDeg, self.apply_angle_last, CS.out.vEgoRaw, self.params)
+
+    # Figure out torque value.  On Stock when LKAS is active, this is variable,
+    # but 0 when LKAS is not actively steering, so because we're "tricking" ADAS
+    # into thinking LKAS is always active, we need to make sure we're applying
+    # torque when the driver is not actively steering. The default value chosen
+    # here is based on observations of the stock LKAS system when it's engaged
+    # CS.out.steeringPressed and steeringTorque are based on the
+    # STEERING_COL_TORQUE value
+
+    MAX_TORQUE = 200
+    if not bool(CS.out.steeringPressed):
+
+      # If steering is not pressed, use max torque (TODO: need to find this value)
+
+      self.lkas_max_torque = MAX_TORQUE
+    else:
+
+      # Steering torque seems to be a different scale than applied torque, so we
+      # calculate a percentage based on observed "max" values (~|1200| based on
+      # MDPS STEERING_COL_TORQUE) and then apply that percentage to our normal
+      # max torque, use min to clamp to 100%
+      driver_applied_torque_pct = min(abs(CS.out.steeringTorque) / 1200.0, 1.0)
+      # Use max(0, ...) to avoid negative torque in case the
+      self.lkas_max_torque = MAX_TORQUE - (driver_applied_torque_pct * MAX_TORQUE)
+
     if not CC.latActive:
+      apply_angle = CS.out.steeringAngleDeg
       apply_steer = 0
+      self.lkas_max_torque = 0
+
+    self.apply_angle_last = apply_angle
 
     # Hold torque with induced temporary fault when cutting the actuation bit
     torque_fault = CC.latActive and not apply_steer_req
@@ -352,6 +382,7 @@ class CarController(CarControllerBase):
     new_actuators = actuators.copy()
     new_actuators.steer = apply_steer / self.cc_params.STEER_MAX
     new_actuators.steerOutputCan = apply_steer
+    new_actuators.steeringAngleDeg = apply_angle
     new_actuators.accel = accel
 
     self.frame += 1
