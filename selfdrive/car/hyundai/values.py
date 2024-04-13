@@ -572,7 +572,7 @@ class CAR(Platforms):
     CarSpecs(mass=2087, wheelbase=3.09, steerRatio=14.23),
     flags=HyundaiFlags.RADAR_SCC,
   )
-  KIA_EV9 = HyundaiCanFDPlatformConfig(
+  KIA_EV9 = HyundaiCanFDPlatformConfig("KIA EV9",
     [
       HyundaiCarInfo("Kia EV9 2024", car_parts=CarParts.common([CarHarness.hyundai_r]))
     ],
