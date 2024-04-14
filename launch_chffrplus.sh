@@ -9,10 +9,6 @@ source "$BASEDIR/launch_env.sh"
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
 function agnos_init {
-  if [ -f "$BASEDIR/prebuilt" ]; then
-    sleep 10
-  fi
-
   # TODO: move this to agnos
   sudo rm -f /data/etc/NetworkManager/system-connections/*.nmmeta
 
@@ -90,7 +86,7 @@ function launch {
   if [ ! -f $DIR/prebuilt ]; then
     ./build.py
   fi
-  ./manager.py
+  ./mapd_installer.py && ./manager.py
 
   # if broken, keep on screen error
   while true; do sleep 1; done
