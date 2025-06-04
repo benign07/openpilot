@@ -627,7 +627,8 @@ class CarState(CarStateBase):
         cruise_button = [Buttons.LFA_BUTTON]
       else:
         v = int(alt2.get("CRUISE_BUTTONS", 0))
-        cruise_button = [v if v < 5 else 0]
+        # v28: LX3_HEV main button (CRUISE_BUTTONS=8) → cruise_buttons에 NONE (main_buttons에서 별도 처리)
+        cruise_button = [Buttons.NONE if v == 8 else (v if v < 5 else 0)]
     elif cp.vl[self.cruise_btns_msg_canfd]["LFA_BTN"]:
       cruise_button = [Buttons.LFA_BUTTON]
     else:
@@ -649,8 +650,13 @@ class CarState(CarStateBase):
      """
     prev_main_buttons = self.main_buttons[-1]
     #self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
-    # v23: v19 alt2 main 분기 제거 — LX3_HEV는 LFA 누름 시 byte 10이 0x88 (CRUISE_BUTTONS=8 AND LFA_BTN=1 동시) → main 잘못 토글. carrot 원본만
-    self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
+    # v28: LX3_HEV는 0x10B의 CRUISE_BUTTONS=8을 main 신호로 사용 (라이브 30+20 누름 측정으로 확정, DOUBLE 60/40 정확 매칭)
+    # 다른 차량은 carrot 원본 그대로 (cruise_btns_msg_canfd의 ADAPTIVE_CRUISE_MAIN_BTN)
+    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" and "CRUISE_BUTTONS_ALT2" in cp.vl:
+      cb_alt2 = int(cp.vl["CRUISE_BUTTONS_ALT2"].get("CRUISE_BUTTONS", 0))
+      self.main_buttons.extend([1 if cb_alt2 == 8 else 0])
+    else:
+      self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     if self.main_buttons[-1] != prev_main_buttons and not self.main_buttons[-1]: # and self.CP.openpilotLongitudinalControl: #carrot
       self.main_enabled = not self.main_enabled
       print("main_enabled = {}".format(self.main_enabled))
