@@ -375,7 +375,7 @@ class DesireHelper:
           self.lane_change_state = LaneChangeState.off
           self.lane_change_direction = LaneChangeDirection.none
         else:
-          if lane_change_available and self.lane_change_delay == 0:
+          if (lane_change_available and self.lane_change_delay == 0) or lane_line_info_edge_detect:
             if self.blindspot_detected_counter > 0 and not ignore_bsd:  # BSD검출시
               if torque_applied and not block_lanechange_bsd:
                 self.lane_change_state = LaneChangeState.laneChangeStarting
