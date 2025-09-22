@@ -268,7 +268,8 @@ class DesireHelper:
     blinker_state = driver_blinker_state if driver_desire_enabled else atc_blinker_state
 
     lane_line_info = carstate.leftLaneLine if blinker_state == BLINKER_LEFT else carstate.rightLaneLine
-    
+
+    lane_line_info_edge_detect = False
     if desire_enabled:
       lane_exist_counter = self.lane_exist_left_count.counter if blinker_state == BLINKER_LEFT else self.lane_exist_right_count.counter
       lane_available = self.available_left_lane if blinker_state == BLINKER_LEFT else self.available_right_lane
@@ -279,7 +280,9 @@ class DesireHelper:
       side_object_dist = radar.dRel + radar.vLead * 4.0 if radar.status else 255
       object_detected = side_object_dist < v_ego * 3.0
       self.object_detected_count = max(1, self.object_detected_count + 1) if object_detected else min(-1, self.object_detected_count - 1)
-
+      if lane_line_info % 10 in [0, 5] and self.lane_line_info not in [0, 5]:
+        lane_line_info_edge_detect = True
+      self.lane_line_info = lane_line_info % 10
     else:
       lane_exist_counter = 0
       lane_available = True
@@ -287,6 +290,7 @@ class DesireHelper:
       self.lane_appeared = False
       self.lane_available_trigger = False
       self.object_detected_count = 0
+      self.lane_line_info = lane_line_info % 10
 
     #lane_available_trigger = not self.lane_available_last and lane_available
     lane_change_available = (lane_available or edge_available) and lane_line_info < 20 # lane_line_info가 20보다 작으면 흰색라인임.
@@ -382,7 +386,7 @@ class DesireHelper:
               self.lane_change_state = LaneChangeState.laneChangeStarting
             # ATC작동인경우 차선이 나타나거나 차선이 생기면 차선변경 시작
             # lane_appeared: 차선이 생기는건 안함.. 위험.
-            elif torque_applied or auto_lane_change_trigger:
+            elif torque_applied or auto_lane_change_trigger or lane_line_info_edge_detect:
               self.lane_change_state = LaneChangeState.laneChangeStarting
 
       # LaneChangeState.laneChangeStarting
