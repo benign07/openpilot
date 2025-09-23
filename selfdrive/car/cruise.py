@@ -342,7 +342,7 @@ class VCruiseCarrot:
           self.v_cruise_kph = np.clip(v_cruise_kph, 30, self._cruise_speed_max)
           self.v_cruise_cluster_kph = self.v_cruise_kph
     else:
-      self.v_cruise_kph = max(20, self.v_ego_kph_set) #V_CRUISE_UNSET
+      self.v_cruise_kph = np.clip(v_cruise_kph, self._cruise_speed_min, self._cruise_speed_max) #max(20, self.v_ego_kph_set) #V_CRUISE_UNSET
       self.v_cruise_cluster_kph = self.v_cruise_kph #V_CRUISE_UNSET
       #if self.cruise_state_available_last: # 최초 한번이라도 cruiseState.available이 True였다면
       #  self._lat_enabled = False
@@ -636,7 +636,7 @@ class VCruiseCarrot:
         v_cruise_kph = self.nRoadLimitSpeed + self.autoRoadSpeedLimitOffset
     elif self.nRoadLimitSpeed < self.nRoadLimitSpeed_last and self.autoRoadSpeedAdjust > 0:
       new_road_limit_kph = self.nRoadLimitSpeed * self.autoRoadSpeedAdjust + v_cruise_kph * (1 - self.autoRoadSpeedAdjust)
-      self._add_log(f"AutoSpeed change {v_cruise_kph} -> {new_road_limit_kph}")
+      self._add_log(f"AutoSpeed change {v_cruise_kph} -> {new_road_limit_kph:.1f}")
       v_cruise_kph = min(v_cruise_kph, new_road_limit_kph)
     self.road_limit_kph = road_limit_kph
     self.nRoadLimitSpeed_last = self.nRoadLimitSpeed
