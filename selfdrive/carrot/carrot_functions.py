@@ -350,7 +350,7 @@ class CarrotPlanner:
 
     leadOne = radarstate.leadOne
     self.mySafeFactor = 1.0
-    if leadOne.status and leadOne.vLead < 5:
+    if leadOne.status and leadOne.vLead < 5 and leadOne.aLead < 0.5:
       self.myDrivingMode = DrivingMode.Safe
     if self.myDrivingMode == DrivingMode.Eco: # eco
       self.mySafeFactor = self.myEcoModeFactor
