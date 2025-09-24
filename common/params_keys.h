@@ -184,7 +184,7 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"AutoNaviCountDownMode", PERSISTENT},
     {"TurnSpeedControlMode", PERSISTENT},
     {"MapTurnSpeedFactor", PERSISTENT},
-    {"ModelTurnSpeedFactor", PERSITENT},
+    {"ModelTurnSpeedFactor", PERSISTENT},
     {"StoppingAccel", PERSISTENT},
     {"AutoSpeedUptoRoadSpeedLimit", PERSISTENT},
     {"AutoRoadSpeedAdjust", PERSISTENT},
