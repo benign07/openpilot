@@ -458,6 +458,19 @@
     },
     {
       "group": "주행튜닝",
+      "name": "AChangeCostStarting",
+      "title": "AChangeCostStarting",
+      "descr": "출발가속도제한, 0:빠른가속도",
+      "egroup": "LONG",
+      "etitle": "AChangeCostStarting",
+      "edescr": "AccelCost Starting, 0:rapid starting",
+      "min": 0,
+      "max": 200,
+      "default": 10,
+      "unit": 10
+    },
+    {
+      "group": "주행튜닝",
       "name": "JLeadFactor3",
       "title": "JerkLeadFactor(0)",
       "descr": "값이 클수록 전방차량의 가속도변화율에 민감하게 반응",
