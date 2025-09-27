@@ -243,6 +243,7 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"TFollowGap4", PERSISTENT},
     {"DynamicTFollow", PERSISTENT},
     {"DynamicTFollowLC", PERSISTENT},
+    {"AChangeCostStarting", PERSISTENT},
     {"HapticFeedbackWhenSpeedCamera", PERSISTENT},
     {"UseLaneLineSpeed", PERSISTENT},
     {"UseLaneLineCurveSpeed", PERSISTENT},
