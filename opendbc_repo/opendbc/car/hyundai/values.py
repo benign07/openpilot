@@ -782,6 +782,12 @@ class CAR(Platforms):
     ],
     CarSpecs(mass=2625, wheelbase=3.1, steerRatio=16.02),
     flags=HyundaiFlags.EV | HyundaiFlags.ANGLE_CONTROL,
+  )  HYUNDAI_Palisade_HEV_LX3 = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Hyundai Palisade HEV (LX3)", car_parts=CarParts.common([CarHarness.hyundai_k])),
+    ],
+    CarSpecs(mass=2215, wheelbase=2.97, steerRatio=16),
+    flags=HyundaiFlags.ANGLE_CONTROL,
   )
   KIA_EV3 = HyundaiCanFDPlatformConfig(
     [
@@ -791,6 +797,7 @@ class CAR(Platforms):
     flags=HyundaiFlags.EV,
   )
 
+     
 class Buttons:
   NONE = 0
   RES_ACCEL = 1
