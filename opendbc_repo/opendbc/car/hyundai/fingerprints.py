@@ -1339,5 +1339,5 @@ FW_VERSIONS = {
     ],
     # Ecu.fwdRadar 정보는 여전히 누락되어 있습니다.
 }
-}
+
 
