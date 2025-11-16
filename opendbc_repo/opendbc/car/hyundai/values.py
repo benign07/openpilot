@@ -462,7 +462,7 @@ class CAR(Platforms):
     HYUNDAI_SANTAFE_MX5.specs,
     flags=HyundaiFlags.ANGLE_CONTROL,
   )
-  HYUNDAI_Palisade_HEV_2025 = HyundaiCanFDPlatformConfig(
+  HYUNDAI_PALISADE_LX3_HEV = HyundaiCanFDPlatformConfig(
     [
       HyundaiCarDocs("Hyundai Palisade HEV (LX3)", car_parts=CarParts.common([CarHarness.hyundai_k])),
     ],
