@@ -1320,10 +1320,24 @@ FW_VERSIONS = {
     ],
   },  
   CAR.HYUNDAI_PALISADE_LX3_HEV: {
-    (Ecu.fwdRadar, 0x7d0, None): [
+    (Ecu.combinationMeter, 0x7c6, None): [
+        b'\xf1\x00471',
+        b'\xf1\x10',
+        b'\xf1\x8b %\x07\x04',
+    ],
+    (Ecu.hvac, 0x7b3, None): [
+        b'\xf1\x8b %\x07\x03',
     ],
     (Ecu.fwdCamera, 0x7c4, None): [
+        b'\xf1\x8b %\x05#',
     ],
-  },
- }
+    (Ecu.adas, 0x730, None): [
+        b'\xf1\x8b %\x07\x05',
+    ],
+    (Ecu.cornerRadar, 0x7b7, None): [
+        b'\xf1\x8b %\x04$ %\x04# %\x04\x17 %\x04\x12',
+    ],
+    # Ecu.fwdRadar 정보는 여전히 누락되어 있습니다.
+}
+}
 
