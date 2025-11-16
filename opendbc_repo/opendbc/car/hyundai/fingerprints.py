@@ -1290,17 +1290,6 @@ FW_VERSIONS = {
       b'\xf1\x00US4_ RDR -----      1.00 1.00 99110-CG000         ',
     ],
   },
-  CAR.KIA_EV9: {  # (MV)
-    (Ecu.fwdRadar, 0x7d0, None): [
-      b'\xf1\x00MV__ RDR -----      1.00 1.02 99110-DO700         ',
-      b'\xf1\x00MV__ RDR -----      1.00 1.02 99110-DO000         '
-    ],
-    (Ecu.fwdCamera, 0x7c4, None): [
-      b'\xf1\x00MV  MFC  AT KOR LHD 1.00 1.01 99211-DO000 230419',
-      b'\xf1\x00MV  MFC  AT USA LHD 1.00 1.02 99211-DO000 230616',
-      b'\xf1\x00MV  MFC  AT EUR LHD 1.00 1.02 99211-DO000 230616',
-    ],
-  },
   CAR.KIA_EV3: {  # (SV1)
     (Ecu.fwdRadar, 0x7d0, None): [
     ],
@@ -1319,26 +1308,27 @@ FW_VERSIONS = {
     (Ecu.fwdCamera, 0x7c4, None): [
     ],
   },  
-  CAR.HYUNDAI_PALISADE_LX3_HEV: {
-    (Ecu.combinationMeter, 0x7c6, None): [
-        b'\xf1\x00471',
-        b'\xf1\x10',
-        b'\xf1\x8b %\x07\x04',
+  CAR.KIA_EV9: {  # (MV)
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00MV__ RDR -----      1.00 1.02 99110-DO700         ',
+      b'\xf1\x00MV__ RDR -----      1.00 1.02 99110-DO000         '
     ],
-    (Ecu.hvac, 0x7b3, None): [
-        b'\xf1\x8b %\x07\x03',
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00MV  MFC  AT KOR LHD 1.00 1.01 99211-DO000 230419',
+      b'\xf1\x00MV  MFC  AT USA LHD 1.00 1.02 99211-DO000 230616',
+      b'\xf1\x00MV  MFC  AT EUR LHD 1.00 1.02 99211-DO000 230616',
+    ],
+  },
+  CAR.HYUNDAI_PALISADE_LX3_HEV: {
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00LX3__               1.00 1.01 99110P9200          ',
+      b'\xf1\x8b %\x07\x02'
     ],
     (Ecu.fwdCamera, 0x7c4, None): [
         b'\xf1\x8b %\x05#',
     ],
-    (Ecu.adas, 0x730, None): [
-        b'\xf1\x8b %\x07\x05',
-    ],
-    (Ecu.cornerRadar, 0x7b7, None): [
-        b'\xf1\x8b %\x04$ %\x04# %\x04\x17 %\x04\x12',
-    ],
-    # Ecu.fwdRadar 정보는 여전히 누락되어 있습니다.
-}
+    }
+
 }
 
 
