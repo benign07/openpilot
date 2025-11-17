@@ -1,6 +1,7 @@
 import os
 import capnp
 import numpy as np
+import math
 from cereal import log
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan, Meta
 
