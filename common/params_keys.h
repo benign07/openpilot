@@ -183,6 +183,7 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"AutoNaviSpeedSafetyFactor", PERSISTENT},
     {"AutoNaviCountDownMode", PERSISTENT},
     {"TurnSpeedControlMode", PERSISTENT},
+    {"CarrotSmartSpeedControl", PERSISTENT},
     {"MapTurnSpeedFactor", PERSISTENT},
     {"ModelTurnSpeedFactor", PERSISTENT},
     {"StoppingAccel", PERSISTENT},
@@ -209,6 +210,7 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"MyDrivingModeAuto", PERSISTENT},
     {"TrafficLightDetectMode", PERSISTENT},
     {"SteerActuatorDelay", PERSISTENT},
+    {"LatSmoothSec", PERSISTENT},
     {"CruiseOnDist", PERSISTENT},
     {"CruiseMaxVals0", PERSISTENT},
     {"CruiseMaxVals1", PERSISTENT},
@@ -280,6 +282,8 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"MuteDoor", PERSISTENT},
     {"MuteSeatbelt", PERSISTENT},
     {"CarrotException", CLEAR_ON_MANAGER_START},
+    {"CarrotSpeed", PERSISTENT},
+    {"CarrotSpeedTable", PERSISTENT},
     {"CarName", PERSISTENT},
     {"EVTable", PERSISTENT},
     {"LongPitch", PERSISTENT},
@@ -292,4 +296,6 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"NNFF", PERSISTENT},
     {"NNFFLite", PERSISTENT},
     {"NNFFModelName", CLEAR_ON_OFFROAD_TRANSITION},
+
+    {"HardwareC3xLite", PERSISTENT},
 };

@@ -36,7 +36,7 @@ def get_default_params():
 
     ("SearchInput", "0"),
     ("GMapKey", "0"),
-    ("MapboxStyle", "0"),    
+    ("MapboxStyle", "0"),
 
 
     ("LongitudinalPersonalityMax", "3"),
@@ -86,6 +86,7 @@ def get_default_params():
     ("AutoRoadSpeedLimitOffset", "-1"),
     ("AutoNaviCountDownMode", "2"),
     ("TurnSpeedControlMode", "1"),
+    ("CarrotSmartSpeedControl", "0"),
     ("MapTurnSpeedFactor", "90"),
     ("ModelTurnSpeedFactor", "0"),
     ("StoppingAccel", "0"),
@@ -167,6 +168,7 @@ def get_default_params():
     ("CustomSteerDeltaDownLC", "0"),
     ("SpeedFromPCM", "2"),
     ("SteerActuatorDelay", "0"),
+    ("LatSmoothSec", "13"),
     ("MaxTimeOffroadMin", "60"),
     ("DisableDM", "0"),
     ("EnableConnect", "0"),
@@ -300,6 +302,10 @@ def manager_thread() -> None:
   if os.getenv("NOBOARD") is not None:
     ignore.append("pandad")
   ignore += [x for x in os.getenv("BLOCK", "").split(",") if len(x) > 0]
+
+  if params.get("HardwareC3xLite"):
+    ignore += ["micd", "soundd", "loggerd"]
+    params.put("RecordAudio", "0")
 
   sm = messaging.SubMaster(['deviceState', 'carParams'], poll='deviceState')
   pm = messaging.PubMaster(['managerState'])

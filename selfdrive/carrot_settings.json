@@ -262,6 +262,19 @@
       "unit": 1
     },
     {
+      "group": "조향튜닝",
+      "name": "LatSmoothSec",
+      "title": "LatSmoothSec(13)x0.01",
+      "descr": "조향필터링값\n 높으면 부드러운조향",
+      "egroup": "LAT",
+      "etitle": "LatSmoothSec(30)",
+      "edescr": "Lat smoothing values — Higher values smoother",
+      "min": 1,
+      "max": 30,
+      "default": 13,
+      "unit": 1
+    },
+    {
       "group": "크루즈",
       "name": "CruiseOnDist",
       "title": "크루즈ON거리(0cm)",
@@ -1729,6 +1742,19 @@
       "min": 0,
       "max": 3,
       "default": 1,
+      "unit": 1
+    },
+    {
+      "group": "감속제어",
+      "name": "CarrotSmartSpeedControl",
+      "title": "스마트속도제어",
+      "descr": "0: 속도제어안함\n 1: 가속만, 2: 감속만, 3: 모두",
+      "egroup": "SPEED",
+      "etitle": "Smart Speed Control",
+      "edescr": "0:not use, 1:accel, 2:decel, 3:all",
+      "min": 0,
+      "max": 3,
+      "default": 0,
       "unit": 1
     },
     {

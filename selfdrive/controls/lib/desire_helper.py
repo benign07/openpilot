@@ -133,6 +133,7 @@ class DesireHelper:
     self.object_detected_count = 0
     self.lane_available_trigger = False
     self.lane_appeared = False
+    self.lane_line_info = 0
 
     self.laneChangeNeedTorque = 0
     self.laneChangeBsd = 0
@@ -197,7 +198,7 @@ class DesireHelper:
 
   def make_model_turn_speed(self, modeldata):
     if self.modelTurnSpeedFactor > 0:
-      model_turn_speed = np.interp(self.modelTurnSpeedFactor, modeldata.velocity.t, modeldata.velocity.x) * CV.MS_TO_KPH * 1.15
+      model_turn_speed = np.interp(self.modelTurnSpeedFactor, modeldata.velocity.t, modeldata.velocity.x) * CV.MS_TO_KPH * 1.2
       self.model_turn_speed = self.model_turn_speed * 0.9 + model_turn_speed * 0.1
     else:
       self.model_turn_speed = 200.0
