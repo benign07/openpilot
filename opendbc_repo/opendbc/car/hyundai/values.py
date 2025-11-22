@@ -462,11 +462,12 @@ class CAR(Platforms):
     HYUNDAI_SANTAFE_MX5.specs,
     flags=HyundaiFlags.ANGLE_CONTROL,
   )
-  HYUNDAI_PALISADE_LX3_HEV = HyundaiPlatformConfig(
+HYUNDAI_PALISADE_LX3_HEV = HyundaiCanFDPlatformConfig(
     [
       HyundaiCarDocs("Hyundai Palisade HEV (LX3)", car_parts=CarParts.common([CarHarness.hyundai_k])),
     ],
     CarSpecs(mass=2215, wheelbase=2.97, steerRatio=16),
+    flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL,
   )
 
   # Kia
@@ -781,6 +782,7 @@ class CAR(Platforms):
     CarSpecs(mass=1695, wheelbase=2.6, steerRatio=13.75),
     flags=HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.EV,
   )
+# ... (KIA_EV9        )
   KIA_EV9 = HyundaiCanFDPlatformConfig(
     [
       HyundaiCarDocs("Kia EV9 (MV)", car_parts=CarParts.common([CarHarness.hyundai_k])),
