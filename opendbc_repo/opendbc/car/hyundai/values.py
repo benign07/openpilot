@@ -469,7 +469,16 @@ class CAR(Platforms):
     CarSpecs(mass=2215, wheelbase=2.97, steerRatio=16),
     flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL,
   )
+
   # Kia
+  KIA_FORTE = HyundaiPlatformConfig(
+    [
+      HyundaiCarDocs("Kia Forte 2019-21", min_enable_speed=6 * CV.MPH_TO_MS, car_parts=CarParts.common([CarHarness.hyundai_g])),
+      HyundaiCarDocs("Kia Forte 2022-23", car_parts=CarParts.common([CarHarness.hyundai_e])),
+    ],
+    CarSpecs(mass=2878 * CV.LB_TO_KG, wheelbase=2.8, steerRatio=13.75, tireStiffnessFactor=0.5)
+  )
+
   KIA_K5_2021 = HyundaiPlatformConfig(
     [HyundaiCarDocs("Kia K5 2021-24", car_parts=CarParts.common([CarHarness.hyundai_a]))],
     CarSpecs(mass=3381 * CV.LB_TO_KG, wheelbase=2.85, steerRatio=13.27, tireStiffnessFactor=0.5),  # 2021 Kia K5 Steering Ratio (all trims)
