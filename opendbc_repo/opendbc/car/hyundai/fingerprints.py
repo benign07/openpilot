@@ -1319,4 +1319,14 @@ FW_VERSIONS = {
     (Ecu.fwdCamera, 0x7c4, None): [
     ],
   },
+  CAR.HYUNDAI_PALISADE_LX3_HEV: {
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00LX3__                1.00 1.01 99110P9200          ',
+      b'\xf1\x8b %\x07\x02'
+    ],
+    # ī ޶            Ȯ   Ͽ   ν         ϹǷ   ּ  ó   ϰų       մϴ .
+    # (Ecu.fwdCamera, 0x7c4, None): [
+    #   b'\xf1\x8b %\x05#',
+    # ],
+  },
 }
