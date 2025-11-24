@@ -26,6 +26,7 @@ from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
+from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -45,21 +46,25 @@ class Controls:
 
     self.disable_dm = False
 
-    self.sm = messaging.SubMaster(['liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
-                                   'liveCalibration', 'liveLocationKalman', 'longitudinalPlan', 'carState', 'carOutput',
-                                   'liveDelay', 'carrotMan', 'lateralPlan', 'radarState',
+    self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
+                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput',
+                                   'carrotMan', 'lateralPlan', 'radarState', 'liveLocationKalman', 
                                    'driverMonitoringState', 'onroadEvents', 'driverAssistance'], poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState'])
 
     self.steer_limited_by_controls = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+
+    self.pose_calibrator = PoseCalibrator()
+    self.calibrated_pose: Pose | None = None
+    
     self.yStd = 0.0
 
-    self.lead_left_dRel = None
-    self.lead_left_Lat = None
-    self.lead_right_dRel = None
-    self.lead_right_Lat = None
+    self.side_state = {
+        "left":  {"main": {"dRel": None, "lat": None}, "sub": {"dRel": None, "lat": None}},
+        "right": {"main": {"dRel": None, "lat": None}, "sub": {"dRel": None, "lat": None}},
+    }
 
     self.LoC = LongControl(self.CP)
     self.VM = VehicleModel(self.CP)
@@ -73,6 +78,11 @@ class Controls:
 
   def update(self):
     self.sm.update(15)
+    if self.sm.updated["liveCalibration"]:
+      self.pose_calibrator.feed_live_calib(self.sm['liveCalibration'])
+    if self.sm.updated["livePose"]:
+      device_pose = Pose.from_live_pose(self.sm['livePose'])
+      self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_pose)
 
   def state_control(self):
     CS = self.sm['carState']
@@ -138,7 +148,7 @@ class Controls:
     lat_plan = self.sm['lateralPlan']
     curve_speed_abs = abs(self.sm['carrotMan'].vTurnSpeed)
     self.lanefull_mode_enabled = (lat_plan.useLaneLines and curve_speed_abs > self.params.get_int("UseLaneLineCurveSpeed"))
-    lat_smooth_seconds = LAT_SMOOTH_SECONDS #self.params.get_float("SteerSmoothSec") * 0.01
+    lat_smooth_seconds = self.params.get_float("LatSmoothSec") * 0.01
     steer_actuator_delay = self.params.get_float("SteerActuatorDelay") * 0.01
     if steer_actuator_delay == 0.0:
       steer_actuator_delay = self.sm['liveDelay'].lateralDelay 
@@ -187,11 +197,50 @@ class Controls:
 
     return CC, lac_log
 
+
+  def _update_side(self, side: str, leads2, road_edge, bsd_state, hudControl):
+      def ema(prev, curr, a=0.02):
+        return curr if prev is None else prev * (1 - a) + curr * a
+
+      def set_hud(side_cap, name, val):
+        setattr(hudControl, f"lead{side_cap}{name}", float(val if val is not None else 0.0))
+        
+      st = self.side_state[side]
+      if road_edge <= 2.0 or not leads2:
+        st["main"] = {"dRel": None, "lat": None}
+        st["sub"]  = {"dRel": None, "lat": None}
+        if not bsd_state:
+          return
+
+      lead_main = leads2[0] if len(leads2) > 0 else None
+      side_cap = side.capitalize()
+
+      if bsd_state:
+        set_hud(side_cap, "Dist2", 1)
+        set_hud(side_cap, "Lat2",  3.2)
+      # 첫 번째가 10m 이내라면 sub 업데이트 + 두 번째를 main으로
+      elif len(leads2) > 1 and lead_main.dRel < 10:
+        st["sub"]["dRel"] = ema(st["sub"]["dRel"], lead_main.dRel)
+        st["sub"]["lat"]  = ema(st["sub"]["lat"],  abs(lead_main.dPath))
+        set_hud(side_cap, "Dist2", st["sub"]["dRel"])
+        set_hud(side_cap, "Lat2",  st["sub"]["lat"])
+        lead_main = leads2[1]
+
+      if len(leads2) > 0:
+        st["main"]["dRel"] = ema(st["main"]["dRel"], lead_main.dRel)
+        st["main"]["lat"]  = ema(st["main"]["lat"],  abs(lead_main.dPath))
+        set_hud(side_cap, "Dist", st["main"]["dRel"])
+        set_hud(side_cap, "Lat",  st["main"]["lat"])
+
   def publish(self, CC, lac_log):
     CS = self.sm['carState']
 
     # Orientation and angle rates can be useful for carcontroller
     # Only calibrated (car) frame is relevant for the carcontroller
+    #if self.calibrated_pose is not None:
+    #  CC.orientationNED = self.calibrated_pose.orientation.xyz.tolist()
+    #  CC.angularVelocity = self.calibrated_pose.angular_velocity.xyz.tolist()
+
     orientation_value = list(self.sm['liveLocationKalman'].calibratedOrientationNED.value)
     if len(orientation_value) > 2:
       CC.orientationNED = orientation_value
@@ -251,43 +300,8 @@ class Controls:
     meta = self.sm['modelV2'].meta
     hudControl.modelDesire = 1 if meta.desire == log.Desire.turnLeft else 2 if meta.desire == log.Desire.turnRight else 0
 
-    road_edge_left = meta.distanceToRoadEdgeLeft
-    road_edge_right = meta.distanceToRoadEdgeRight
-    def _find_closest_lead(leads, road_edge):
-        if road_edge < 2.0:
-          return None
-        valid_leads = [
-            lead for lead in leads
-            if lead.status and abs(lead.dPath) < 4.2 and lead.vLead > 2.0 and 2 < lead.dRel < 130
-            #if lead.status and abs(lead.dPath) < 4.2 and ((lead.vLead >= 2.0 and 5 < lead.dRel < 100) or (lead.vLead < 2.0 and 3 < lead.dRel < 30))
-        ]
-        return min(valid_leads, key=lambda l: l.dRel) if valid_leads else None
-
-    lead_left = _find_closest_lead(radarState.leadsLeft, road_edge_left)
-    lead_right = _find_closest_lead(radarState.leadsRight, road_edge_right)
-    if lead_left is not None:
-      if self.lead_left_dRel is None:
-        self.lead_left_dRel = lead_left.dRel
-        self.lead_left_Lat = abs(lead_left.dPath)
-      else:
-        self.lead_left_dRel = self.lead_left_dRel * 0.98 + lead_left.dRel * 0.02
-        self.lead_left_Lat = self.lead_left_Lat * 0.98 + abs(lead_left.dPath) * 0.02
-      hudControl.leadLeftDist = self.lead_left_dRel
-      hudControl.leadLeftLat = self.lead_left_Lat
-    else:
-      self.lead_left_dRel = None
-    if lead_right is not None:
-      if self.lead_right_dRel is None:
-        self.lead_right_dRel = lead_right.dRel
-        self.lead_right_Lat = abs(lead_right.dPath)
-      else:
-        self.lead_right_dRel = self.lead_right_dRel * 0.98 + lead_right.dRel * 0.02
-        self.lead_right_Lat = self.lead_right_Lat * 0.98 + abs(lead_right.dPath) * 0.02
-      hudControl.leadRightDist = self.lead_right_dRel
-      hudControl.leadRightLat = self.lead_right_Lat
-    else:
-      self.lead_right_dRel = None
-
+    self._update_side("left",  radarState.leadsLeft2,  meta.distanceToRoadEdgeLeft,  CS.leftBlindspot, hudControl)
+    self._update_side("right", radarState.leadsRight2, meta.distanceToRoadEdgeRight, CS.rightBlindspot, hudControl)
 
     hudControl.rightLaneVisible = True
     hudControl.leftLaneVisible = True

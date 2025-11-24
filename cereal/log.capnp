@@ -768,6 +768,9 @@ struct RadarState @0x9a185389d6fdd05f {
   leadsCenter @15 : List(LeadData);
   leadsLeft @16 : List(LeadData);
   leadsRight @17 : List(LeadData);
+  leadsLeft2 @19 : List(LeadData);
+  leadsRight2 @20 : List(LeadData);
+  leadsCutIn @21 : List(LeadData);
 
   struct LeadData {
     dRel @0 :Float32;
@@ -788,6 +791,7 @@ struct RadarState @0x9a185389d6fdd05f {
 
     aLead @5 :Float32;
     jLead @16 :Float32;
+    score @17 :Float32;
   }
 
   # deprecated
@@ -1175,6 +1179,7 @@ struct ModelDataV2 {
     desire @14 :Desire;
     laneChangeProb @15 :Float32;
     desireLog @16 : Text;
+    modelTurnSpeed @17 :Float32;
 
 
     # deprecated
