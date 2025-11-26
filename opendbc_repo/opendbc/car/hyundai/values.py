@@ -467,7 +467,7 @@ class CAR(Platforms):
       HyundaiCarDocs("Hyundai Palisade HEV (LX3)", car_parts=CarParts.common([CarHarness.hyundai_q])),
     ],
     CarSpecs(mass=2215, wheelbase=2.97, steerRatio=16),
-    flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL,
+    flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL | HyundaiFlags.CANFD_HDA2,
   )
 
   # Kia
