@@ -471,7 +471,7 @@ class CAR(Platforms):
     # flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL | HyundaiFlags.CANFD_HDA2,
     # [수정 후 - 이걸로 하세요!]
     #flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL | HyundaiFlags.SEND_LFA,
-    flags=HyundaiFlags.HYBRID | HyundaiFlags.CANFD_HDA2 | HyundaiFlags.ANGLE_CONTROL | HyundaiFlags.CANFD_ALT_GEARS_2,
+    flags=HyundaiFlags.HYBRID | HyundaiFlags.CANFD_HDA2 | HyundaiFlags.ANGLE_CONTROL,
   )
 
   # Kia
