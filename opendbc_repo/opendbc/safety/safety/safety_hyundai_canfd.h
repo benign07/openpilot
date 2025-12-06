@@ -63,6 +63,11 @@ const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
   {0x345, 0, 8},  // ADRV_0x345
   {0x1DA, 0, 32}, // ADRV_0x1da
 
+  // [수정됨] Bus 2번 허용 추가 (Carrot Harness 대응)
+  {0x1A0, 2, 32}, // CRUISE_INFO (SCC Control) on Bus 2 - 핵심 수정 사항
+  {0x12A, 2, 16}, // LFA on Bus 2
+  {0x1E0, 2, 16}, // LFAHDA_CLUSTER on Bus 2
+
   {0x362, 0, 32}, // CAM_0x362
   {0x362, 1, 32}, // CAM_0x362
   {0x2a4, 1, 24}, // CAM_0x2a4
@@ -79,10 +84,12 @@ const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
   {1187, 2, 8}, // 4A3
   {1204, 2, 8}, // 4B4
 
-  {203, 0, 24}, // CB
+  {203, 0, 24}, // CB (Bus 0)
+  {203, 2, 24}, // CB (Bus 2) - [추가] 가속 메시지가 Bus 2로 나갈 경우 대비
+
   {373, 2, 24}, // TCS(0x175)
   {506, 2, 32}, // CLUSTER_SPEED_LIMIT
-  {234, 2, 24}, // MDPS
+  {234, 2, 24}, // MDPS (Bus 2)
   {687, 2, 8}, // STEER_TOUCH_2AF
 };
 
