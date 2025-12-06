@@ -185,8 +185,8 @@ RxCheck hyundai_canfd_hda2_rx_checks[] = {
   HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
 };
 RxCheck hyundai_canfd_hda2_rx_checks_scc2[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)
-  HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(0)  // TODO: carrot: canival no 0x1cf
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(1)      // <--- 0을 1로 변경
+  HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(1)    // <--- 0을 1로 변경
   HYUNDAI_CANFD_SCC_ADDR_CHECK(2)
 };
 RxCheck hyundai_canfd_hda2_alt_buttons_rx_checks[] = {
@@ -195,8 +195,8 @@ RxCheck hyundai_canfd_hda2_alt_buttons_rx_checks[] = {
   HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
 };
 RxCheck hyundai_canfd_hda2_alt_buttons_rx_checks_scc2[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)
-  HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(0)
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(1)
+  HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(1)
   HYUNDAI_CANFD_SCC_ADDR_CHECK(2)
 };
 RxCheck hyundai_canfd_hda2_long_rx_checks[] = {
@@ -275,7 +275,7 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
   int pt_bus = hyundai_canfd_hda2 ? 1 : 0;
   const int scc_bus = hyundai_camera_scc ? 2 : pt_bus;
 
-  if (hyundai_camera_scc) pt_bus = 0;
+  //if (hyundai_camera_scc) pt_bus = 0;
 
   if (bus == pt_bus) {
     // driver torque
