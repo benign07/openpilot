@@ -247,6 +247,24 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
   int bus = GET_BUS(to_push);
   int addr = GET_ADDR(to_push);
 
+  // [▼▼▼ 추가할 코드 시작 ▼▼▼]
+  // 목적: 0x1A0 (416) 메시지의 내용을 TMUX 로그에 실시간으로 출력
+  if (addr == 0x1a0) {
+      static int debug_count = 0;
+      debug_count++;
+      // 데이터가 너무 빨리 올라오므로 20번에 1번만 출력 (약 0.2~0.4초 간격)
+      if (debug_count % 20 == 0) {
+          print("SCC11(416) RAW: ");
+          // 0번부터 12번 바이트까지만 출력해 봅니다 (보통 앞쪽에 신호가 있음)
+          for (int i = 0; i < 12; i++) {
+              puth(GET_BYTE(to_push, i)); // 16진수로 출력
+              print(" ");
+          }
+          print("\n");
+      }
+  }
+  // [▲▲▲ 추가할 코드 끝 ▲▲▲]
+  
   int pt_bus = hyundai_canfd_hda2 ? 1 : 0;
   const int scc_bus = hyundai_camera_scc ? 2 : pt_bus;
 
@@ -485,7 +503,7 @@ static int hyundai_canfd_fwd_hook(int bus_num, int addr) {
       //if (addr == 908) bus_fwd = -1;
       //else if (addr == 1402) bus_fwd = -1;
       //
-      // �Ʒ��ڵ��� ���������ڵ� ����.. ��
+      // 아래코드중 오토상향등코드 있음.. ㅋ
       //if (addr == 698) bus_fwd = -1;
       //if (addr == 1848) bus_fwd = -1;
       //if (addr == 1996) bus_fwd = -1;
