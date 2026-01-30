@@ -220,7 +220,7 @@ RxCheck hyundai_canfd_hda2_long_rx_checks[] = {
 RxCheck hyundai_canfd_hda2_long_rx_checks_scc2[] = {
   HYUNDAI_CANFD_COMMON_RX_CHECKS(2) // 0129 에서 0->2
   HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(0)  
-};a
+};
 RxCheck hyundai_canfd_hda2_long_alt_buttons_rx_checks[] = {
   HYUNDAI_CANFD_COMMON_RX_CHECKS(2)  // 0129 에서 1->2
   HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(1)
