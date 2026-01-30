@@ -59,7 +59,8 @@ class CarInterface(CarInterfaceBase):
         ret.flags |= HyundaiFlags.ANGLE_CONTROL.value
 
       print("ACAN=", fingerprint[CAN.ACAN])
-
+      print("ECAN=", fingerprint[CAN.ECAN])
+      
       if 0x210 in fingerprint[CAN.ACAN]:
         print("##### Radar Group 1 detected (0x210)")
         ret.extFlags |= HyundaiExtFlags.RADAR_GROUP1.value
