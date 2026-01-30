@@ -1,39 +1,47 @@
 #pragma once
+// [전처리] 컴파일 시 이 파일을 한 번만 포함하라는 중복 방지 명령입니다.
+#include "safety_declarations.h"      // 기본 안전 선언(구조체, 도구들)을 가져옵니다.
+#include "safety_hyundai_common.h"    // 현대차 공통 설정(CRC, 버튼 로직 등)을 가져옵니다.
 
-#include "safety_declarations.h"
-#include "safety_hyundai_common.h"
-
+// *** 조향 안전 제한값 설정 (Steering Limits) ***
+// 오픈파일럿이 핸들을 얼마나 세게, 얼마나 빨리 돌릴 수 있는지 제한합니다.
 const TorqueSteeringLimits HYUNDAI_CANFD_STEERING_LIMITS = {
-  .max_steer = 512, //270,
-  .max_rt_delta = 112,
-  .max_rt_interval = 250000,
-  .max_rate_up = 2,
-  .max_rate_down = 3,
-  .driver_torque_allowance = 250,
-  .driver_torque_multiplier = 2,
-  .type = TorqueDriverLimited,
+  .max_steer = 512,             // [중요] 최대 조향 토크. 512면 꽤 강력하게 설정된 것입니다. (보통 270~384 사용)
+  .max_rt_delta = 112,          // 실시간 토크 변화량 제한 (갑작스런 힘 변화 방지)
+  .max_rt_interval = 250000,    // 위 변화량을 검사하는 시간 간격 (마이크로초)
+  .max_rate_up = 2,             // 토크 올릴 때 속도 제한 (낮을수록 부드럽지만 반응이 느림)
+  .max_rate_down = 3,           // 토크 내릴 때 속도 제한
+  .driver_torque_allowance = 250, // 운전자가 핸들을 잡고 돌릴 때 허용하는 오차 범위
+  .driver_torque_multiplier = 2,  // 운전자 개입 시 토크 감소 비율
+  .type = TorqueDriverLimited,    // 운전자가 힘을 주면 모터 힘을 제한하는 방식
 
-  // the EPS faults when the steering angle is above a certain threshold for too long. to prevent this,
-  // we allow setting torque actuation bit to 0 while maintaining the requested torque value for two consecutive frames
+// EPS(조향모터) 과부하/오류 방지 설정 (조향각이 임계각을 계속 초과하면 에러남, 잠시 쉬어가는 로직)
+  // 최소 89프레임 동안은 조향 요청을 유지하고, 그 후 2프레임 정도는 잠깐 쉬어준다(Cut)는 의미입니다.
   .min_valid_request_frames = 89,
   .max_invalid_request_frames = 2,
   .min_valid_request_rt_interval = 810000,  // 810ms; a ~10% buffer on cutting every 90 frames
-  .has_steer_req_tolerance = true,
+  .has_steer_req_tolerance = true,          // 조향 요청 오차 허용 여부
 };
 
+// *** [TX 리스트] 메시지 전송 허용 목록 ***
+// Panda가 차량으로 보낼 수 있는 메시지 ID와 Bus 번호를 정의합니다.
+
+// HDA2 차량이 '순정 롱컨'일 때 보낼 메시지 목록
 const CanMsg HYUNDAI_CANFD_HDA2_TX_MSGS[] = {
-  {0x50, 0, 16},  // LKAS
-  {0x1CF, 1, 8},  // CRUISE_BUTTON
-  {0x2A4, 0, 24}, // CAM_0x2A4
+  {0x50, 0, 16},  // LKAS (기본 조향) - Bus 0
+  {0x1CF, 1, 8},  // CRUISE_BUTTON (크루즈 버튼 제어) - Bus 1
+  {0x2A4, 0, 24}, // CAM_0x2A4 (카메라 관련 메시지) - Bus 0
 };
 
+// HDA2 차량이 'Alt Steering' (대체 조향, 0x110) 옵션을 켰을 때 목록
 const CanMsg HYUNDAI_CANFD_HDA2_ALT_STEERING_TX_MSGS[] = {
-  {0x110, 0, 32}, // LKAS_ALT
+  {0x110, 0, 32}, // LKAS_ALT (대체 조향, 0x110) - Bus 0
   {0x1CF, 1, 8},  // CRUISE_BUTTON
-  {0x362, 0, 32}, // CAM_0x362
-  {0x1AA, 1, 16}, // CRUISE_ALT_BUTTONS , carrot
+  {0x362, 0, 32}, // CAM_0x362 (0x110과 짝꿍인 카메라 메시지)
+  {0x1AA, 1, 16}, // CRUISE_ALT_BUTTONS (카니발/LX3 등 일부 차종용 대체 버튼)
 };
 
+// HDA2 차량이 '오픈파일럿 롱컨'을 쓸 때 목록
 const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
   {0x50, 0, 16},  // LKAS
   {0x1CF, 0, 8},  // CRUISE_BUTTON
@@ -89,6 +97,7 @@ const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
   {0x4B9, 2, 8}, // NEW_MSG_4B9 (may be corner radar enabler)
 };
 
+// HDA1 (구형) 차량용 목록
 const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
   {0x12A, 0, 16}, // LFA
   {0x1A0, 0, 32}, // CRUISE_INFO
@@ -112,8 +121,11 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
 };
 
 
-// *** Addresses checked in rx hook ***
-// EV, ICE, HYBRID: ACCELERATOR (0x35), ACCELERATOR_BRAKE_ALT (0x100), ACCELERATOR_ALT (0x105)
+// *** 수신 메시지 검사 (RX Checks) 정의 ***
+// 차가 보내는 메시지가 정상적인지(주기, 카운터 등) 확인하는 규칙들입니다.
+
+// 공통 검사: 가속페달, 브레이크, 휠 속도(0xa0), MDPS토크(0xea)
+// 가속 페달은 EV(0x35), 하이브리드(0x105), 내연기관(0x100)에 따라 다릅니다.
 #define HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                              \
   {.msg = {{0x35, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U},                   \
            {0x100, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U},                  \
@@ -122,21 +134,27 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
   {.msg = {{0xa0, (pt_bus), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
   {.msg = {{0xea, (pt_bus), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
 
+// 표준 크루즈 버튼 검사 (0x1cf)
 #define HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(pt_bus)                                                                            \
   {.msg = {{0x1cf, (pt_bus), 8, .ignore_checksum = true, .max_counter = 0xfU, .frequency = 50U}, { 0 }, { 0 }}}, \
 
+// 대체 크루즈 버튼 검사 (0x1aa, 일부 차종)
 #define HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(pt_bus)                                                                            \
   {.msg = {{0x1aa, (pt_bus), 16, .ignore_checksum = true, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},   \
 
-// SCC_CONTROL (from ADAS unit or camera)
+// SCC_CONTROL (스마트 크루즈) 상태 검사 (0x1a0)
 #define HYUNDAI_CANFD_SCC_ADDR_CHECK(scc_bus)                                                                                 \
   {.msg = {{0x1a0, (scc_bus), 32, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}}, \
 
+// 파라미터 플래그 변수
 //static bool hyundai_canfd_alt_buttons = false;
 //static bool hyundai_canfd_hda2_alt_steering = false;
 
+// *** 안전 설정 구성 (Safety Configs) ***
+// 위에서 정의한 검사 규칙들을 조합하여 상황별(HDA1/2, 롱컨 유무 등) 세트 메뉴를 만듭니다.
+
 // *** Non-HDA2 checks ***
-// Camera sends SCC messages on HDA1.
+// HDA1 차량은 Camera가 SCC 메시지를 보냅니다.
 // Both button messages exist on some platforms, so we ensure we track the correct one using flag
 RxCheck hyundai_canfd_rx_checks[] = {
   HYUNDAI_CANFD_COMMON_RX_CHECKS(0)
@@ -329,6 +347,8 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
 
 }
 
+// *** TX HOOK: 전송 메시지 검사 함수 ***
+// 오픈파일럿이 보내려는 메시지가 안전한지 검사합니다. (문지기 역할)
 static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send) {
   const TorqueSteeringLimits HYUNDAI_CANFD_STEERING_LIMITS = {
     .max_steer = 512,
@@ -433,6 +453,8 @@ int addr_list2[128] = { 0, };
 int addr_list_count2 = 0;
 #define OP_CAN_SEND_TIMEOUT 100000
 
+// *** FWD HOOK: 메시지 전달/차단 함수 ***
+// 차에서 오는 메시지를 다른 버스로 넘겨줄지, 차단할지 결정합니다.
 static int hyundai_canfd_fwd_hook(int bus_num, int addr) {
   int bus_fwd = -1;
   uint32_t now = microsecond_timer_get();
@@ -489,7 +511,7 @@ static int hyundai_canfd_fwd_hook(int bus_num, int addr) {
       //if (addr == 908) bus_fwd = -1;
       //else if (addr == 1402) bus_fwd = -1;
       //
-      // �Ʒ��ڵ��� ���������ڵ� ����.. ��
+      // 아래코드중 오토상향등코드 있음.. ㅋ
       //if (addr == 698) bus_fwd = -1;
       //if (addr == 1848) bus_fwd = -1;
       //if (addr == 1996) bus_fwd = -1;
@@ -515,6 +537,8 @@ static int hyundai_canfd_fwd_hook(int bus_num, int addr) {
   return bus_fwd;
 }
 
+// *** 초기화 함수 ***
+// 파이썬 파라미터를 읽어 적절한 RX 체크 리스트와 TX 메시지 리스트를 선택합니다.
 static safety_config hyundai_canfd_init(uint16_t param) {
 
   for (int i = 0; i < 32; i++) {
