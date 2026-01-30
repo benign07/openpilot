@@ -54,7 +54,7 @@ const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
   {0x51, 0, 32},  // ADRV_0x51
   {0x730, 1, 8},  // tester present for ADAS ECU disable
   {0x12A, 1, 16}, // LFA
-  {0x160, 1, 16}, // ADRV_0x160
+  {0x160, 1, 24}, // ADRV_0x160
   {0x1E0, 1, 16}, // LFAHDA_CLUSTER
   {0x1A0, 1, 32}, // CRUISE_INFO
   {0x1EA, 1, 32}, // ADRV_0x1ea
@@ -64,7 +64,7 @@ const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
 
   {0x12A, 0, 16}, // LFA
   {0x1E0, 0, 16}, // LFAHDA_CLUSTER
-  {0x160, 0, 16}, // ADRV_0x160
+  {0x160, 0, 24}, // ADRV_0x160
   {0x1EA, 0, 32}, // ADRV_0x1ea
   {0x200, 0, 8},  // ADRV_0x200
   {0x1A0, 0, 32}, // CRUISE_INFO
@@ -204,7 +204,7 @@ RxCheck hyundai_canfd_hda2_rx_checks_scc2[] = {
   HYUNDAI_CANFD_SCC_ADDR_CHECK(2)
 };
 RxCheck hyundai_canfd_hda2_alt_buttons_rx_checks[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)  // 0129 에서 1->0
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)  // 0129 에서 1->0 
   HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(1)
   HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
 };
@@ -214,7 +214,7 @@ RxCheck hyundai_canfd_hda2_alt_buttons_rx_checks_scc2[] = {
   HYUNDAI_CANFD_SCC_ADDR_CHECK(2)
 };
 RxCheck hyundai_canfd_hda2_long_rx_checks[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(1)
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)  // 0129 에서 1->0 
   HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(1)  // TODO: carrot: canival no 0x1cf
 };
 RxCheck hyundai_canfd_hda2_long_rx_checks_scc2[] = {
@@ -222,7 +222,7 @@ RxCheck hyundai_canfd_hda2_long_rx_checks_scc2[] = {
   HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(0)  
 };
 RxCheck hyundai_canfd_hda2_long_alt_buttons_rx_checks[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(1)
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)  // 0129 에서 1->0 
   HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(1)
 };
 RxCheck hyundai_canfd_hda2_long_alt_buttons_rx_checks_scc2[] = {
