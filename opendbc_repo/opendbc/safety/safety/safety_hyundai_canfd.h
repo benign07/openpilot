@@ -194,39 +194,39 @@ RxCheck hyundai_canfd_radar_scc_alt_buttons_rx_checks[] = {
 // E-CAN is on bus 1, ADAS unit sends SCC messages on HDA2.
 // Does not use the alt buttons message
 RxCheck hyundai_canfd_hda2_rx_checks[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)  // 0129 에서 1->0
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(2)  // 0129 에서 1->2
   HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(1)  // TODO: carrot: canival no 0x1cf
   HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
 };
 RxCheck hyundai_canfd_hda2_rx_checks_scc2[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(2)// 0129 에서 0->2
   HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(0)  // TODO: carrot: canival no 0x1cf
   HYUNDAI_CANFD_SCC_ADDR_CHECK(2)
 };
 RxCheck hyundai_canfd_hda2_alt_buttons_rx_checks[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)  // 0129 에서 1->0 
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(2)  // 0129 에서 1->2
   HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(1)
   HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
 };
 RxCheck hyundai_canfd_hda2_alt_buttons_rx_checks_scc2[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(2)// 0129 에서 0->2
   HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(0)
   HYUNDAI_CANFD_SCC_ADDR_CHECK(2)
 };
 RxCheck hyundai_canfd_hda2_long_rx_checks[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)  // 0129 에서 1->0 
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(2)  // 0129 에서 1->2
   HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(1)  // TODO: carrot: canival no 0x1cf
 };
 RxCheck hyundai_canfd_hda2_long_rx_checks_scc2[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(2) // 0129 에서 0->2
   HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(0)  
-};
+};a
 RxCheck hyundai_canfd_hda2_long_alt_buttons_rx_checks[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)  // 0129 에서 1->0 
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(2)  // 0129 에서 1->2
   HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(1)
 };
 RxCheck hyundai_canfd_hda2_long_alt_buttons_rx_checks_scc2[] = {
-  HYUNDAI_CANFD_COMMON_RX_CHECKS(0)
+  HYUNDAI_CANFD_COMMON_RX_CHECKS(2) // 0129 에서 0->2
   HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(0)
 };
 
