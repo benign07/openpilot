@@ -128,11 +128,11 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
 // 가속 페달은 EV(0x35), 하이브리드(0x105), 내연기관(0x100)에 따라 다릅니다.
 #define HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                              \
   {.msg = {{0x35, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U},                   \
-           {0x100, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U},                  \
-           {0x105, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U}}},                \
-  {.msg = {{0x175, (pt_bus), 24, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},  \
-  {.msg = {{0xa0, (pt_bus), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
-  {.msg = {{0xea, (2), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
+           {0x100, (1), 32, .max_counter = 0xffU, .frequency = 100U},                  \
+           {0x105, (0), 32, .max_counter = 0xffU, .frequency = 100U}}},                \
+  {.msg = {{0x175, (0), 24, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},  \
+  {.msg = {{0xa0, (0), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
+  {.msg = {{0xea, (0), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
 
 // 표준 크루즈 버튼 검사 (0x1cf)
 #define HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(pt_bus)                                                                            \
