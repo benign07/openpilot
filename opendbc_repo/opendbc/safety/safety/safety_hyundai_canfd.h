@@ -132,7 +132,7 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
            {0x105, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U}}},                \
   {.msg = {{0x175, (pt_bus), 24, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},  \
   {.msg = {{0xa0, (pt_bus), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
-  {.msg = {{0xea, (pt_bus), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
+  {.msg = {{0xea, (2), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
 
 // 표준 크루즈 버튼 검사 (0x1cf)
 #define HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(pt_bus)                                                                            \
@@ -140,7 +140,7 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
 
 // 대체 크루즈 버튼 검사 (0x1aa, 일부 차종)
 #define HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(pt_bus)                                                                            \
-  {.msg = {{0x1aa, (pt_bus), 16, .ignore_checksum = true, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},   \
+  {.msg = {{0x1aa, (2), 16, .ignore_checksum = true, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},   \
 
 // SCC_CONTROL (스마트 크루즈) 상태 검사 (0x1a0)
 #define HYUNDAI_CANFD_SCC_ADDR_CHECK(scc_bus)                                                                                 \
