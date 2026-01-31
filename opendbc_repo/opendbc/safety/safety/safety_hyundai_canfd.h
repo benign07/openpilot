@@ -249,15 +249,23 @@ int hyundai_canfd_hda2_get_lkas_addr(void) {
   return hyundai_canfd_hda2_alt_steering ? 0x110 : 0x50;
 }
 
+//0129추가
 static uint8_t hyundai_canfd_get_counter(const CANPacket_t *to_push) {
+  int addr = GET_ADDR(to_push); // 1. 메시지 ID를 가져옴
   uint8_t ret = 0;
+  // 2. 기존 카운터 추출 로직
   if (GET_LEN(to_push) == 8U) {
     ret = GET_BYTE(to_push, 1) >> 4;
   } else {
     ret = GET_BYTE(to_push, 2);
   }
+  // 3. [핵심 수정] 문제가 되는 ID(0x45, 0x105)는 값을 2로 나눠서 반환
+  if (addr == 0x45 || addr == 0x105) {
+    return ret / 2;
+  }
   return ret;
 }
+//여기까지 추가
 
 static uint32_t hyundai_canfd_get_checksum(const CANPacket_t *to_push) {
   uint32_t chksum = GET_BYTE(to_push, 0) | (GET_BYTE(to_push, 1) << 8);
