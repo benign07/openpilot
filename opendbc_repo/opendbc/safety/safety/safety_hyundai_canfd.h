@@ -250,7 +250,6 @@ int hyundai_canfd_hda2_get_lkas_addr(void) {
 }
 
 static uint8_t hyundai_canfd_get_counter(const CANPacket_t *to_push) {
-  int addr = GET_ADDR(to_push);
   uint8_t ret = 0;
   if (GET_LEN(to_push) == 8U) {
     ret = GET_BYTE(to_push, 1) >> 4;
