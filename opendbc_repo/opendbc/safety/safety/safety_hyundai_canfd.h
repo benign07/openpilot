@@ -38,7 +38,15 @@ const CanMsg HYUNDAI_CANFD_HDA2_ALT_STEERING_TX_MSGS[] = {
   {0x110, 0, 32}, // LKAS_ALT (대체 조향, 0x110) - Bus 0
   {0x1CF, 1, 8},  // CRUISE_BUTTON
   {0x362, 0, 32}, // CAM_0x362 (0x110과 짝꿍인 카메라 메시지)
-  {0x1AA, 1, 16}, // CRUISE_ALT_BUTTONS (카니발/LX3 등 일부 차종용 대체 버튼)
+  {0x1AA, 0, 16}, // CRUISE_ALT_BUTTONS , carrot
+  {0x1AA, 1, 16}, // CRUISE_ALT_BUTTONS , carrot
+  {0x1AA, 2, 16}, // CRUISE_ALT_BUTTONS , carrot
+
+  {203, 0, 24}, // CB
+  {373, 2, 24}, // TCS(0x175)
+  {506, 2, 32}, // CLUSTER_SPEED_LIMIT
+  {234, 2, 24}, // MDPS
+  {687, 2, 8}, // STEER_TOUCH_2AF
 };
 
 // HDA2 차량이 '오픈파일럿 롱컨'을 쓸 때 목록
