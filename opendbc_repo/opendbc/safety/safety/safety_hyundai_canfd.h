@@ -140,11 +140,11 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
 
 // 대체 크루즈 버튼 검사 (0x1aa, 일부 차종)
 #define HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(pt_bus)                                                                            \
-  {.msg = {{0x1aa, (2), 16, .ignore_checksum = true, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},   \
+  {.msg = {{0x1aa, (0), 16, .ignore_checksum = true, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},   \
 
 // SCC_CONTROL (스마트 크루즈) 상태 검사 (0x1a0)
 #define HYUNDAI_CANFD_SCC_ADDR_CHECK(scc_bus)                                                                                 \
-  {.msg = {{0x1a0, (scc_bus), 32, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}}, \
+  {.msg = {{0x1a0, (2), 32, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}}, \
 
 // 파라미터 플래그 변수
 //static bool hyundai_canfd_alt_buttons = false;
