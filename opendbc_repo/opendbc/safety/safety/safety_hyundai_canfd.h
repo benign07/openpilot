@@ -45,7 +45,7 @@ const CanMsg HYUNDAI_CANFD_HDA2_ALT_STEERING_TX_MSGS[] = {
   {0x1AA, 0, 16}, // CRUISE_ALT_BUTTONS , carrot
   {0x1AA, 1, 16}, // CRUISE_ALT_BUTTONS , carrot
   {0x1AA, 2, 16}, // CRUISE_ALT_BUTTONS , carrot    
-  };
+};
 
 // HDA2 차량이 '오픈파일럿 롱컨'을 쓸 때 목록
 const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
