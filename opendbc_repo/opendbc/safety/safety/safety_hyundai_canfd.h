@@ -39,7 +39,13 @@ const CanMsg HYUNDAI_CANFD_HDA2_ALT_STEERING_TX_MSGS[] = {
   {0x1CF, 1, 8},  // CRUISE_BUTTON
   {0x362, 0, 32}, // CAM_0x362 (0x110과 짝꿍인 카메라 메시지)
   {0x1AA, 0, 16}, // CRUISE_ALT_BUTTONS , carrot 
-};
+  {0xEA, 2, 24}, // MDPS  
+  {0x2AF, 2, 8}, // STEER_TOUCH_2AF
+  {0xCB, 0, 24}, // Cruise Button
+  {0x1AA, 0, 16}, // CRUISE_ALT_BUTTONS , carrot
+  {0x1AA, 1, 16}, // CRUISE_ALT_BUTTONS , carrot
+  {0x1AA, 2, 16}, // CRUISE_ALT_BUTTONS , carrot    
+  };
 
 // HDA2 차량이 '오픈파일럿 롱컨'을 쓸 때 목록
 const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
@@ -87,11 +93,11 @@ const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
   {1187, 2, 8}, // 4A3
   {1204, 2, 8}, // 4B4
 
-  {203, 0, 24}, // CB
+  {0xCB, 0, 24}, // Cruise Button
   {373, 2, 24}, // TCS(0x175)
   {506, 2, 32}, // CLUSTER_SPEED_LIMIT
-  {234, 2, 24}, // MDPS
-  {687, 2, 8}, // STEER_TOUCH_2AF
+  {0xEA, 2, 24}, // MDPS
+  {0x2AF, 2, 8}, // STEER_TOUCH_2AF
 
   {0x4BE, 2, 8}, // NEW_MSG_4BE (may be corner radar enabler x)
   {0x4B9, 2, 8}, // NEW_MSG_4B9 (may be corner radar enabler)
@@ -106,7 +112,7 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
   {0x160, 0, 16}, // ADRV_0x160
   {0x7D0, 0, 8},  // tester present for radar ECU disable
   {0x1AA, 2, 16}, // CRUISE_ALT_BUTTONS , carrot
-  {203, 0, 24}, // CB
+  {0xCB, 0, 24}, // Cruise Button
   {373, 2, 24}, // TCS(0x175)
 
   {353, 0, 32}, // ADRV_353
@@ -115,8 +121,8 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
   {1187, 2, 8}, // 4A3
   {1204, 2, 8}, // 4B4
   {373, 2, 24}, // TCS(0x175)
-  {234, 2, 24}, // MDPS
-  {687, 2, 8}, // STEER_TOUCH_2AF
+  {0xEA, 2, 24}, // MDPS
+  {0x2AF, 2, 8}, // STEER_TOUCH_2AF
 
 };
 
@@ -239,7 +245,7 @@ bool hyundai_canfd_hda2_alt_steering = false;
 int canfd_tx_addr[32] = { 80, 81, 272, 282, 298, 352, 353, 354, 442, 485, 416, 437, 506, 474, 480, 490, 512, 676, 866, 837, 1402, 908, 1848, 1187, 1204, 203, 0, };
 int canfd_tx_hz[32] = {  100,100, 100, 100, 100,  50,  20,  20,  20,  20,  50,  20,  10,   1,  20,  20,  20,  20,  10,   5,   10,   5,   10,    5,   10, 100, 0, };
 uint32_t canfd_tx_timeout[32] = { 0, };
-int canfd_tx_addr2[32] = { 0x4a3, 373, 506, 463, 426, 234, 687, 0 };
+int canfd_tx_addr2[32] = { 0x4a3, 373, 506, 463, 426, 687, 687, 0 };
 int canfd_tx_hz2[32] = {       5,  50,  10,  50,  50, 100, 10, 0 };
 uint32_t canfd_tx_timeout2[32] = { 0, };
 uint32_t canfd_tx_time[32] = { 0, };
