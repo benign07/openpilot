@@ -38,7 +38,6 @@ const CanMsg HYUNDAI_CANFD_HDA2_ALT_STEERING_TX_MSGS[] = {
   {0x110, 0, 32}, // LKAS_ALT (대체 조향, 0x110) - Bus 0
   {0x1CF, 1, 8},  // CRUISE_BUTTON
   {0x362, 0, 32}, // CAM_0x362 (0x110과 짝꿍인 카메라 메시지)
-  {0x1AA, 0, 16}, // CRUISE_ALT_BUTTONS , carrot 
   {0xEA, 2, 24}, // MDPS  
   {0x2AF, 2, 8}, // STEER_TOUCH_2AF
   {0xCB, 0, 24}, // Cruise Button
@@ -70,6 +69,7 @@ const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
 
   {0x12A, 0, 16}, // LFA
   {0x1E0, 0, 16}, // LFAHDA_CLUSTER
+  {0x1E0, 2, 16}, // LFAHDA_CLUSTER
   {0x160, 0, 16}, // ADRV_0x160
   {0x1EA, 0, 32}, // ADRV_0x1ea
   {0x200, 0, 8},  // ADRV_0x200
