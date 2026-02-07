@@ -328,10 +328,15 @@ class CarController(CarControllerBase):
       lat_active_scc = apply_steer_req
       if CS.LFA_ICON == 2 and not CC.latActive:
         lat_active_scc = True
+
+      lkas_max_torque = self.lkas_max_torque
+      if not CC.latActive:
+        lkas_max_torque = 0
+
       if camera_scc:
-        can_sends.extend(hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, lat_active_scc, apply_torque, CS, apply_angle, self.lkas_max_torque, angle_control))
+        can_sends.extend(hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, lat_active_scc, apply_torque, CS, apply_angle, lkas_max_torque, angle_control))
       else:
-        can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, self.lkas_max_torque, angle_control))
+        can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, lkas_max_torque, angle_control))
 
       # prevent LFA from activating on HDA2 by sending "no lane lines detected" to ADAS ECU
       if self.frame % 5 == 0 and hda2 and not camera_scc:
@@ -642,4 +647,3 @@ class HyundaiJerk:
         self.jerk_l = min(max(1.0, -self.jerk * 2.0), jerk_max_l)
         self.cb_upper = np.clip(0.9 + accel * 0.2, 0, 1.2)
         self.cb_lower = np.clip(0.8 + accel * 0.2, 0, 1.2)
-
