@@ -22,12 +22,17 @@ pre-commit uninstall || true
 echo "[-] bringing __nightly and devel in sync T=$SECONDS"
 cd $TARGET_DIR
 
-git fetch --depth 1 origin __nightly
 git fetch --depth 1 origin devel
 
-git checkout -f --track origin/__nightly
-git reset --hard __nightly
-git checkout __nightly
+if git fetch --depth 1 origin __nightly; then
+  git checkout -f --track origin/__nightly
+  git reset --hard __nightly
+  git checkout __nightly
+else
+  # If __nightly doesn't exist, create it from devel
+  git checkout -b __nightly origin/devel
+fi
+
 git reset --hard origin/devel
 git clean -xdff
 git lfs uninstall
