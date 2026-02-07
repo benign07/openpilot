@@ -22,24 +22,13 @@ pre-commit uninstall || true
 echo "[-] bringing __nightly and devel in sync T=$SECONDS"
 cd $TARGET_DIR
 
-# Fetch master instead of devel since this repo might not have devel branch
-if git fetch --depth 1 origin devel; then
-  GIT_RESET_REF="origin/devel"
-else
-  git fetch --depth 1 origin master
-  GIT_RESET_REF="origin/master"
-fi
+git fetch --depth 1 origin __nightly
+git fetch --depth 1 origin devel
 
-if git fetch --depth 1 origin __nightly; then
-  git checkout -f --track origin/__nightly
-  git reset --hard __nightly
-  git checkout __nightly
-else
-  # If __nightly doesn't exist, create it from the reference we found
-  git checkout -b __nightly $GIT_RESET_REF
-fi
-
-git reset --hard $GIT_RESET_REF
+git checkout -f --track origin/__nightly
+git reset --hard __nightly
+git checkout __nightly
+git reset --hard origin/devel
 git clean -xdff
 git lfs uninstall
 
@@ -54,7 +43,7 @@ git clean -xdff
 # do the files copy
 echo "[-] copying files T=$SECONDS"
 cd $SOURCE_DIR
-./release/release_files.py | tar -cf - -T - | tar -xf - -C $TARGET_DIR
+cp -pR --parents $(./release/release_files.py) $TARGET_DIR/
 
 # in the directory
 cd $TARGET_DIR
