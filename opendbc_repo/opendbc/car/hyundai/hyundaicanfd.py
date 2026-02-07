@@ -125,20 +125,20 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
       values = copy.copy(CS.lfa_alt_info)
     else:
       values = {} #CS.lfa_alt_info
-      values["LKAS_ANGLE_ACTIVE"] = 2 if CC.latActive else 1
+      values["LKAS_ANGLE_ACTIVE"] = 2 if lat_active else 1
       values["LKAS_ANGLE_CMD"] = -apply_angle
-      values["LKAS_ANGLE_MAX_TORQUE"] = max_torque if CC.latActive else 0
+      values["LKAS_ANGLE_MAX_TORQUE"] = max_torque if lat_active else 0
     ret.append(packer.make_can_msg("LFA_ALT", CAN.ECAN, values))
 
     values = copy.copy(CS.lfa_info)
     if not emergency_steering:
       values["LKA_MODE"] = 0
-      values["LKA_ICON"] = 2 if CC.latActive else 1
+      values["LKA_ICON"] = 2 if lat_active else 1
       values["TORQUE_REQUEST"] = -1024  # apply_steer,
       values["VALUE63"] = 0 # LKA_ASSIST
       values["STEER_REQ"] = 0  # 1 if lat_active else 0,
       values["HAS_LANE_SAFETY"] = 0  # hide LKAS settings
-      values["LKA_ACTIVE"] = 3 if CC.latActive else 0  # this changes sometimes, 3 seems to indicate engaged
+      values["LKA_ACTIVE"] = 3 if lat_active else 0  # this changes sometimes, 3 seems to indicate engaged
       values["VALUE64"] = 0  #STEER_MODE, NEW_SIGNAL_2
       values["LKAS_ANGLE_CMD"] = -25.6 #-apply_angle,
       values["LKAS_ANGLE_ACTIVE"] = 0 #2 if lat_active else 1,
@@ -146,19 +146,16 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
       values["NEW_SIGNAL_1"] = 10
 
   else:
-    values = {}
-    values["LKA_MODE"] = 2
-    values["LKA_ICON"] = 2 if lat_active else 1
-    values["TORQUE_REQUEST"] = apply_steer
-    values["STEER_REQ"] = 1 if lat_active else 0
-    values["VALUE64"] = 0  # STEER_MODE, NEW_SIGNAL_2
-    values["HAS_LANE_SAFETY"] = 0
-    values["LKA_ACTIVE"] = 0 # NEW_SIGNAL_1
-
-    values["DampingGain"] = 0 if lat_active else 100  
-    #values["VALUE63"] = 0
-
-    #values["VALUE82_SET256"] = 0
+    values = copy.copy(CS.lfa_info) if CS.lfa_info else {}
+    if lat_active:
+      values["LKA_MODE"] = 2
+      values["LKA_ICON"] = 2 if lat_active else 1
+      values["TORQUE_REQUEST"] = apply_steer
+      values["STEER_REQ"] = 1 if lat_active else 0
+      values["VALUE64"] = 0  # STEER_MODE, NEW_SIGNAL_2
+      values["HAS_LANE_SAFETY"] = 0
+      values["LKA_ACTIVE"] = 0 # NEW_SIGNAL_1
+      values["DampingGain"] = 0 if lat_active else 100
 
   ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
 
@@ -276,9 +273,10 @@ def create_acc_cancel(packer, CP, CAN, cruise_info_copy):
 def create_lfahda_cluster(packer, CS, CAN, long_active, lat_active):
 
   if CS.lfahda_cluster_info is not None:
-    values = {} #
+    values = copy.copy(CS.lfahda_cluster_info)
     values["HDA_CntrlModSta"] = 2 if long_active else 0
-    values["HDA_LFA_SymSta"] = 2 if lat_active else 0
+    if lat_active:
+      values["HDA_LFA_SymSta"] = 2
 
     # 
   else:

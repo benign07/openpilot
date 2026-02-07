@@ -252,14 +252,8 @@ class CarController(CarControllerBase):
       else:
         self.lkas_max_torque = min(self.lkas_max_torque + rate_up, target_torque)
 
-    ##좀비조향 있으면 아래 세줄을 그 아래 세줄로 바꾸기##
-    #if not CC.latActive:
-    #  apply_torque = 0
-    #  self.lkas_max_torque = 0
-
-    if CS.LFA_ICON == 0:             # LFA 아이콘이 꺼져있다면
-        apply_torque = 0             # 핸들에 가하는 힘을 0으로 (힘 빼기)
-        self.lkas_max_torque = 0     # 혹시 모를 피크 토크도 0으로 제한
+    if not CC.latActive:
+      apply_torque = 0
             
     self.apply_angle_last = apply_angle
 
@@ -336,7 +330,7 @@ class CarController(CarControllerBase):
 
       # LFA and HDA icons
       if self.frame % 5 == 0 and camera_scc:
-        can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
+        can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, apply_steer_req))
 
       # blinkers
       if hda2 and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
