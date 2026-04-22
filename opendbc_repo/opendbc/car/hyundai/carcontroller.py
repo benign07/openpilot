@@ -260,6 +260,8 @@ class CarController(CarControllerBase):
     if CS.LFA_ICON == 0:             # LFA 아이콘이 꺼져있다면
         apply_torque = 0             # 핸들에 가하는 힘을 0으로 (힘 빼기)
         self.lkas_max_torque = 0     # 혹시 모를 피크 토크도 0으로 제한
+        apply_steer_req = False      # lateral 비활성화 (LFA_ALT ACTIVE=1로 전환)
+        apply_angle = CS.out.steeringAngleDeg  # 현재 핸들 각도 추종 (stock 대기 동작)
     
     self.apply_angle_last = apply_angle
 
