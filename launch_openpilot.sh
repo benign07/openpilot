@@ -2,6 +2,9 @@
 export API_HOST="https://api.konik.ai/"
 export ATHENA_HOST="wss://athena.konik.ai"
 
+# Konik 업로드 활성화
+echo -n "2" > /data/params/d/EnableConnect
+
 # 부팅 시 주요 설정값 덤프
 DUMP="/data/media/0/params_dump.txt"
 echo "=== Params Dump $(date) ===" > $DUMP
