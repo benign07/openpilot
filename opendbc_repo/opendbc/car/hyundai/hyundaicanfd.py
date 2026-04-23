@@ -110,7 +110,7 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
   if frame % 10 == 0:
     if CS.steer_touch_info is not None:
       values = copy.copy(CS.steer_touch_info)
-      if frame % 1000 < 40:
+      if lat_active or frame % 1000 < 40:
         values["TOUCH_DETECT"] = 3
         values["TOUCH1"] = 50
         values["TOUCH2"] = 50
@@ -118,13 +118,13 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
         dat = packer.make_can_msg("STEER_TOUCH_2AF", 0, values)[1]
         values["CHECKSUM_"] = hyundai_crc8(dat[1:8])
 
-      ret.append(packer.make_can_msg("STEER_TOUCH_2AF", CAN.CAM, values))
+      ret.append(packer.make_can_msg("STEER_TOUCH_2AF", CAN.ECAN, values))
     elif lat_active:
       # Palisade LX3 등 steer_touch가 감지 안 되는 차량: stock 터치 패턴 직접 생성
       values = {"CHECKSUM_": 0x5A, "COUNTER_": 0, "TOUCH_DETECT": 3,
                 "NEW_SIGNAL_2": 0, "TOUCH1": 50, "TOUCH2": 50,
                 "NEW_SIGNAL_3": 0, "NEW_SIGNAL_4": 0}
-      ret.append(packer.make_can_msg("STEER_TOUCH_2AF", CAN.CAM, values))
+      ret.append(packer.make_can_msg("STEER_TOUCH_2AF", CAN.ECAN, values))
 
   if angle_control:
     if emergency_steering:
