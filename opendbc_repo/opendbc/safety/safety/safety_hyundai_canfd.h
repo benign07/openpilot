@@ -117,7 +117,7 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
 #define HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                              \
   {.msg = {{0x35, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U},                   \
            {0x100, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U},                  \
-           {0x105, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U}}},                \
+           {0x105, (pt_bus), 32, .max_counter = 0U, .frequency = 100U, .ignore_counter = true, .ignore_checksum = true}}},                \
   {.msg = {{0x175, (pt_bus), 24, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},  \
   {.msg = {{0xa0, (pt_bus), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
   {.msg = {{0xea, (pt_bus), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
