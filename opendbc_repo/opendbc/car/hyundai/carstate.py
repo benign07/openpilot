@@ -677,7 +677,12 @@ class CarState(CarStateBase):
 
   def get_can_parsers_canfd(self, CP):
     msgs = []
-    if not (CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS):
+    if CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS:
+      # v7: ALT_BUTTONS mode subscribes CRUISE_BUTTONS_ALT (0x1AA) for vl_all
+      msgs += [
+        ("CRUISE_BUTTONS_ALT", 50)
+      ]
+    else:
       # TODO: this can be removed once we add dynamic support to vl_all
       msgs += [
         ("CRUISE_BUTTONS", 50)
