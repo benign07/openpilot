@@ -116,7 +116,7 @@ class Controls:
     # carrot
     gear = car.CarState.GearShifter
     driving_gear = CS.gearShifter not in (gear.neutral, gear.park, gear.reverse, gear.unknown)
-    lateral_enabled = False  # v18: driving_gear 제거 — selfdriveState.active 또는 CS.latEnabled에 의존 (좀비조향 root cause)
+    lateral_enabled = driving_gear  # v20: v18 revert — v19 carcontroller 가드로 좀비조향 차단되니 LFA 단독 latActive 유지
     #self.soft_hold_active = CS.softHoldActive #car.OnroadEvent.EventName.softHold in [e.name for e in self.sm['onroadEvents']]
 
     # Check which actuators can be enabled
