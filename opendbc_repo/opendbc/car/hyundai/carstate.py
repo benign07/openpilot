@@ -653,6 +653,8 @@ class CarState(CarStateBase):
         self.msg_0x362 = cp_cam.vl["CAM_0x362"]
       elif self.msg_0x2a4 is not None or 0x2a4 in cp_cam.seen_addresses:
         self.msg_0x2a4 = cp_cam.vl["CAM_0x2a4"]
+elif cp_alt is not None and self.CAM_0x362:  # v14: HDA2+camera_scc(LX3_HEV)에서도 ACAN 0x362로 suppress 가능하게
+      self.msg_0x362 = cp_alt.vl["CAM_0x362"]
 
     speed_conv = CV.KPH_TO_MS # if self.is_metric else CV.MPH_TO_MS
     cluSpeed = cp.vl["CRUISE_BUTTONS_ALT"]["CLU_SPEED"]
@@ -690,7 +692,7 @@ class CarState(CarStateBase):
     return {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
-      Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).ACAN),
+      Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], [("CAM_0x362", 50)] if CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" else [], CanBus(CP).ACAN),  # v14
     }
 
   def get_can_parsers(self, CP):
