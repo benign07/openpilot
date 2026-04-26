@@ -151,6 +151,7 @@ class CarState(CarStateBase):
     self.ADRV_0x1ea = True if 0x1ea in fingerprints[cam_bus] else False
     self.ADRV_0x160 = True if 0x160 in fingerprints[cam_bus] else False
     self.LFAHDA_CLUSTER = True if 480 in fingerprints[cam_bus] else False
+    self.HAS_LX3_HEV_LFA = True if 0x3b2 in fingerprints[alt_bus] else False  # v12
     self.HDA_INFO_4A3 = True if 0x4a3 in fingerprints[pt_bus] else False
     self.NEW_MSG_4B4 = True if 0x4b4 in fingerprints[pt_bus] else False
     self.GEAR = True if 69 in fingerprints[pt_bus] else False
@@ -620,7 +621,10 @@ class CarState(CarStateBase):
     #self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
     #carrot {{
 
-    if cp.vl[self.cruise_btns_msg_canfd]["LFA_BTN"]:
+    lfa_btn = cp.vl[self.cruise_btns_msg_canfd]["LFA_BTN"]
+    if self.HAS_LX3_HEV_LFA and cp_alt is not None:
+      lfa_btn = lfa_btn or cp_alt.vl["LX3_HEV_LFA_BTN"]["LFA_BTN"]  # v12: LX3_HEV ACAN 0x3b2 byte11 bit0
+    if lfa_btn:
       cruise_button = [Buttons.LFA_BUTTON]
     else:
       cruise_button = cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"]
@@ -690,7 +694,7 @@ class CarState(CarStateBase):
     return {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
-      Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).ACAN),
+      Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], [("LX3_HEV_LFA_BTN", 50)] if CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" else [], CanBus(CP).ACAN),
     }
 
   def get_can_parsers(self, CP):
