@@ -257,7 +257,12 @@ class CarController(CarControllerBase):
     #  apply_torque = 0
     #  self.lkas_max_torque = 0
 
-    if not CC.enabled:  # v17: 진짜 engage 아닌 상태에서 LKAS active 비트 송출 차단 (좀비조향 컨디션 차단)
+    if not CC.latActive:  # v19: carrot 원본 패턴 — controlsd가 발행하는 latActive 따라 LKAS active 차단 (좀비조향 진짜 root fix)
+        apply_torque = 0
+        self.lkas_max_torque = 0
+        apply_steer_req = False
+        apply_angle = CS.out.steeringAngleDeg
+    elif not CC.enabled:  # v17: 진짜 engage 아닌 상태에서 LKAS active 비트 송출 차단 (좀비조향 컨디션 차단)
         apply_torque = 0
         self.lkas_max_torque = 0
         apply_steer_req = False

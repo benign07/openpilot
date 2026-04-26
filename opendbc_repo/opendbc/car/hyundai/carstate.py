@@ -620,7 +620,15 @@ class CarState(CarStateBase):
     #self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
     #carrot {{
 
-    if cp.vl[self.cruise_btns_msg_canfd]["LFA_BTN"]:
+    # v19: LX3_HEV는 CRUISE_BUTTONS_ALT2(0x10B) 우선 (carrot 최신 패턴 backport)
+    if "CRUISE_BUTTONS_ALT2" in cp.vl:
+      alt2 = cp.vl["CRUISE_BUTTONS_ALT2"]
+      if int(alt2.get("LFA_BTN", 0)) == 1:
+        cruise_button = [Buttons.LFA_BUTTON]
+      else:
+        v = int(alt2.get("CRUISE_BUTTONS", 0))
+        cruise_button = [v if v < 5 else 0]
+    elif cp.vl[self.cruise_btns_msg_canfd]["LFA_BTN"]:
       cruise_button = [Buttons.LFA_BUTTON]
     else:
       cruise_button = cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"]
@@ -641,7 +649,11 @@ class CarState(CarStateBase):
      """
     prev_main_buttons = self.main_buttons[-1]
     #self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
-    self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
+    # v19: LX3_HEV는 ALT2의 CRUISE_BUTTONS==8을 main으로 처리 (carrot 최신 패턴)
+    if "CRUISE_BUTTONS_ALT2" in cp.vl:
+      self.main_buttons.extend([1 if int(cp.vl["CRUISE_BUTTONS_ALT2"].get("CRUISE_BUTTONS", 0)) == 8 else 0])
+    else:
+      self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     if self.main_buttons[-1] != prev_main_buttons and not self.main_buttons[-1]: # and self.CP.openpilotLongitudinalControl: #carrot
       self.main_enabled = not self.main_enabled
       print("main_enabled = {}".format(self.main_enabled))
@@ -687,6 +699,9 @@ class CarState(CarStateBase):
       msgs += [
         ("CRUISE_BUTTONS", 50)
       ]
+    # v19: LX3_HEV는 0x10B(=267) CRUISE_BUTTONS_ALT2 추가 sub (carrot 최신 패턴 backport)
+    if CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+      msgs += [("CRUISE_BUTTONS_ALT2", 50)]
     return {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
