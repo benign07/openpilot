@@ -83,7 +83,8 @@ const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
   {373, 2, 24}, // TCS(0x175)
   {506, 2, 32}, // CLUSTER_SPEED_LIMIT
   {234, 2, 24}, // MDPS
-  {687, 2, 8}, // STEER_TOUCH_2AF
+  {687, 0, 8}, // STEER_TOUCH_2AF on ECAN (carrot fafdb3e, v8)
+  {687, 2, 8}, // STEER_TOUCH_2AF on CAM (stock)
 
   {0x4BE, 2, 8}, // NEW_MSG_4BE (may be corner radar enabler x)
   {0x4B9, 2, 8}, // NEW_MSG_4B9 (may be corner radar enabler)
@@ -107,7 +108,8 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
   {1204, 2, 8}, // 4B4
   {373, 2, 24}, // TCS(0x175)
   {234, 2, 24}, // MDPS
-  {687, 2, 8}, // STEER_TOUCH_2AF
+  {687, 0, 8}, // STEER_TOUCH_2AF on ECAN (carrot fafdb3e, v8)
+  {687, 2, 8}, // STEER_TOUCH_2AF on CAM (stock)
 
 };
 
