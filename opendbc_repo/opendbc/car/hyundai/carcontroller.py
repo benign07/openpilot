@@ -257,7 +257,12 @@ class CarController(CarControllerBase):
     #  apply_torque = 0
     #  self.lkas_max_torque = 0
 
-    if CS.LFA_ICON in (0, 1):  # v15: HIDDEN+GRAY 모두 차단 (GREEN active 시만 OP 토크)             # LFA 아이콘이 꺼져있다면
+    if not CC.enabled:  # v17: 진짜 engage 아닌 상태에서 LKAS active 비트 송출 차단 (좀비조향 컨디션 차단)
+        apply_torque = 0
+        self.lkas_max_torque = 0
+        apply_steer_req = False
+        apply_angle = CS.out.steeringAngleDeg
+    elif CS.LFA_ICON in (0, 1):  # v15: HIDDEN+GRAY 모두 차단 (GREEN active 시만 OP 토크)             # LFA 아이콘이 꺼져있다면
         apply_torque = 0             # 핸들에 가하는 힘을 0으로 (힘 빼기)
         self.lkas_max_torque = 0     # 혹시 모를 피크 토크도 0으로 제한
         apply_steer_req = False      # lateral 비활성화 (LFA_ALT ACTIVE=1로 전환)
