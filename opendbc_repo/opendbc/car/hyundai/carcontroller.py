@@ -257,21 +257,11 @@ class CarController(CarControllerBase):
     #  apply_torque = 0
     #  self.lkas_max_torque = 0
 
-    if not CC.latActive:  # v19: carrot 원본 패턴 — controlsd가 발행하는 latActive 따라 LKAS active 차단 (좀비조향 진짜 root fix)
+    if not CC.latActive:  # v22: carrot 원본만 — v15(LFA_ICON GRAY)와 v17(CC.enabled) 제거. 다중 가드가 ANGLE_CONTROL 모드에서 토크 송출 막던 문제 fix
         apply_torque = 0
         self.lkas_max_torque = 0
         apply_steer_req = False
         apply_angle = CS.out.steeringAngleDeg
-    elif not CC.enabled:  # v17: 진짜 engage 아닌 상태에서 LKAS active 비트 송출 차단 (좀비조향 컨디션 차단)
-        apply_torque = 0
-        self.lkas_max_torque = 0
-        apply_steer_req = False
-        apply_angle = CS.out.steeringAngleDeg
-    elif CS.LFA_ICON in (0, 1):  # v15: HIDDEN+GRAY 모두 차단 (GREEN active 시만 OP 토크)             # LFA 아이콘이 꺼져있다면
-        apply_torque = 0             # 핸들에 가하는 힘을 0으로 (힘 빼기)
-        self.lkas_max_torque = 0     # 혹시 모를 피크 토크도 0으로 제한
-        apply_steer_req = False      # lateral 비활성화 (LFA_ALT ACTIVE=1로 전환)
-        apply_angle = CS.out.steeringAngleDeg  # 현재 핸들 각도 추종 (stock 대기 동작)
     
     self.apply_angle_last = apply_angle
 
