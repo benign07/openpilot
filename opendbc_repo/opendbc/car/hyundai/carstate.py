@@ -662,6 +662,9 @@ class CarState(CarStateBase):
         self.msg_0x362 = cp_cam.vl["CAM_0x362"]
       elif self.msg_0x2a4 is not None or 0x2a4 in cp_cam.seen_addresses:
         self.msg_0x2a4 = cp_cam.vl["CAM_0x2a4"]
+    # v24: LX3_HEV는 CAMERA_SCC=True지만 stock LFA suppress 위해 ACAN의 CAM_0x362 set
+    elif self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" and cp_alt is not None and self.CAM_0x362:
+      self.msg_0x362 = cp_alt.vl["CAM_0x362"]
 
     speed_conv = CV.KPH_TO_MS # if self.is_metric else CV.MPH_TO_MS
     cluSpeed = cp.vl["CRUISE_BUTTONS_ALT"]["CLU_SPEED"]
@@ -699,10 +702,14 @@ class CarState(CarStateBase):
     # v19: LX3_HEV는 0x10B(=267) CRUISE_BUTTONS_ALT2 추가 sub (carrot 최신 패턴 backport)
     if CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
       msgs += [("CRUISE_BUTTONS_ALT2", 50)]
+    # v24: LX3_HEV는 ACAN의 CAM_0x362 sub (stock LFA suppress 위해, 25Hz 정확)
+    alt_msgs = []
+    if CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+      alt_msgs += [("CAM_0x362", 25)]
     return {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
-      Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).ACAN),
+      Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], alt_msgs, CanBus(CP).ACAN),
     }
 
   def get_can_parsers(self, CP):
