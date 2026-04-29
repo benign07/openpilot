@@ -329,6 +329,37 @@ def create_lfa_icon_non_camera_scc(packer, CS, CAN, CC):
     ret.append(packer.make_can_msg("ADRV_0x161", CAN.ECAN, values, rx_counter=rx_counter))
   return ret
 
+def create_lfa_icon_lx3_hev(packer, CS, CAN, CC):
+  # v25: LX3_HEV (HDA2+camera_scc=3) stock LFA suppress.
+  # OP가 ADRV_0x161 변조 송출 → panda fwd_hook이 cam의 stock 0x161 차단 → ADAS는 LANELINE=0/CENTERLINE=0 받아서 stock LFA OFF 판단
+  ret = []
+  if CS.adrv_info_161 is not None:
+    values = copy.copy(CS.adrv_info_161)
+    rx_counter = values.pop("COUNTER", None)
+    lat_active = CC.latActive
+    lat_enabled = CS.out.latEnabled
+    values["LFA_ICON"] = 2 if lat_active else 1 if lat_enabled else 0
+    values["LKA_ICON"] = 4 if lat_active else 3 if lat_enabled else 0
+    # v25 stock LFA suppress
+    values["LANELINE_LEFT"] = 0
+    values["LANELINE_RIGHT"] = 0
+    values["CENTERLINE"] = 0
+    # carrot 원본의 ALERTS 처리 흉내
+    if values.get("ALERTS_2", 0) in [1, 2, 5, 6, 10, 21, 22]:
+      values["ALERTS_2"] = 0
+      values["DAW_ICON"] = 0
+    if values.get("ALERTS_1", 0) == 0:
+      values["SOUNDS_1"] = 0
+      values["SOUNDS_2"] = 0
+      values["SOUNDS_4"] = 0
+    if values.get("ALERTS_3", 0) in [3, 4, 11, 12, 13, 14, 17, 19, 26, 7, 8, 9, 10]:
+      values["ALERTS_3"] = 0
+      values["SOUNDS_3"] = 0
+    if values.get("ALERTS_5", 0) in [1, 2, 3, 4, 5]:
+      values["ALERTS_5"] = 0
+    ret.append(packer.make_can_msg("ADRV_0x161", CAN.ECAN, values, rx_counter=rx_counter))
+  return ret
+
 def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, gas_override, set_speed, hud_control, hyundai_jerk, CS):
   
   if CS.scc_control is None:
