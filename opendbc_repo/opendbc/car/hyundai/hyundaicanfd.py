@@ -292,6 +292,35 @@ def create_lfahda_cluster(packer, CS, CAN, long_active, lat_active):
   return [packer.make_can_msg("LFAHDA_CLUSTER", CAN.ECAN, values)]
 
 
+def create_lfa_icon_lx3_hev(packer, CS, CAN, CC):
+  # v25: LX3_HEV stock LFA suppress via ADRV_0x161 LANELINE/CENTERLINE=0
+  ret = []
+  if CS.adrv_info_161 is not None:
+    values = copy.copy(CS.adrv_info_161)
+    rx_counter = values.pop("COUNTER", None)
+    lat_active = CC.latActive
+    lat_enabled = CS.out.latEnabled
+    values["LFA_ICON"] = 2 if lat_active else 1 if lat_enabled else 0
+    values["LKA_ICON"] = 4 if lat_active else 3 if lat_enabled else 0
+    values["LANELINE_LEFT"] = 0
+    values["LANELINE_RIGHT"] = 0
+    values["CENTERLINE"] = 0
+    if values.get("ALERTS_2", 0) in [1, 2, 5, 6, 10, 21, 22]:
+      values["ALERTS_2"] = 0
+      values["DAW_ICON"] = 0
+    if values.get("ALERTS_1", 0) == 0:
+      values["SOUNDS_1"] = 0
+      values["SOUNDS_2"] = 0
+      values["SOUNDS_4"] = 0
+    if values.get("ALERTS_3", 0) in [3, 4, 11, 12, 13, 14, 17, 19, 26, 7, 8, 9, 10]:
+      values["ALERTS_3"] = 0
+      values["SOUNDS_3"] = 0
+    if values.get("ALERTS_5", 0) in [1, 2, 3, 4, 5]:
+      values["ALERTS_5"] = 0
+    ret.append(packer.make_can_msg("ADRV_0x161", CAN.ECAN, values, rx_counter=rx_counter))
+  return ret
+
+
 def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, gas_override, set_speed, hud_control, hyundai_jerk, CS):
   enabled = (enabled or CS.softHoldActive > 0) and CS.paddle_button_prev == 0
 
