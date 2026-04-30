@@ -373,7 +373,7 @@ class CarController(CarControllerBase):
         # button presses
         if self.camera_scc_params == 3: # camera scc but stock long
           send_button = self.make_spam_button(CC, CS)
-          can_sends.extend(hyundaicanfd.forward_button_message(self.packer, self.CAN, self.frame, CS, send_button, self.MainMode_ACC_trigger, self.LFA_trigger))
+          can_sends.extend(hyundaicanfd.forward_button_message(self.packer, self.CP, self.CAN, self.frame, CS, send_button, self.MainMode_ACC_trigger, self.LFA_trigger))
         else:
           can_sends.extend(self.create_button_messages(CC, CS, use_clu11=False))
         
@@ -509,7 +509,14 @@ class CarController(CarControllerBase):
     self.MainMode_ACC_trigger = max(trigger_min, self.MainMode_ACC_trigger - 1)
     self.LFA_trigger = max(trigger_min, self.LFA_trigger - 1)
     if self.MainMode_ACC_trigger == trigger_min and self.LFA_trigger == trigger_min:
-      if CC.enabled and not CS.MainMode_ACC and CS.out.vEgo > 3.:
+      # LX3_HEV: 사용자 SCC 버튼 누름 시 stock main toggle (LX3는 CANCEL 버튼 없음, SCC 버튼 = main toggle)
+      # main_buttons rising/falling edge 감지 → ADAPTIVE_CRUISE_MAIN_BTN 송출 trigger
+      if (self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV"
+          and CS.MainMode_ACC
+          and len(CS.main_buttons) >= 2
+          and CS.main_buttons[-1] != CS.main_buttons[-2]):
+        self.MainMode_ACC_trigger = trigger_start
+      elif CC.enabled and not CS.MainMode_ACC and CS.out.vEgo > 3.:
         self.MainMode_ACC_trigger = trigger_start
       elif CC.latActive and CS.LFA_ICON == 0:
         self.LFA_trigger = trigger_start
