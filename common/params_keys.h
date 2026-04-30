@@ -205,7 +205,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"StopDistanceCarrot", {PERSISTENT, INT, "550"}},
     {"JLeadFactor3", {PERSISTENT, INT, "0"}},
     {"CruiseButtonMode", {PERSISTENT, INT, "0"}},  // 0:Normal, 1:User1, 2:User2
-    {"CancelButtonMode", {PERSISTENT, INT, "1"}},  // LX3_HEV: 1=Long+Lat (no CANCEL button on LX3 wheel)
+    {"CancelButtonMode", {PERSISTENT, INT, "0"}},  // 0:Long, 1:Long+Lat
     {"LfaButtonMode", {PERSISTENT, INT, "0"}},
     {"CruiseButtonTest1", {PERSISTENT, INT, "8"}},
     {"CruiseButtonTest2", {PERSISTENT, INT, "30"}},
