@@ -336,8 +336,9 @@ class CarController(CarControllerBase):
         can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
         if not camera_scc:
           can_sends.extend(hyundaicanfd.create_lfa_icon_non_camera_scc(self.packer, CS, self.CAN, CC))
-        elif self.camera_scc_params == 3:
-          # LX3_HEV: camera_scc=3 (stock long) 모드에서도 ADRV_0x161 LFA_ICON 변조 (carrot 원본 함수 그대로)
+        elif self.camera_scc_params == 3 and self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+          # LX3_HEV only: camera_scc=3 (stock long) 모드에서도 ADRV_0x161 LFA_ICON 변조 (carrot 원본 함수 그대로)
+          # 다른 camera_scc=3 차량은 stock LFA_ICON 그대로 (영향 0)
           can_sends.extend(hyundaicanfd.create_lfa_icon_non_camera_scc(self.packer, CS, self.CAN, CC))
 
       # blinkers
