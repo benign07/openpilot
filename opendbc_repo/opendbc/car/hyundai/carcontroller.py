@@ -336,6 +336,9 @@ class CarController(CarControllerBase):
         can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
         if not camera_scc:
           can_sends.extend(hyundaicanfd.create_lfa_icon_non_camera_scc(self.packer, CS, self.CAN, CC))
+        elif self.camera_scc_params == 3:
+          # LX3_HEV: camera_scc=3 (stock long) 모드에서도 ADRV_0x161 LFA_ICON 변조 (carrot 원본 함수 그대로)
+          can_sends.extend(hyundaicanfd.create_lfa_icon_non_camera_scc(self.packer, CS, self.CAN, CC))
 
       # blinkers
       if hda2 and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
