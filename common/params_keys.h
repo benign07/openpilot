@@ -37,7 +37,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"DoShutdown", {CLEAR_ON_MANAGER_START, BOOL}},
     {"DoUninstall", {CLEAR_ON_MANAGER_START, BOOL}},
     {"DriverTooDistracted", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, BOOL}},
-    {"AlphaLongitudinalEnabled", {PERSISTENT | DEVELOPMENT_ONLY, BOOL}},
+    {"AlphaLongitudinalEnabled", {PERSISTENT | DEVELOPMENT_ONLY, BOOL, "1"}},  // LX3_HEV: OP long control alpha enabled by default
     {"ExperimentalMode", {PERSISTENT, BOOL}},
     {"ExperimentalModeConfirmed", {PERSISTENT, BOOL}},
     {"FirmwareQueryDone", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},
@@ -204,8 +204,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     {"StopDistanceCarrot", {PERSISTENT, INT, "550"}},
     {"JLeadFactor3", {PERSISTENT, INT, "0"}},
-    {"CruiseButtonMode", {PERSISTENT, INT, "0"}},
-    {"CancelButtonMode", {PERSISTENT, INT, "0"}},
+    {"CruiseButtonMode", {PERSISTENT, INT, "0"}},  // 0:Normal, 1:User1, 2:User2
+    {"CancelButtonMode", {PERSISTENT, INT, "1"}},  // LX3_HEV: 1=Long+Lat (no CANCEL button on LX3 wheel)
     {"LfaButtonMode", {PERSISTENT, INT, "0"}},
     {"CruiseButtonTest1", {PERSISTENT, INT, "8"}},
     {"CruiseButtonTest2", {PERSISTENT, INT, "30"}},
@@ -245,7 +245,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"VEgoStopping", {PERSISTENT, INT, "50"}},
 
     {"RadarReactionFactor", {PERSISTENT, INT, "100"}},
-    {"EnableRadarTracks", {PERSISTENT, INT, "0"}},
+    {"EnableRadarTracks", {PERSISTENT, INT, "1"}},  // LX3_HEV: radar tracks 활성화 (carrot longitudinal_planner radar 활용)
     {"RadarLatFactor", {PERSISTENT, INT, "0"}},
     {"EnableCornerRadar", {PERSISTENT, INT, "0"}},
 
@@ -255,7 +255,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"HotspotOnBoot", {PERSISTENT, INT, "0"}},
     {"SoftwareMenu", {PERSISTENT, INT, "1"}},
 
-    {"HyundaiCameraSCC", {PERSISTENT, INT, "0"}},
+    {"HyundaiCameraSCC", {PERSISTENT, INT, "1"}},  // LX3_HEV: 1=OP long + AEB 보존 (배선개조 + camera_scc=1 모드)
     {"FingerPrints", {PERSISTENT | CLEAR_ON_MANAGER_START, STRING}},
     {"IsLdwsCar", {PERSISTENT, INT, "0"}},
     {"CanfdHDA2", {PERSISTENT, INT, "0"}},
