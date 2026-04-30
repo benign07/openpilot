@@ -468,6 +468,30 @@ FW_VERSIONS = {
       b'\xf1\x00ON  MFC  AT USA LHD 1.00 1.04 99211-S9100 211227',
     ],
   },
+  CAR.HYUNDAI_PALISADE_LX3_HEV: {
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00LX3__                                  1.00 1.0',
+      b'\xf1\x8b\x20\x25\x07\x02',
+    ],
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00LX31.001.001.0025310000HKP_LX',
+      b'\xf1\x8b\x20\x25\x05\x23',
+    ],
+    (Ecu.adas, 0x730, None): [
+      b'\xf1\x8b\x20\x25\x07\x05',
+    ],
+    (Ecu.cornerRadar, 0x7b7, None): [
+      b'\xf1\x8b\x20\x25\x04\x24\x20\x25\x04\x23\x20\x25\x04\x17\x20\x25\x04\x12',
+    ],
+    (Ecu.hvac, 0x7b3, None): [
+      b'\xf1\x00LX3   97255-DU010CONTROL UNI',
+      b'\xf1\x8b\x20\x25\x07\x03',
+    ],
+    (Ecu.combinationMeter, 0x7c6, None): [
+      b'\xf1\x004\x37\x31',
+      b'\xf1\x8b\x20\x25\x07\x04',
+    ],
+  },
   CAR.HYUNDAI_VELOSTER: {
     (Ecu.fwdRadar, 0x7d0, None): [
       b'\xf1\x00JS__ SCC H-CUP      1.00 1.02 95650-J3200         ',
