@@ -1,0 +1,573 @@
+{
+  "capture_metadata": {
+    "branch": "210_c1",
+    "captured_at": "2026-05-01T03:36:50.139099Z",
+    "commit": "1613130",
+    "commit_full": "16131301f04419cd97a88e16bcd49df5409b0738",
+    "commit_msg": "v26.0 SCC OFF: LX3_HEV ADAPTIVE_CRUISE_MAIN_BTN toggle on user SCC button press",
+    "device": "device_a",
+    "dongle_id_hash": "ef5cfd2b8329",
+    "matching_default": 85,
+    "missing": 1,
+    "modified_from_default": 54,
+    "total_params": 140
+  },
+  "params": {
+    "AChangeCostStarting": {
+      "default": 10,
+      "value": "10"
+    },
+    "AdjustLaneOffset": {
+      "default": 0,
+      "value": "0"
+    },
+    "AutoCruiseControl": {
+      "default": 0,
+      "value": "0"
+    },
+    "AutoCurveSpeedAggressiveness": {
+      "default": 10,
+      "value": "100"
+    },
+    "AutoCurveSpeedFactor": {
+      "default": 100,
+      "value": "120"
+    },
+    "AutoCurveSpeedLowerLimit": {
+      "default": 30,
+      "value": "30"
+    },
+    "AutoEngage": {
+      "default": 0,
+      "value": "0"
+    },
+    "AutoGasSyncSpeed": {
+      "default": 0,
+      "value": "1"
+    },
+    "AutoGasTokSpeed": {
+      "default": 0,
+      "value": "0"
+    },
+    "AutoNaviCountDownMode": {
+      "default": 2,
+      "value": "0"
+    },
+    "AutoNaviSpeedBumpSpeed": {
+      "default": 35,
+      "value": "35"
+    },
+    "AutoNaviSpeedBumpTime": {
+      "default": 1,
+      "value": "1"
+    },
+    "AutoNaviSpeedCtrlEnd": {
+      "default": 6,
+      "value": "7"
+    },
+    "AutoNaviSpeedCtrlMode": {
+      "default": 2,
+      "value": "0"
+    },
+    "AutoNaviSpeedDecelRate": {
+      "default": 200,
+      "value": "120"
+    },
+    "AutoNaviSpeedSafetyFactor": {
+      "default": 105,
+      "value": "105"
+    },
+    "AutoRoadSpeedAdjust": {
+      "default": 0,
+      "value": "50"
+    },
+    "AutoRoadSpeedLimitOffset": {
+      "default": -1,
+      "value": "-1"
+    },
+    "AutoSpeedUptoRoadSpeedLimit": {
+      "default": 0,
+      "value": "0"
+    },
+    "AutoTurnControl": {
+      "default": 0,
+      "value": "0"
+    },
+    "AutoTurnControlSpeedTurn": {
+      "default": 20,
+      "value": "20"
+    },
+    "AutoTurnControlTurnEnd": {
+      "default": 6,
+      "value": "6"
+    },
+    "AutoTurnMapChange": {
+      "default": 0,
+      "value": "0"
+    },
+    "CancelButtonMode": {
+      "default": 0,
+      "value": "0"
+    },
+    "CanfdDebug": {
+      "default": 0,
+      "value": "0"
+    },
+    "CanfdHDA2": {
+      "default": 0,
+      "value": "2"
+    },
+    "CarrotCruiseAtcDecel": {
+      "default": -1,
+      "value": "-1"
+    },
+    "CarrotCruiseDecel": {
+      "default": -1,
+      "value": "-1"
+    },
+    "CarrotSmartSpeedControl": {
+      "default": 0,
+      "value": "0"
+    },
+    "CommaLongAcc": {
+      "default": 0,
+      "value": "0"
+    },
+    "CruiseButtonMode": {
+      "default": 0,
+      "value": "0"
+    },
+    "CruiseButtonTest1": {
+      "default": 0,
+      "value": "8"
+    },
+    "CruiseButtonTest2": {
+      "default": 0,
+      "value": "30"
+    },
+    "CruiseButtonTest3": {
+      "default": 0,
+      "value": "1"
+    },
+    "CruiseEcoControl": {
+      "default": 2,
+      "value": "2"
+    },
+    "CruiseMaxVals0": {
+      "default": 160,
+      "value": "160"
+    },
+    "CruiseMaxVals1": {
+      "default": 160,
+      "value": "200"
+    },
+    "CruiseMaxVals2": {
+      "default": 120,
+      "value": "160"
+    },
+    "CruiseMaxVals3": {
+      "default": 100,
+      "value": "130"
+    },
+    "CruiseMaxVals4": {
+      "default": 80,
+      "value": "110"
+    },
+    "CruiseMaxVals5": {
+      "default": 70,
+      "value": "95"
+    },
+    "CruiseMaxVals6": {
+      "default": 60,
+      "value": "80"
+    },
+    "CruiseOnDist": {
+      "default": 0,
+      "value": "400"
+    },
+    "CruiseSpeed1": {
+      "default": 10,
+      "value": "30"
+    },
+    "CruiseSpeed2": {
+      "default": 10,
+      "value": "50"
+    },
+    "CruiseSpeed3": {
+      "default": 10,
+      "value": "80"
+    },
+    "CruiseSpeed4": {
+      "default": 10,
+      "value": "110"
+    },
+    "CruiseSpeed5": {
+      "default": 10,
+      "value": "130"
+    },
+    "CruiseSpeedUnit": {
+      "default": 10,
+      "value": "10"
+    },
+    "CruiseSpeedUnitBasic": {
+      "default": 10,
+      "value": "5"
+    },
+    "CustomSR": {
+      "default": 0,
+      "value": "0"
+    },
+    "CustomSteerDeltaDown": {
+      "default": 0,
+      "value": "0"
+    },
+    "CustomSteerDeltaDownLC": {
+      "default": 0,
+      "value": "0"
+    },
+    "CustomSteerDeltaUp": {
+      "default": 0,
+      "value": "0"
+    },
+    "CustomSteerDeltaUpLC": {
+      "default": 0,
+      "value": "0"
+    },
+    "CustomSteerMax": {
+      "default": 0,
+      "value": "0"
+    },
+    "DisableDM": {
+      "default": 0,
+      "value": "1"
+    },
+    "DisableMinSteerSpeed": {
+      "default": 0,
+      "value": "0"
+    },
+    "DynamicTFollow": {
+      "default": 0,
+      "value": "0"
+    },
+    "DynamicTFollowLC": {
+      "default": 0,
+      "value": "100"
+    },
+    "EnableConnect": {
+      "default": 0,
+      "value": "2"
+    },
+    "EnableCornerRadar": {
+      "default": 0,
+      "value": "0"
+    },
+    "EnableRadarTracks": {
+      "default": 0,
+      "value": "1"
+    },
+    "EnableSpeedTF": {
+      "default": 0,
+      "value": "0"
+    },
+    "HDPuse": {
+      "default": 0,
+      "value": "0"
+    },
+    "HapticFeedbackWhenSpeedCamera": {
+      "default": 0,
+      "value": "0"
+    },
+    "HotspotOnBoot": {
+      "default": 0,
+      "value": "0"
+    },
+    "HyundaiCameraSCC": {
+      "default": 0,
+      "value": "1"
+    },
+    "IsLdwsCar": {
+      "default": 0,
+      "value": "0"
+    },
+    "JLeadFactor3": {
+      "default": 0,
+      "value": "0"
+    },
+    "LaneChangeBsd": {
+      "default": 0,
+      "value": "0"
+    },
+    "LaneChangeDelay": {
+      "default": 0,
+      "value": "0"
+    },
+    "LaneChangeNeedTorque": {
+      "default": 0,
+      "value": "-1"
+    },
+    "LatMpcAccelCost": {
+      "default": 100,
+      "value": "120"
+    },
+    "LatMpcInputOffset": {
+      "default": 4,
+      "value": "4"
+    },
+    "LatMpcJerkCost": {
+      "default": 1,
+      "value": "4"
+    },
+    "LatMpcMotionCost": {
+      "default": 7,
+      "value": "7"
+    },
+    "LatMpcPathCost": {
+      "default": 200,
+      "value": "200"
+    },
+    "LatMpcSteeringRateCost": {
+      "default": 7,
+      "value": "7"
+    },
+    "LatSmoothSec": {
+      "default": 13,
+      "value": "13"
+    },
+    "LatSuspendAngleDeg": {
+      "default": 300,
+      "value": "300"
+    },
+    "LateralTorqueAccelFactor": {
+      "default": 2500,
+      "value": "2500"
+    },
+    "LateralTorqueCustom": {
+      "default": 1,
+      "value": "0"
+    },
+    "LateralTorqueFriction": {
+      "default": 100,
+      "value": "100"
+    },
+    "LateralTorqueKd": {
+      "default": 0,
+      "value": "0"
+    },
+    "LateralTorqueKf": {
+      "default": 100,
+      "value": "100"
+    },
+    "LateralTorqueKiV": {
+      "default": 10,
+      "value": "10"
+    },
+    "LateralTorqueKpV": {
+      "default": 100,
+      "value": "100"
+    },
+    "LfaButtonMode": {
+      "default": 0,
+      "value": "0"
+    },
+    "LongActuatorDelay": {
+      "default": 20,
+      "value": "20"
+    },
+    "LongTuningKf": {
+      "default": 0,
+      "value": "100"
+    },
+    "LongTuningKiV": {
+      "default": 0,
+      "value": "0"
+    },
+    "LongTuningKpV": {
+      "default": 100,
+      "value": "100"
+    },
+    "MapTurnSpeedFactor": {
+      "default": 100,
+      "value": "90"
+    },
+    "MaxAngleFrames": {
+      "default": 89,
+      "value": "89"
+    },
+    "MaxTimeOffroadMin": {
+      "default": 60,
+      "value": "60"
+    },
+    "ModelTurnSpeedFactor": {
+      "default": 0,
+      "value": "0"
+    },
+    "MuteDoor": {
+      "default": 0,
+      "value": "0"
+    },
+    "MuteSeatbelt": {
+      "default": 0,
+      "value": "0"
+    },
+    "MyDrivingMode": {
+      "default": 3,
+      "value": "3"
+    },
+    "MyDrivingModeAuto": {
+      "default": 0,
+      "value": "0"
+    },
+    "PaddleMode": {
+      "default": 1,
+      "value": "0"
+    },
+    "PathOffset": {
+      "default": 0,
+      "value": "0"
+    },
+    "RadarLatFactor": {
+      "default": 0,
+      "value": "0"
+    },
+    "RadarReactionFactor": {
+      "default": 100,
+      "value": "100"
+    },
+    "RecordRoadCam": {
+      "default": 0,
+      "value": "0"
+    },
+    "ShowCustomBrightness": {
+      "default": 100,
+      "value": "100"
+    },
+    "ShowDateTime": {
+      "default": 1,
+      "value": "1"
+    },
+    "ShowDebugUI": {
+      "default": 1,
+      "value": "0"
+    },
+    "ShowDeviceState": {
+      "default": 1,
+      "value": "1"
+    },
+    "ShowLaneInfo": {
+      "default": 1,
+      "value": "1"
+    },
+    "ShowPathColor": {
+      "default": 12,
+      "value": "13"
+    },
+    "ShowPathColorCruiseOff": {
+      "default": 1,
+      "value": "19"
+    },
+    "ShowPathColorLane": {
+      "default": 3,
+      "value": "13"
+    },
+    "ShowPathEnd": {
+      "default": 1,
+      "value": "1"
+    },
+    "ShowPathMode": {
+      "default": 9,
+      "value": "9"
+    },
+    "ShowPathModeLane": {
+      "default": 11,
+      "value": "14"
+    },
+    "ShowPlotMode": {
+      "default": 0,
+      "value": "0"
+    },
+    "ShowRadarInfo": {
+      "default": 0,
+      "value": "2"
+    },
+    "ShowRouteInfo": {
+      "default": 0,
+      "value": "1"
+    },
+    "ShowTpms": {
+      "default": 1,
+      "value": "1"
+    },
+    "SoftwareMenu": {
+      "default": 0,
+      "value": "1"
+    },
+    "SoundVolumeAdjust": {
+      "default": 0,
+      "value": "100"
+    },
+    "SoundVolumeAdjustEngage": {
+      "default": 0,
+      "value": "10"
+    },
+    "SpeedFromPCM": {
+      "default": 0,
+      "value": "2"
+    },
+    "SteerActuatorDelay": {
+      "default": 30,
+      "value": "0"
+    },
+    "SteerRatioRate": {
+      "default": 0,
+      "value": "100"
+    },
+    "StopDistanceCarrot": {
+      "default": 600,
+      "value": "550"
+    },
+    "StoppingAccel": {
+      "default": 0,
+      "value": "0"
+    },
+    "TFollowGap1": {
+      "default": 110,
+      "value": "110"
+    },
+    "TFollowGap2": {
+      "default": 120,
+      "value": "120"
+    },
+    "TFollowGap3": {
+      "default": 140,
+      "value": "140"
+    },
+    "TFollowGap4": {
+      "default": 160,
+      "value": "160"
+    },
+    "TrafficLightDetectMode": {
+      "default": 2,
+      "value": "0"
+    },
+    "TrafficStopDistanceAdjust": {
+      "default": 400,
+      "value": "600"
+    },
+    "TurnSpeedControlMode": {
+      "default": 1,
+      "value": "0"
+    },
+    "UseLaneLineCurveSpeed": {
+      "default": 0,
+      "value": "0"
+    },
+    "UseLaneLineSpeed": {
+      "default": 0,
+      "value": "0"
+    },
+    "VEgoStopping": {
+      "default": 50,
+      "value": "50"
+    }
+  }
+}
