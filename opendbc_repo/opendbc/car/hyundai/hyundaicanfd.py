@@ -356,7 +356,11 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, g
   values = copy.copy(CS.cruise_info)
   values.pop("COUNTER", None)
   values["ACCMode"] = acc_mode
-  values["MainMode_ACC"] = 1
+    # v27: LX3_HEV는 stock SCC main mode 상태 그대로 forward → 사용자 SCC OFF 의도 보존
+  if CS.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+    values["MainMode_ACC"] = 1 if CS.MainMode_ACC else 0
+  else:
+    values["MainMode_ACC"] = 1
   values["StopReq"] = 1 if stopping or CS.softHoldActive > 0 else 0  # 1: Stop control is required, 2: Not used, 3: Error Indicator
   values["aReqValue"] = a_val
   values["aReqRaw"] = a_raw
@@ -438,6 +442,10 @@ def create_acc_control(packer, CAN, enabled, accel_last, accel, stopping, gas_ov
     "DISTANCE_SETTING": hud_control.leadDistanceBars, # + 5,
     "InfoDisplay": 4 if stopping and CS.out.cruiseState.standstill else 0,
   }
+
+  # v27: LX3_HEV stock SCC main mode forward (scc2 path)
+  if CS.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+    values["MainMode_ACC"] = 1 if CS.MainMode_ACC else 0
 
   return packer.make_can_msg("SCC_CONTROL", CAN.ECAN, values)
 
