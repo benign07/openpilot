@@ -40,26 +40,30 @@ function launch {
   # 2. The FINALIZED consistent file has to exist, indicating there's an update
   #    that completed successfully and synced to disk.
 
-  if [ -f "${DIR}/.overlay_init" ]; then
-    find ${DIR}/.git -newer ${DIR}/.overlay_init | grep -q '.' 2> /dev/null
-    if [ $? -eq 0 ]; then
-      echo "${DIR} has been modified, skipping overlay update installation"
-    else
-      if [ -f "${STAGING_ROOT}/finalized/.overlay_consistent" ]; then
-        if [ ! -d /data/safe_staging/old_openpilot ]; then
-          echo "Valid overlay update found, installing"
-          LAUNCHER_LOCATION="${BASH_SOURCE[0]}"
-
-          mv $DIR /data/safe_staging/old_openpilot
-          mv "${STAGING_ROOT}/finalized" $DIR
-          cd $DIR
-
-          echo "Restarting launch script ${LAUNCHER_LOCATION}"
-          unset AGNOS_VERSION
-          exec "${LAUNCHER_LOCATION}"
-        else
-          echo "openpilot backup found, not updating"
-          # TODO: restore backup? This means the updater didn't start after swapping
+  # LX3_HEV PATCH (2026-05-02): LOCAL ONLY - DO NOT UPSTREAM.
+  # Disable overlay update installation to protect local commits in /data/openpilot
+  # from being swapped out by carrot updater. Manual upstream sync required.
+  echo "LX3_HEV: overlay update install DISABLED. Manual upstream sync required."
+  if false; then
+    # ORIGINAL BLOCK PRESERVED FOR REFERENCE (disabled intentionally):
+    if [ -f "${DIR}/.overlay_init" ]; then
+      find ${DIR}/.git -newer ${DIR}/.overlay_init | grep -q '.' 2> /dev/null
+      if [ $? -eq 0 ]; then
+        echo "${DIR} has been modified, skipping overlay update installation"
+      else
+        if [ -f "${STAGING_ROOT}/finalized/.overlay_consistent" ]; then
+          if [ ! -d /data/safe_staging/old_openpilot ]; then
+            echo "Valid overlay update found, installing"
+            LAUNCHER_LOCATION="${BASH_SOURCE[0]}"
+            mv $DIR /data/safe_staging/old_openpilot
+            mv "${STAGING_ROOT}/finalized" $DIR
+            cd $DIR
+            echo "Restarting launch script ${LAUNCHER_LOCATION}"
+            unset AGNOS_VERSION
+            exec "${LAUNCHER_LOCATION}"
+          else
+            echo "openpilot backup found, not updating"
+          fi
         fi
       fi
     fi

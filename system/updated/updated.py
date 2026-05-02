@@ -370,6 +370,17 @@ class Updater:
       cloudlog.info(f"up to date on {cur_branch} ({str(cur_commit)[:7]})")
 
   def fetch_update(self) -> None:
+    # LX3_HEV PATCH (2026-05-02): LOCAL ONLY - DO NOT UPSTREAM.
+    # Disable origin fetch + reset --hard to protect local commits
+    # (carstate.py, carcontroller.py, hyundaicanfd.py LX3_HEV gates).
+    # ajouatom upstream sync is now manual:
+    #   git fetch ajouatom; git log --oneline HEAD..ajouatom/c3; git merge ajouatom/c3
+    cloudlog.info("LX3_HEV: fetch_update DISABLED. Manual upstream sync required.")
+    self.params.put("UpdaterState", "idle")
+    self.params.put_bool("UpdateAvailable", False)
+    self.params.put_bool("UpdaterFetchAvailable", False)
+    return
+
     cloudlog.info("attempting git fetch inside staging overlay")
 
     self.params.put("UpdaterState", "downloading...")
