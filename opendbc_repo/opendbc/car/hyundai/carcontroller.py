@@ -141,8 +141,6 @@ class CarController(CarControllerBase):
     self.lkas_max_torque = 0
     self.angle_max_torque = 250
 
-    self.lkas11_active = False
-
     self.canfd_debug = 0
     self.MainMode_ACC_trigger = 0
     self.LFA_trigger = 0
@@ -255,10 +253,16 @@ class CarController(CarControllerBase):
         self.lkas_max_torque = min(self.lkas_max_torque + rate_up, target_torque)
 
 
-    if not CC.latActive:
-      apply_torque = 0
-      self.lkas_max_torque = 0
+    #if not CC.latActive:
+    #  apply_torque = 0
+    #  self.lkas_max_torque = 0
 
+    if not CC.latActive:  # v22: carrot 원본만 — v15(LFA_ICON GRAY)와 v17(CC.enabled) 제거. 다중 가드가 ANGLE_CONTROL 모드에서 토크 송출 막던 문제 fix
+        apply_torque = 0
+        self.lkas_max_torque = 0
+        apply_steer_req = False
+        apply_angle = CS.out.steeringAngleDeg
+    
     self.apply_angle_last = apply_angle
 
     # Hold torque with induced temporary fault when cutting the actuation bit
@@ -321,23 +325,23 @@ class CarController(CarControllerBase):
     if self.CP.flags & HyundaiFlags.CANFD:
       hda2 = self.CP.flags & HyundaiFlags.CANFD_HDA2
       hda2_long = hda2 and self.CP.openpilotLongitudinalControl
+
       # steering control
       if camera_scc:
         can_sends.extend(hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, apply_steer_req, apply_torque, CS, apply_angle, self.lkas_max_torque, angle_control))
       else:
         can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, self.lkas_max_torque, angle_control))
-              
+
       # prevent LFA from activating on HDA2 by sending "no lane lines detected" to ADAS ECU
-      if self.frame % 5 == 0 and hda2 and not camera_scc:
+      # v24: LX3_HEV(camera_scc_params==3, HDA2+camera_scc 동시)에서도 stock LFA suppress
+      if self.frame % 5 == 0 and hda2 and (not camera_scc or self.camera_scc_params == 3):
         can_sends.extend(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS))
 
       # LFA and HDA icons
-      if self.frame % 5 == 0 and (not hda2 or hda2_long or camera_scc):
+      if self.frame % 5 == 0 and camera_scc:
         can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
-        if not camera_scc:
-          can_sends.extend(hyundaicanfd.create_lfa_icon_non_camera_scc(self.packer, CS, self.CAN, CC))
-        elif self.camera_scc_params == 3:
-          # v25: LX3_HEV stock LFA suppress (HDA2+camera_scc=3 모드)
+        if self.camera_scc_params == 3:
+          # v25: LX3_HEV stock LFA suppress via ADRV_0x161 LANELINE/CENTERLINE=0
           can_sends.extend(hyundaicanfd.create_lfa_icon_lx3_hev(self.packer, CS, self.CAN, CC))
 
       # blinkers
@@ -351,17 +355,15 @@ class CarController(CarControllerBase):
         self.hyundai_jerk.check_carrot_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
 
         if True: #not camera_scc:
-          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar, stopping, self.canfd_debug))
+          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar))
           if hda2:
             can_sends.extend(hyundaicanfd.create_adrv_messages(self.CP, self.packer, self.CAN, self.frame))
           else:
             can_sends.extend(hyundaicanfd.create_fca_warning_light(self.CP, self.packer, self.CAN, self.frame))
         if self.frame % 2 == 0:
           if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
-            msg = hyundaicanfd.create_acc_control_scc2(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
-                                                             set_speed_in_units, hud_control, self.hyundai_jerk, CS)
-            if msg is not None:
-              can_sends.append(msg)
+            can_sends.append(hyundaicanfd.create_acc_control_scc2(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
+                                                             set_speed_in_units, hud_control, self.hyundai_jerk, CS))
             can_sends.extend(hyundaicanfd.create_tcs_messages(self.packer, self.CAN, CS)) # for sorento SCC radar...
           else:
             can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
@@ -371,21 +373,19 @@ class CarController(CarControllerBase):
         # button presses
         if self.camera_scc_params == 3: # camera scc but stock long
           send_button = self.make_spam_button(CC, CS)
-          can_sends.extend(hyundaicanfd.forward_button_message(self.packer, self.CAN, self.frame, CS, send_button, self.MainMode_ACC_trigger, self.LFA_trigger))
+          can_sends.extend(hyundaicanfd.forward_button_message(self.packer, self.CP, self.CAN, self.frame, CS, send_button, self.MainMode_ACC_trigger, self.LFA_trigger))
         else:
           can_sends.extend(self.create_button_messages(CC, CS, use_clu11=False))
+        
     else:
-      if CS.lkas11 is not None:
-        if self.lkas11_active:
-          can_sends.append(hyundaican.create_lkas11(self.packer, self.frame, self.CP, apply_torque, apply_steer_req,
-                                                    torque_fault, CS.lkas11, sys_warning, sys_state, CC.enabled,
-                                                    hud_control.leftLaneVisible, hud_control.rightLaneVisible,
-                                                    left_lane_warning, right_lane_warning, self.is_ldws_car))
-        self.lkas11_active = True
+      can_sends.append(hyundaican.create_lkas11(self.packer, self.frame, self.CP, apply_torque, apply_steer_req,
+                                                torque_fault, CS.lkas11, sys_warning, sys_state, CC.enabled,
+                                                hud_control.leftLaneVisible, hud_control.rightLaneVisible,
+                                                left_lane_warning, right_lane_warning, self.is_ldws_car))
 
       if not self.CP.openpilotLongitudinalControl:
         can_sends.extend(self.create_button_messages(CC, CS, use_clu11=True))
-      if self.CP.carFingerprint in CAN_GEARS["send_mdps12"] and CS.mdps12 is not None:  # send mdps12 to LKAS to prevent LKAS error
+      if self.CP.carFingerprint in CAN_GEARS["send_mdps12"]:  # send mdps12 to LKAS to prevent LKAS error
         can_sends.append(hyundaican.create_mdps12(self.packer, self.frame, CS.mdps12))
 
       casper_opt = self.CP.carFingerprint in (CAR.HYUNDAI_CASPER_EV)
@@ -474,7 +474,7 @@ class CarController(CarControllerBase):
           if (self.frame - self.last_button_frame) * DT_CTRL > 0.1:
             print("cruiseControl.cancel222222")
             if self.CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS:
-              #can_sends.append(hyundaicanfd.create_acc_cancel(self.packer, self.CP, self.CAN, CS.scc_control))
+              #can_sends.append(hyundaicanfd.create_acc_cancel(self.packer, self.CP, self.CAN, CS.cruise_info))
               if self.cruise_buttons_msg_values is not None:
                 can_sends.append(hyundaicanfd.alt_cruise_buttons(self.packer, self.CP, self.CAN, Buttons.CANCEL, self.cruise_buttons_msg_values, self.cruise_buttons_msg_cnt))
 
@@ -509,7 +509,14 @@ class CarController(CarControllerBase):
     self.MainMode_ACC_trigger = max(trigger_min, self.MainMode_ACC_trigger - 1)
     self.LFA_trigger = max(trigger_min, self.LFA_trigger - 1)
     if self.MainMode_ACC_trigger == trigger_min and self.LFA_trigger == trigger_min:
-      if CC.enabled and not CS.MainMode_ACC and CS.out.vEgo > 3.:
+      # LX3_HEV: 사용자 SCC 버튼 누름 시 stock main toggle (LX3는 CANCEL 버튼 없음, SCC 버튼 = main toggle)
+      # main_buttons rising/falling edge 감지 → ADAPTIVE_CRUISE_MAIN_BTN 송출 trigger
+      if (self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV"
+          and CS.MainMode_ACC
+          and len(CS.main_buttons) >= 2
+          and CS.main_buttons[-1] != CS.main_buttons[-2]):
+        self.MainMode_ACC_trigger = trigger_start
+      elif CC.enabled and not CS.MainMode_ACC and CS.out.vEgo > 3.:
         self.MainMode_ACC_trigger = trigger_start
       elif CC.latActive and CS.LFA_ICON == 0:
         self.LFA_trigger = trigger_start
@@ -642,7 +649,7 @@ class HyundaiJerk:
         self.cb_upper = self.cb_lower = 0.0
       else:
         self.jerk_u = min(max(self.jerk_u_min, self.jerk * 2.0), jerk_max_u)
-        self.jerk_l = min(max(1.0, -self.jerk * 4.0), jerk_max_l)
+        self.jerk_l = min(max(1.0, -self.jerk * 2.0), jerk_max_l)
         self.cb_upper = np.clip(0.9 + accel * 0.2, 0, 1.2)
         self.cb_lower = np.clip(0.8 + accel * 0.2, 0, 1.2)
 
