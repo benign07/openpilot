@@ -144,6 +144,7 @@ class CarController(CarControllerBase):
     self.canfd_debug = 0
     self.MainMode_ACC_trigger = 0
     self.LFA_trigger = 0
+    self._prev_main_enabled_lx3 = False  # v30.1: LX3_HEV main_enabled rising edge detection
 
     self.activeCarrot = 0
     self.camera_scc_params = Params().get_int("HyundaiCameraSCC")
@@ -505,21 +506,30 @@ class CarController(CarControllerBase):
 
   def canfd_toggle_adas(self, CC, CS):
     trigger_min = -200
-    trigger_start = 6
+    # v32: LX3는 100 (1s, SET_DECEL 50 forward 필요), 다른 차량은 carrot 원본 6 유지 (다른 차량 영향 차단)
+    trigger_start = 100 if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" else 6
     self.MainMode_ACC_trigger = max(trigger_min, self.MainMode_ACC_trigger - 1)
     self.LFA_trigger = max(trigger_min, self.LFA_trigger - 1)
+    # v32.1: LX3_HEV ACCMode=1 (active) 도달 시 trigger 조기 종료 — 잔여 SET_DECEL spam이 set speed 낮추는 부작용 차단
+    if (self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV"
+        and CS.ACCMode in (1, 2)
+        and self.MainMode_ACC_trigger > 0):
+      self.MainMode_ACC_trigger = 0
     if self.MainMode_ACC_trigger == trigger_min and self.LFA_trigger == trigger_min:
-      # LX3_HEV: 사용자 SCC 버튼 누름 시 stock main toggle (LX3는 CANCEL 버튼 없음, SCC 버튼 = main toggle)
-      # main_buttons rising/falling edge 감지 → ADAPTIVE_CRUISE_MAIN_BTN 송출 trigger
+      # v30.1: LX3_HEV는 사용자 SCC 메인 누름 (main_enabled False→True rising edge)에 stock SCC active까지 끌어올리도록
+      #        forward_button_message가 CRUISE_BUTTONS=2 (SET_DECEL) 송출 → standby→active → ACCMode=1 → engage
+      #        SCC OFF 누름은 차량 자체 동작 (rising edge만 trigger, falling edge 제외)
       if (self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV"
-          and CS.MainMode_ACC
-          and len(CS.main_buttons) >= 2
-          and CS.main_buttons[-1] != CS.main_buttons[-2]):
+          and CS.main_enabled
+          and not self._prev_main_enabled_lx3):
         self.MainMode_ACC_trigger = trigger_start
       elif CC.enabled and not CS.MainMode_ACC and CS.out.vEgo > 3.:
         self.MainMode_ACC_trigger = trigger_start
       elif CC.latActive and CS.LFA_ICON == 0:
         self.LFA_trigger = trigger_start
+    # v30.1: edge detection state 갱신 (매 frame, trigger_min 조건과 무관하게)
+    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+      self._prev_main_enabled_lx3 = CS.main_enabled
 
   def canfd_speed_control_pcm(self, CC, CS, cruise_buttons_msg_values):
 

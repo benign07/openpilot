@@ -102,6 +102,7 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
 
     self.main_enabled = True if Params().get_int("AutoEngage") == 2 else False
+    self._lx3_main_btn_debounce = 0  # v29.1: LX3_HEV main button raw 60/40 flicker debounce (300ms cooldown)
     self.gear_shifter = GearShifter.drive # Gear_init for Nexo ?? unknown 21.02.23.LSW
 
     self.totalDistance = 0.0
@@ -494,7 +495,9 @@ class CarState(CarStateBase):
 
     # cruise state
     if cp.vl[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"] in [Buttons.RES_ACCEL, Buttons.SET_DECEL] and self.CP.openpilotLongitudinalControl:
-      self.main_enabled = True
+      # v32.1: LX3_HEV는 accel/decel이 main_enabled 안 건드림 (lat 자동 활성 부작용 차단). main toggle은 0x10B byte10 메인 누름 전용
+      if self.CP.carFingerprint != "HYUNDAI_PALISADE_LX3_HEV":
+        self.main_enabled = True
     # CAN FD cars enable on main button press, set available if no TCS faults preventing engagement
     ret.cruiseState.available = self.main_enabled #cp.vl["TCS"]["ACCEnable"] == 0
     if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
@@ -653,8 +656,19 @@ class CarState(CarStateBase):
     # v28: LX3_HEV는 0x10B의 CRUISE_BUTTONS=8을 main 신호로 사용 (라이브 30+20 누름 측정으로 확정, DOUBLE 60/40 정확 매칭)
     # 다른 차량은 carrot 원본 그대로 (cruise_btns_msg_canfd의 ADAPTIVE_CRUISE_MAIN_BTN)
     if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" and "CRUISE_BUTTONS_ALT2" in cp.vl:
+      # v29.1: 0x10B byte10 raw=8이 누름 중에도 60/40으로 flicker → 단순 falling edge 토글이 다중 발화 위험
+      # → raw=1 보면 30 frame(300ms) latch, 그 안에 raw=0 나와도 누름 유지. 진짜 release는 30 frame 연속 0
       cb_alt2 = int(cp.vl["CRUISE_BUTTONS_ALT2"].get("CRUISE_BUTTONS", 0))
-      self.main_buttons.extend([1 if cb_alt2 == 8 else 0])
+      raw = 1 if cb_alt2 == 8 else 0
+      if raw == 1:
+        self._lx3_main_btn_debounce = 30
+        v = 1
+      elif self._lx3_main_btn_debounce > 0:
+        self._lx3_main_btn_debounce -= 1
+        v = 1
+      else:
+        v = 0
+      self.main_buttons.extend([v])
     else:
       self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     if self.main_buttons[-1] != prev_main_buttons and not self.main_buttons[-1]: # and self.CP.openpilotLongitudinalControl: #carrot

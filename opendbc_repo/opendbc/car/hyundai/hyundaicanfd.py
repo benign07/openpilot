@@ -502,9 +502,13 @@ def forward_button_message(packer, CP, CAN, frame, CS, cruise_button, MainMode_A
       if cruise_button_driver == 0:
         values["CRUISE_BUTTONS"] = cruise_button
       if MainMode_ACC_trigger > 0:
-        # LX3_HEV: SCC main mode toggle (사용자 SCC 버튼 누름 시 stock cruise OFF/ON)
-        # LX3_HEV 핸들에 CANCEL 버튼 없음 → ADAPTIVE_CRUISE_MAIN_BTN bit toggle로 stock SCC 제어
+        # v30.1: LX3_HEV 0x10B에 ADAPTIVE_CRUISE_MAIN_BTN field 없음 (DBC: CRUISE_BUTTONS 4-bit + LFA_BTN 1-bit만)
+        #        → CRUISE_BUTTONS=2 (SET_DECEL) 송출하여 stock SCC standby→active → ACCMode=1 → engage
+        #        driver 미입력 frame만 덮어쓰기 (사용자 진짜 버튼 누름 무시 방지)
         if CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+          if cruise_button_driver == 0:
+            values["CRUISE_BUTTONS"] = 2  # Buttons.SET_DECEL
+        else:
           values["ADAPTIVE_CRUISE_MAIN_BTN"] = 1
       elif LFA_trigger > 0:
         values["LFA_BTN"] = 1

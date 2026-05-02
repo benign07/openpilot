@@ -372,7 +372,8 @@ class CAR(Platforms):
   HYUNDAI_PALISADE_LX3_HEV = HyundaiCanFDPlatformConfig(
     [HyundaiCarDocs("Hyundai Palisade HEV (LX3) 2026", car_parts=CarParts.common([CarHarness.hyundai_p]))],
     CarSpecs(mass=2215, wheelbase=2.97, steerRatio=16),
-    flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL | HyundaiFlags.CANFD_ALT_BUTTONS | HyundaiFlags.ALT_LIMITS,
+    # A 기준 (디바이스 A v28~v32 운행 검증 OK): ALT_LIMITS flag 제외, A와 동일하게 HYBRID|ANGLE_CONTROL|CANFD_ALT_BUTTONS만
+    flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL | HyundaiFlags.CANFD_ALT_BUTTONS,
   )
   HYUNDAI_VELOSTER = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Veloster 2019-20", min_enable_speed=5. * CV.MPH_TO_MS, car_parts=CarParts.common([CarHarness.hyundai_e]))],
