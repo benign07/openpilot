@@ -374,6 +374,8 @@ class CAR(Platforms):
     CarSpecs(mass=2215, wheelbase=2.97, steerRatio=16),
     # A 기준 (디바이스 A v28~v32 운행 검증 OK): ALT_LIMITS flag 제외, A와 동일하게 HYBRID|ANGLE_CONTROL|CANFD_ALT_BUTTONS만
     flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL | HyundaiFlags.CANFD_ALT_BUTTONS,
+    # LX3_HEV 전용 DBC: A의 generated.dbc + BO_ 267 CRUISE_BUTTONS_ALT2 (다른 차량 영향 X)
+    dbc_dict={Bus.pt: "hyundai_canfd_lx3_hev_generated", Bus.radar: 'hyundai_canfd_radar_generated'},
   )
   HYUNDAI_VELOSTER = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Veloster 2019-20", min_enable_speed=5. * CV.MPH_TO_MS, car_parts=CarParts.common([CarHarness.hyundai_e]))],

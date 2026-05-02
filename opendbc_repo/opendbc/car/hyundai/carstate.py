@@ -426,12 +426,14 @@ class CarState(CarStateBase):
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
     #print(cp.vl["TCS"], cp.vl_all["TCS"]["DriverBraking"][-10:])
 
-    #기존코드 -> 벨트 도어 분리
-    #ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
-    #ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS"]["DRIVER_SEATBELT"] == 0
-
-    ret.doorOpen = cp.vl["DOORS"]["DRIVER_DOOR"] == 1
-    ret.seatbeltUnlatched = cp.vl["SEATBELTS"]["DRIVER_SEATBELT"] == 0    
+    # LX3_HEV는 별도 DBC (hyundai_canfd_lx3_hev_generated.dbc) 사용 — DOORS+SEATBELTS 분리 메시지
+    # 다른 차량 (KIA_EV4/PV5 등)은 carrot 원본 DBC — DOORS_SEATBELTS 통합 메시지
+    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+      ret.doorOpen = cp.vl["DOORS"]["DRIVER_DOOR"] == 1
+      ret.seatbeltUnlatched = cp.vl["SEATBELTS"]["DRIVER_SEATBELT"] == 0
+    else:
+      ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
+      ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS"]["DRIVER_SEATBELT"] == 0
         
     gear = cp.vl[self.gear_msg_canfd]["GEAR"]
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
@@ -475,12 +477,11 @@ class CarState(CarStateBase):
     if self.STEER_TOUCH_2AF:
       self.steer_touch_info = cp.vl["STEER_TOUCH_2AF"]
 
-    # A 기준 (디바이스 A 운행 시 깜빡이 인식 OK): LX3_HEV는 BO_ 995 BLINKERS_ALT의 LEFT_LAMP bit 90 / RIGHT_LAMP bit 92
-    # B base의 BO_ 1043 BLINKERS는 KIA 차량용 (bit 20/22) — LX3와 안 맞음
-    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
-      blinkers_info = cp.vl["BLINKERS_ALT"]
-    else:
-      blinkers_info = cp.vl["BLINKERS"]
+    # BLINKERS는 차량별 DBC가 다름:
+    #   LX3_HEV DBC: BO_ 995 BLINKERS (16 byte, LEFT_LAMP bit 90, RIGHT_LAMP bit 92) — A 기준 운행 검증 OK
+    #   다른 차량 DBC: BO_ 1043 BLINKERS (8 byte, KIA용)
+    # cp.vl["BLINKERS"]가 각 DBC에서 자동 매칭되므로 carstate 분기 불필요.
+    blinkers_info = cp.vl["BLINKERS"]
     left_blinker_lamp = blinkers_info["LEFT_LAMP"] or blinkers_info["LEFT_LAMP_ALT"]
     right_blinker_lamp = blinkers_info["RIGHT_LAMP"] or blinkers_info["RIGHT_LAMP_ALT"]
     ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, left_blinker_lamp, right_blinker_lamp)
