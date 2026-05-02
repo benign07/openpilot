@@ -336,6 +336,9 @@ class CarController(CarControllerBase):
         can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
         if not camera_scc:
           can_sends.extend(hyundaicanfd.create_lfa_icon_non_camera_scc(self.packer, CS, self.CAN, CC))
+        elif self.camera_scc_params == 3:
+          # v25: LX3_HEV stock LFA suppress (HDA2+camera_scc=3 모드)
+          can_sends.extend(hyundaicanfd.create_lfa_icon_lx3_hev(self.packer, CS, self.CAN, CC))
 
       # blinkers
       if hda2 and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:

@@ -369,6 +369,11 @@ class CAR(Platforms):
     CarSpecs(mass=1999, wheelbase=2.9, steerRatio=15.6 * 1.15, tireStiffnessFactor=0.63),
     flags=HyundaiFlags.MANDO_RADAR | HyundaiFlags.CHECKSUM_CRC8,
   )
+  HYUNDAI_PALISADE_LX3_HEV = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Palisade HEV (LX3) 2026", car_parts=CarParts.common([CarHarness.hyundai_p]))],
+    CarSpecs(mass=2215, wheelbase=2.97, steerRatio=16),
+    flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL | HyundaiFlags.CANFD_ALT_BUTTONS | HyundaiFlags.ALT_LIMITS,
+  )
   HYUNDAI_VELOSTER = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Veloster 2019-20", min_enable_speed=5. * CV.MPH_TO_MS, car_parts=CarParts.common([CarHarness.hyundai_e]))],
     CarSpecs(mass=2917 * CV.LB_TO_KG, wheelbase=2.8, steerRatio=13.75 * 1.15, tireStiffnessFactor=0.5),

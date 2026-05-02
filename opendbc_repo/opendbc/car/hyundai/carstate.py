@@ -567,7 +567,8 @@ class CarState(CarStateBase):
     if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
       self.MainMode_ACC = cp_cam.vl["SCC_CONTROL"]["MainMode_ACC"] == 1
       self.ACCMode = cp_cam.vl["SCC_CONTROL"]["ACCMode"]
-      self.LFA_ICON = cp_cam.vl["LFAHDA_CLUSTER"]["HDA_LFA_SymSta"]
+      # LX3_HEV는 LFA_ICON이 ADRV_0x161 byte 28에 있음. 다른 차량은 LFAHDA_CLUSTER 그대로.
+      self.LFA_ICON = cp_cam.vl["ADRV_0x161"]["LFA_ICON"] if self.CCNC_0x161 else cp_cam.vl["LFAHDA_CLUSTER"]["HDA_LFA_SymSta"]
       
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
