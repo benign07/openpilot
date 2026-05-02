@@ -475,7 +475,12 @@ class CarState(CarStateBase):
     if self.STEER_TOUCH_2AF:
       self.steer_touch_info = cp.vl["STEER_TOUCH_2AF"]
 
-    blinkers_info = cp.vl["BLINKERS"]  
+    # A 기준 (디바이스 A 운행 시 깜빡이 인식 OK): LX3_HEV는 BO_ 995 BLINKERS_ALT의 LEFT_LAMP bit 90 / RIGHT_LAMP bit 92
+    # B base의 BO_ 1043 BLINKERS는 KIA 차량용 (bit 20/22) — LX3와 안 맞음
+    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+      blinkers_info = cp.vl["BLINKERS_ALT"]
+    else:
+      blinkers_info = cp.vl["BLINKERS"]
     left_blinker_lamp = blinkers_info["LEFT_LAMP"] or blinkers_info["LEFT_LAMP_ALT"]
     right_blinker_lamp = blinkers_info["RIGHT_LAMP"] or blinkers_info["RIGHT_LAMP_ALT"]
     ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, left_blinker_lamp, right_blinker_lamp)
