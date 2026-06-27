@@ -113,6 +113,8 @@ class CarState(CarStateBase):
     self.blinkers = None
     self.blinkers_alt = None
     self.doors_seatbelts = None
+    self.doors = None       # LX3_HEV separate DOORS msg (BO_994)
+    self.seatbelts = None   # LX3_HEV separate SEATBELTS msg (BO_992)
     self.cruise_buttons_alt2 = None
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
@@ -263,6 +265,9 @@ class CarState(CarStateBase):
           add_and_cache(self.cp, "BLINKERS", "blinkers")
           add_and_cache(self.cp, "BLINKERS_ALT", "blinkers_alt")
           add_and_cache(self.cp, "DOORS_SEATBELTS", "doors_seatbelts")
+          if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":  # LX3 sends separate DOORS/SEATBELTS, not combined
+            add_and_cache(self.cp, "DOORS", "doors", ignore_counter = True)
+            add_and_cache(self.cp, "SEATBELTS", "seatbelts", ignore_counter = True)
         elif self.controls_ready_count == 126:
           add_and_cache(self.cp, "CRUISE_BUTTONS_ALT2", "cruise_buttons_alt2", ignore_counter = True)
           add_and_cache(self.cp, "TRAILER_STATUS", "trailer_status", ignore_counter = True)
@@ -511,7 +516,13 @@ class CarState(CarStateBase):
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
     #print(cp.vl["TCS"], cp.vl_all["TCS"]["DriverBraking"][-10:])
 
-    if self.doors_seatbelts is not None:
+    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+      # LX3_HEV reads separate DOORS(BO_994)/SEATBELTS(BO_992) (reference port validated)
+      if self.doors is not None:
+        ret.doorOpen = self.doors["DRIVER_DOOR"] == 1
+      if self.seatbelts is not None:
+        ret.seatbeltUnlatched = self.seatbelts["DRIVER_SEATBELT"] == 0
+    elif self.doors_seatbelts is not None:
       ret.doorOpen = self.doors_seatbelts["DRIVER_DOOR"] == 1
       ret.seatbeltUnlatched = self.doors_seatbelts["DRIVER_SEATBELT"] == 0
 
