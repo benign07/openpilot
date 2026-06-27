@@ -369,6 +369,14 @@ class CAR(Platforms):
     CarSpecs(mass=1999, wheelbase=2.9, steerRatio=15.6 * 1.15, tireStiffnessFactor=0.63),
     flags=HyundaiFlags.MANDO_RADAR | HyundaiFlags.CHECKSUM_CRC8,
   )
+  HYUNDAI_PALISADE_LX3_HEV = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Palisade HEV (LX3) 2026", car_parts=CarParts.common([CarHarness.hyundai_p]))],
+    CarSpecs(mass=2215, wheelbase=2.97, steerRatio=16),
+    # A 기준 (디바이스 A v28~v32 운행 검증 OK): ALT_LIMITS flag 제외, A와 동일하게 HYBRID|ANGLE_CONTROL|CANFD_ALT_BUTTONS만
+    flags=HyundaiFlags.HYBRID | HyundaiFlags.ANGLE_CONTROL | HyundaiFlags.CANFD_ALT_BUTTONS,
+    # LX3_HEV 전용 DBC: A의 generated.dbc + BO_ 267 CRUISE_BUTTONS_ALT2 (다른 차량 영향 X)
+    dbc_dict={Bus.pt: "hyundai_canfd_lx3_hev_generated", Bus.radar: 'hyundai_canfd_radar_generated'},
+  )
   HYUNDAI_VELOSTER = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Veloster 2019-20", min_enable_speed=5. * CV.MPH_TO_MS, car_parts=CarParts.common([CarHarness.hyundai_e]))],
     CarSpecs(mass=2917 * CV.LB_TO_KG, wheelbase=2.8, steerRatio=13.75 * 1.15, tireStiffnessFactor=0.5),
@@ -914,7 +922,8 @@ PART_NUMBER_FW_PATTERN = re.compile(b'(?<=[0-9][.,][0-9]{2} )([0-9]{5}[-/]?[A-Z]
 # We've seen both ICE and hybrid for these platforms, and they have hybrid descriptors (e.g. MQ4 vs MQ4H)
 CANFD_FUZZY_WHITELIST = {CAR.KIA_SORENTO_4TH_GEN, CAR.KIA_SORENTO_HEV_4TH_GEN, CAR.KIA_K8_HEV_1ST_GEN,
                          # TODO: the hybrid variant is not out yet
-                         CAR.KIA_CARNIVAL_4TH_GEN}
+                         CAR.KIA_CARNIVAL_4TH_GEN,
+                         CAR.HYUNDAI_PALISADE_LX3_HEV}
 
 # List of ECUs expected to have platform codes, camera and radar should exist on all cars
 # TODO: use abs, it has the platform code and part number on many platforms

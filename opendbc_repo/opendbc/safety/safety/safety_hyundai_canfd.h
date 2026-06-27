@@ -83,7 +83,8 @@ const CanMsg HYUNDAI_CANFD_HDA2_LONG_TX_MSGS[] = {
   {373, 2, 24}, // TCS(0x175)
   {506, 2, 32}, // CLUSTER_SPEED_LIMIT
   {234, 2, 24}, // MDPS
-  {687, 2, 8}, // STEER_TOUCH_2AF
+  {687, 0, 8}, // STEER_TOUCH_2AF on ECAN (LX3_HEV: carrot fafdb3e sends to ECAN)
+  {687, 2, 8}, // STEER_TOUCH_2AF on CAM (stock)
 
   {0x4BE, 2, 8}, // NEW_MSG_4BE (may be corner radar enabler x)
   {0x4B9, 2, 8}, // NEW_MSG_4B9 (may be corner radar enabler)
@@ -108,7 +109,8 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
   {1204, 2, 8}, // 4B4
   {373, 2, 24}, // TCS(0x175)
   {234, 2, 24}, // MDPS
-  {687, 2, 8}, // STEER_TOUCH_2AF
+  {687, 0, 8}, // STEER_TOUCH_2AF on ECAN (LX3_HEV: carrot fafdb3e sends to ECAN)
+  {687, 2, 8}, // STEER_TOUCH_2AF on CAM (stock)
 
 };
 
@@ -118,7 +120,7 @@ const CanMsg HYUNDAI_CANFD_HDA1_TX_MSGS[] = {
 #define HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                              \
   {.msg = {{0x35, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U},                   \
            {0x100, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U},                  \
-           {0x105, (pt_bus), 32, .max_counter = 0xffU, .frequency = 100U}}},                \
+           {0x105, (pt_bus), 32, .max_counter = 0U, .frequency = 100U, .ignore_counter = true, .ignore_checksum = true}}},                \
   {.msg = {{0x175, (pt_bus), 24, .max_counter = 0xffU, .frequency = 50U}, { 0 }, { 0 }}},  \
   {.msg = {{0xa0, (pt_bus), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
   {.msg = {{0xea, (pt_bus), 24, .max_counter = 0xffU, .frequency = 100U}, { 0 }, { 0 }}},   \
@@ -243,13 +245,13 @@ static uint32_t hyundai_canfd_get_checksum(const CANPacket_t* to_push) {
 
 typedef struct {
   int addr;
-  int bus;              // forwarding block ´ë»ó tx bus: 0 or 2
+  int bus;              // forwarding block ï¿½ï¿½ï¿½ tx bus: 0 or 2
   int hz;
   uint32_t timeout_us;
   uint32_t last_tx_us;
 } CanfdTxState;
 
-// forwarding block¿ë: bus 0,2¸¸ »ç¿ë
+// forwarding blockï¿½ï¿½: bus 0,2ï¿½ï¿½ ï¿½ï¿½ï¿½
 CanfdTxState canfd_tx_states[] = {
   {0x50,  0, 100, 0U, 0U}, // 80:  LKAS
   {0x51,  0, 100, 0U, 0U}, // 81:  ADRV_0x51
@@ -396,7 +398,7 @@ static void canfd_bfwd_push(CanfdBufferedFwd* st, const CANPacket_t* pkt) {
   if ((st == NULL) || !st->enabled) return;
   if (GET_BUS(pkt) != st->dst_bus) return;
 
-  // queue°¡ ÀÌ¹Ì 2°³¸é ÀÌ¹ø »õ packetÀº ¹ö¸²
+  // queueï¿½ï¿½ ï¿½Ì¹ï¿½ 2ï¿½ï¿½ï¿½ï¿½ ï¿½Ì¹ï¿½ ï¿½ï¿½ packetï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
   if (st->count >= CANFD_BFWD_MAX_QUEUE) {
     return;
   }
@@ -420,7 +422,7 @@ static bool canfd_bfwd_pop(CanfdBufferedFwd* st, CANPacket_t* pkt) {
   st->head = (st->head + 1U) % CANFD_BFWD_MAX_QUEUE;
   st->count--;
 
-  // ¸¶Áö¸· Á¤»ó packet ÀúÀå
+  // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ packet ï¿½ï¿½ï¿½ï¿½
   canfd_copy_packet(&st->last_pkt, pkt);
   st->has_last_pkt = true;
   st->reuse_left = CANFD_BFWD_REUSE_MAX;
@@ -660,7 +662,7 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
       CANPacket_t buffered_pkt;
       bool use_buffered = canfd_bfwd_pop(bfwd, &buffered_pkt);
 
-      // queue°¡ ºñ¾úÀ¸¸é ¸¶Áö¸· Á¤»ó°ªÀ» 1~2È¸ Àç»ç¿ë
+      // queueï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 1~2È¸ ï¿½ï¿½ï¿½ï¿½
       if (!use_buffered) {
         use_buffered = canfd_bfwd_reuse_last(bfwd, &buffered_pkt);
         if (use_buffered) {

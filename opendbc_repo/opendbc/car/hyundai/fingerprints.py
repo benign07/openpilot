@@ -468,6 +468,32 @@ FW_VERSIONS = {
       b'\xf1\x00ON  MFC  AT USA LHD 1.00 1.04 99211-S9100 211227',
     ],
   },
+  CAR.HYUNDAI_PALISADE_LX3_HEV: {  # (LX3 HEV) - VIN KMHRK81ADTU019104 captured 2026-04-29
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00LX3__               1.00 1.01 99110P9200          ',
+      b'\xf1\x8b %\x07\x02',
+    ],
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00LX31.001.001.002531000HKP_LX325_50404199211P9120',
+      b'\xf1\x8b %\x05#',
+    ],
+    (Ecu.adas, 0x730, None): [
+      b'\xf1\x8b %\x07\x05',
+    ],
+    (Ecu.combinationMeter, 0x7c6, None): [
+      b'\xf1\x00471',
+      b'\xf1\x10',
+      b'\xf1\x8b %\x07\x04',
+    ],
+    (Ecu.cornerRadar, 0x7b7, None): [
+      b'\xf1\x8b %\x04$ %\x04# %\x04\x17 %\x04\x12',
+    ],
+    (Ecu.hvac, 0x7b3, None): [
+      b'\xf1\x00LX3   97255-DU010CONTROL UNIT        253A.1.03.00 v24.05.01   ',
+      b'\xf1\x10\x07',
+      b'\xf1\x8b %\x07\x03',
+    ],
+  },
   CAR.HYUNDAI_VELOSTER: {
     (Ecu.fwdRadar, 0x7d0, None): [
       b'\xf1\x00JS__ SCC H-CUP      1.00 1.02 95650-J3200         ',
