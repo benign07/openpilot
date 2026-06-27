@@ -52,6 +52,7 @@ class CarState(CarStateBase):
 
     self.cruise_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
     self.main_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
+    self._lx3_main_btn_debounce = 0  # v29.1: LX3_HEV main button (0x10B byte10 raw=8) 60/40 flicker debounce
 
     self.gear_msg_canfd = "GEAR" if CP.extFlags & HyundaiExtFlags.CANFD_GEARS_69 else \
                           "ACCELERATOR" if CP.flags & HyundaiFlags.EV else \
@@ -599,7 +600,9 @@ class CarState(CarStateBase):
     else:
       cruise_button = cp.vl[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"]
     if cruise_button in [Buttons.RES_ACCEL, Buttons.SET_DECEL] and self.CP.openpilotLongitudinalControl:
-      self.main_enabled = True
+      # v32.1: LX3_HEV main toggle is the dedicated 0x10B byte10==8 button only; accel/decel must not set main_enabled (avoids lat auto-activation)
+      if self.CP.carFingerprint != "HYUNDAI_PALISADE_LX3_HEV":
+        self.main_enabled = True
     # CAN FD cars enable on main button press, set available if no TCS faults preventing engagement
     ret.cruiseState.available = self.main_enabled and self.controls_ready_count >= READY_COUNT_OK #cp.vl["TCS"]["ACCEnable"] == 0
     if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
@@ -730,7 +733,20 @@ class CarState(CarStateBase):
      """
     prev_main_buttons = self.main_buttons[-1]
     #self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
-    if self.cruise_buttons_alt2 is not None:
+    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" and self.cruise_buttons_alt2 is not None:
+      # v29.1: raw=8 flickers 60/40 during a single press → latch 30 frames (300ms) on each raw=8
+      # to avoid multiple falling-edge toggles. Real release = 30 consecutive frames of raw!=8.
+      raw = 1 if int(self.cruise_buttons_alt2.get("CRUISE_BUTTONS", 0)) == 8 else 0
+      if raw == 1:
+        self._lx3_main_btn_debounce = 30
+        v = 1
+      elif self._lx3_main_btn_debounce > 0:
+        self._lx3_main_btn_debounce -= 1
+        v = 1
+      else:
+        v = 0
+      self.main_buttons.extend([v])
+    elif self.cruise_buttons_alt2 is not None:
       self.main_buttons.extend([1 if int(self.cruise_buttons_alt2.get("CRUISE_BUTTONS", 0)) == 8 else 0])
     else:
       self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
