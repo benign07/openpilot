@@ -496,7 +496,9 @@ class VCruiseCarrot:
 
     if not long_pressed:
       if button_type == ButtonType.accelCruise:
-        self._lat_enabled = True
+        # v32 (A 기준): LX3_HEV는 accel/decel이 lat 안 건드림 (SCC 안 켜진 상태에서 LFA만 켜지는 부작용 차단)
+        if self.CP.carFingerprint != "HYUNDAI_PALISADE_LX3_HEV":
+          self._lat_enabled = True
         self._pause_auto_speed_up = False
         if self._soft_hold_active > 0:
           self._soft_hold_active = 0
@@ -515,7 +517,9 @@ class VCruiseCarrot:
         self.carrot_cruise_active = False
 
       elif button_type == ButtonType.decelCruise:
-        self._lat_enabled = True
+        # v32 (A 기준): LX3_HEV는 accel/decel이 lat 안 건드림 (SCC 안 켜진 상태에서 LFA만 켜지는 부작용 차단)
+        if self.CP.carFingerprint != "HYUNDAI_PALISADE_LX3_HEV":
+          self._lat_enabled = True
         self._pause_auto_speed_up = True
         #self.carrot_cruise_active = False
 

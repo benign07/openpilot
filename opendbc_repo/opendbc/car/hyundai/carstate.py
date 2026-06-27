@@ -158,6 +158,7 @@ class CarState(CarStateBase):
     self.GEAR_ALT = True if 64 in fingerprints[pt_bus] else False
     self.TPMS = True if 0x3a0 in fingerprints[pt_bus] else False
     self.LOCAL_TIME = True if 1264 in fingerprints[pt_bus] else False
+    self.CCNC_0x161 = True if 0x161 in fingerprints[cam_bus] else False  # v10: LX3_HEV LFA_ICON source (ADRV_0x161)
 
     self.cp_bsm = None
     self.time_zone = "UTC"
@@ -604,7 +605,7 @@ class CarState(CarStateBase):
     if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
       self.MainMode_ACC = cp_cam.vl["SCC_CONTROL"]["MainMode_ACC"] == 1
       self.ACCMode = cp_cam.vl["SCC_CONTROL"]["ACCMode"]
-      self.LFA_ICON = cp_cam.vl["LFAHDA_CLUSTER"]["HDA_LFA_SymSta"]
+      self.LFA_ICON = cp_cam.vl["ADRV_0x161"]["LFA_ICON"] if self.CCNC_0x161 else cp_cam.vl["LFAHDA_CLUSTER"]["HDA_LFA_SymSta"]  # v10: LX3_HEV reads LFA_ICON from ADRV_0x161
 
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
