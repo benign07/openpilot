@@ -507,8 +507,14 @@ def forward_button_message(packer, CAN, frame, CS, cruise_button, MainMode_ACC_t
       if cruise_button_driver == 0:
         values["CRUISE_BUTTONS"] = cruise_button
       if MainMode_ACC_trigger > 0:
-        #values["ADAPTIVE_CRUISE_MAIN_BTN"] = 1
-        pass
+        # v30.1: LX3_HEV 0x10B has no ADAPTIVE_CRUISE_MAIN_BTN field (only CRUISE_BUTTONS 4-bit + LFA_BTN);
+        # send CRUISE_BUTTONS=2 (SET_DECEL) on driver-idle frames to trigger stock SCC standby->active.
+        # TODO(device): confirm carrot-wip's main-engage path doesn't already engage LX3 (avoid double-trigger).
+        if CS.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+          if cruise_button_driver == 0:
+            values["CRUISE_BUTTONS"] = 2  # Buttons.SET_DECEL
+        #else:
+        #  values["ADAPTIVE_CRUISE_MAIN_BTN"] = 1
       elif LFA_trigger > 0:
         values["LFA_BTN"] = 1
 
