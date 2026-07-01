@@ -202,19 +202,19 @@ class HudRenderer(Widget):
     )
 
     if self.is_cruise_available:
-      self._draw_set_speed_carrot(rect)
+      pass  # UX: hide driving box (was self._draw_set_speed_carrot(rect))
 
     #self._draw_current_speed(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size
-    self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
+    # self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))  # UX: hide carrot logo
 
     if self._plot_renderer is None:
       self._plot_renderer = PlotRenderer()
     self._plot_renderer.draw(rect, self._font_display)
     self._draw_date_time(rect)
-    self._draw_tpms_top_right(rect)
+    # self._draw_tpms_top_right(rect)  # UX: hide TPMS
 
   def user_interacting(self) -> bool:
     return self._exp_button.is_pressed
@@ -835,7 +835,7 @@ class HudRenderer(Widget):
 
     if show_datetime in (1, 2):
       draw_text_ui_style(
-        time.strftime("%H:%M", now), x, y, 100, rl.WHITE,
+        time.strftime("%H:%M", now), int(rect.x + rect.width / 2), int(rect.y + 235), 225, rl.WHITE,  # UX: clock center, big
         font=self._font_display,
         border_width=3.0,
         shadow_offset=8.0,
@@ -846,11 +846,11 @@ class HudRenderer(Widget):
       weekday = weekdays_ko[(now.tm_wday + 1) % 7]
       date_text = f"{time.strftime('%m-%d', now)}({weekday})"
       draw_text_ui_style(
-        date_text, x, y + 70, 60, rl.WHITE,
+        date_text, int(rect.x + rect.width - 30), int(rect.y + 70), 90, rl.WHITE,  # UX: date top-right, slightly bigger
         font=self._font_display,
         border_width=3.0,
         shadow_offset=8.0,
-        align="center_bottom",
+        align="right_top",
       )
 
   def _get_tpms_color(self, tpms: float) -> rl.Color:
