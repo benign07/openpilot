@@ -144,7 +144,7 @@ class CarState(CarStateBase):
     #self.rf_lateral = 0
 
     fingerprints_str = Params().get("FingerPrints")
-    fingerprints = ast.literal_eval(fingerprints_str)
+    fingerprints = ast.literal_eval(fingerprints_str) if fingerprints_str else {i: {} for i in range(8)}
     #print("fingerprints =", fingerprints)
     ecu_disabled = False
     if self.CP.openpilotLongitudinalControl and not (self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC):
