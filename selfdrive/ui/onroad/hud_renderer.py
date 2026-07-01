@@ -130,6 +130,7 @@ class HudRenderer(Widget):
     self._font_bold = gui_app.font(FontWeight.BOLD)
     self._font_medium = gui_app.font(FontWeight.MEDIUM)
     self._font_display = gui_app.font(FontWeight.DISPLAY)
+    self._font_clock = gui_app.font(FontWeight.BOLD)  # UX: Inter-Bold (200px bake, Latin only) for crisp large clock/date; DISPLAY=KaiGen carries 11k CJK glyphs so it's baked at only 48px -> jagged when scaled up
 
     self._exp_button = ExpButton(UI_CONFIG.button_size, UI_CONFIG.wheel_icon_size)
 
@@ -828,7 +829,7 @@ class HudRenderer(Widget):
       return
 
     now = time.localtime()
-    weekdays_ko = ["일", "월", "화", "수", "목", "금", "토"]
+    weekdays_en = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]  # UX: English weekday so date renders with the crisp Latin font (Inter-Bold)
 
     x = int(rect.x + 170)
     y = int(rect.y + 120)
@@ -836,18 +837,18 @@ class HudRenderer(Widget):
     if show_datetime in (1, 2):
       draw_text_ui_style(
         time.strftime("%H:%M", now), int(rect.x + rect.width / 2), int(rect.y + 235), 225, rl.WHITE,  # UX: clock center, big
-        font=self._font_display,
+        font=self._font_clock,  # UX: Inter-Bold 200px bake -> crisp at 225 (was DISPLAY/KaiGen 48px -> ~5.8x upscale jaggies)
         border_width=3.0,
         shadow_offset=8.0,
         align="center_bottom",
       )
 
     if show_datetime in (1, 3):
-      weekday = weekdays_ko[(now.tm_wday + 1) % 7]
+      weekday = weekdays_en[(now.tm_wday + 1) % 7]
       date_text = f"{time.strftime('%m-%d', now)}({weekday})"
       draw_text_ui_style(
         date_text, int(rect.x + rect.width - 30), int(rect.y + 70), 90, rl.WHITE,  # UX: date top-right, slightly bigger
-        font=self._font_display,
+        font=self._font_clock,  # UX: Inter-Bold + English weekday -> crisp
         border_width=3.0,
         shadow_offset=8.0,
         align="right_top",
