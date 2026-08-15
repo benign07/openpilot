@@ -530,7 +530,7 @@ def test_date_text_formats_only_when_minute_key_changes(hud_module, monkeypatch)
   renderer._date_time_minute_key = None
   renderer._date_time_text = ""
   renderer._date_text = ""
-  renderer._font_display = object()
+  renderer._font_clock = object()
   moments = iter((
     stdlib_time.struct_time((2026, 7, 16, 12, 1, 1, 3, 197, 0)),
     stdlib_time.struct_time((2026, 7, 16, 12, 1, 59, 3, 197, 0)),
@@ -566,7 +566,13 @@ def test_date_text_formats_only_when_minute_key_changes(hud_module, monkeypatch)
   ]
   assert len(draw_calls) == 8
   assert renderer._date_time_minute_key == (2026, 197, 13, 2, 0)
-  assert renderer._date_text.endswith(f"({module.WEEKDAYS_KO[4]})")
+  assert renderer._date_text.endswith(f"({module.WEEKDAYS_EN[4]})")
+  assert draw_calls[0][0][1:4] == (500, 235, 225)
+  assert draw_calls[0][1]["font"] is renderer._font_clock
+  assert draw_calls[0][1]["align"] == "center_bottom"
+  assert draw_calls[1][0][1:4] == (970, 70, 90)
+  assert draw_calls[1][1]["font"] is renderer._font_clock
+  assert draw_calls[1][1]["align"] == "right_top"
 
   renderer._show_date_time = 0
   monkeypatch.setattr(module.time, "localtime", lambda: pytest.fail("hidden date HUD read the clock"))
@@ -574,22 +580,22 @@ def test_date_text_formats_only_when_minute_key_changes(hud_module, monkeypatch)
   assert len(draw_calls) == 8
 
 
-def test_render_draws_each_hud_section_in_order(hud_module, monkeypatch):
+def test_render_draws_only_visible_hud_sections_in_order(hud_module, monkeypatch):
   module, _ = hud_module
   renderer = object.__new__(module.HudRenderer)
-  renderer.is_cruise_available = False
+  renderer.is_cruise_available = True
   renderer._show_plot_mode = 6
   renderer._font_display = object()
   calls = []
 
-  renderer._exp_button = SimpleNamespace(render=lambda rect: calls.append("button"))
   renderer._plot_renderer = SimpleNamespace(
     draw=lambda rect, font, mode: calls.append(("plot", mode)),
   )
   monkeypatch.setattr(renderer, "_refresh_hud_params", lambda now: calls.append(("params", now)))
   monkeypatch.setattr(renderer, "_draw_date_time", lambda rect: calls.append("date"))
-  monkeypatch.setattr(renderer, "_draw_tpms", lambda rect: calls.append("tpms"))
-  monkeypatch.setattr(renderer, "_draw_cruise_speed_animation", lambda rect: calls.append("animation"))
+  monkeypatch.setattr(renderer, "_draw_set_speed_carrot", lambda rect: pytest.fail("hidden driving panel was drawn"))
+  monkeypatch.setattr(renderer, "_draw_tpms", lambda rect: pytest.fail("hidden TPMS was drawn"))
+  monkeypatch.setattr(renderer, "_draw_cruise_speed_animation", lambda rect: pytest.fail("hidden speed animation was drawn"))
   monkeypatch.setattr(module.rl, "draw_rectangle_gradient_v", lambda *args: calls.append("header"))
   monkeypatch.setattr(module.time, "monotonic", lambda: 12.5)
 
@@ -598,9 +604,7 @@ def test_render_draws_each_hud_section_in_order(hud_module, monkeypatch):
   assert calls == [
     ("params", 12.5),
     "header",
-    "button",
     ("plot", 6),
     "date",
-    "tpms",
-    "animation",
   ]
+  assert renderer.user_interacting() is False

@@ -2,7 +2,6 @@ import time
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
-from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
@@ -19,7 +18,7 @@ CRUISE_SPEED_ANIMATION_MAX = 100
 CRUISE_SPEED_ANIMATION_STEP = 12
 CRUISE_SPEED_ANIMATION_START_SIZE = 300
 HUD_PARAM_REFRESH_INTERVAL = 1.0
-WEEKDAYS_KO = ("일", "월", "화", "수", "목", "금", "토")
+WEEKDAYS_EN = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
 
 @dataclass(frozen=True)
@@ -151,8 +150,7 @@ class HudRenderer(Widget):
     self._font_bold = gui_app.font(FontWeight.BOLD)
     self._font_medium = gui_app.font(FontWeight.MEDIUM)
     self._font_display = gui_app.font(FontWeight.DISPLAY)
-
-    self._exp_button = ExpButton(UI_CONFIG.button_size, UI_CONFIG.wheel_icon_size)
+    self._font_clock = gui_app.font(FontWeight.BOLD)
 
     self._txt_speed_bg = gui_app.texture('images/speed_bg.png')
 
@@ -281,25 +279,16 @@ class HudRenderer(Widget):
       COLORS.HEADER_GRADIENT_END,
     )
 
-    if self.is_cruise_available:
-      self._draw_set_speed_carrot(rect)
-
     #self._draw_current_speed(rect)
-
-    button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
-    button_y = rect.y + UI_CONFIG.border_size
-    self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
 
     if self._plot_renderer is None:
       self._plot_renderer = PlotRenderer()
     self._plot_renderer.draw(rect, self._font_display, self._show_plot_mode)
 
     self._draw_date_time(rect)
-    self._draw_tpms(rect)
-    self._draw_cruise_speed_animation(rect)
 
   def user_interacting(self) -> bool:
-    return self._exp_button.is_pressed
+    return False
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     """Draw the MAX speed indicator box."""
@@ -966,13 +955,10 @@ class HudRenderer(Widget):
 
     self._refresh_date_time_text(time.localtime())
 
-    x = int(rect.x + 170)
-    y = int(rect.y + 120)
-
     if show_datetime in (1, 2):
       draw_text_ui_style(
-        self._date_time_text, x, y, 100, rl.WHITE,
-        font=self._font_display,
+        self._date_time_text, int(rect.x + rect.width / 2), int(rect.y + 235), 225, rl.WHITE,
+        font=self._font_clock,
         border_width=3.0,
         shadow_offset=8.0,
         align="center_bottom",
@@ -980,11 +966,11 @@ class HudRenderer(Widget):
 
     if show_datetime in (1, 3):
       draw_text_ui_style(
-        self._date_text, x, y + 70, 60, rl.WHITE,
-        font=self._font_display,
+        self._date_text, int(rect.x + rect.width - 30), int(rect.y + 70), 90, rl.WHITE,
+        font=self._font_clock,
         border_width=3.0,
         shadow_offset=8.0,
-        align="center_bottom",
+        align="right_top",
       )
 
   def _refresh_date_time_text(self, now: time.struct_time) -> None:
@@ -992,7 +978,7 @@ class HudRenderer(Widget):
     if minute_key == self._date_time_minute_key:
       return
 
-    weekday = WEEKDAYS_KO[(now.tm_wday + 1) % 7]
+    weekday = WEEKDAYS_EN[(now.tm_wday + 1) % 7]
     self._date_time_text = time.strftime("%H:%M", now)
     self._date_text = f"{time.strftime('%m-%d', now)}({weekday})"
     self._date_time_minute_key = minute_key
