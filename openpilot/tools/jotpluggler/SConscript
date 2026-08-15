@@ -1,6 +1,5 @@
 import os
 import subprocess
-import bootstrap_icons
 import imgui
 import libusb
 from opendbc import get_generated_dbcs
@@ -8,13 +7,19 @@ from openpilot.common.basedir import BASEDIR
 
 Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal', 'replay_lib', 'ffmpeg_libs')
 
+try:
+  import bootstrap_icons
+  bootstrap_icons_ttf = str(bootstrap_icons.TTF_PATH)
+except ModuleNotFoundError:
+  bootstrap_icons_ttf = Dir("#third_party/bootstrap").File("bootstrap-icons.ttf").abspath
+
 jot_env = env.Clone()
 jot_env["LIBPATH"] += [imgui.MESA_DIR, libusb.LIB_DIR]
 jot_env["CPPPATH"] += [imgui.INCLUDE_DIR, libusb.INCLUDE_DIR]
 jot_env["CXXFLAGS"] += [
   "-DGLFW_INCLUDE_NONE",
   '-DJOTP_REPO_ROOT=\'"%s"\'' % os.path.realpath(BASEDIR),
-  '-DBOOTSTRAP_ICONS_TTF=\'"%s"\'' % bootstrap_icons.TTF_PATH,
+  '-DBOOTSTRAP_ICONS_TTF=\'"%s"\'' % bootstrap_icons_ttf,
 ]
 
 def materialize_generated_dbcs(target, source, env):
