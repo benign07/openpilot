@@ -2,7 +2,7 @@
 
 # Large binaries stay in Git LFS to keep clones small.
 *.onnx filter=lfs diff=lfs merge=lfs -text
-openpilot/selfdrive/car/tests/test_models_segs.txt filter=lfs diff=lfs merge=lfs -text
+openpilot/selfdrive/car/tests/test_models_segs.txt -filter -diff -merge -text
 openpilot/system/hardware/tici/updater filter=lfs diff=lfs merge=lfs -text
 
 # Image / font / sound types are shipped as REAL blobs in this fork. Declaring
