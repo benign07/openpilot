@@ -27,6 +27,22 @@ def read_param(params, key):
   return value.decode('utf-8', errors='replace') if isinstance(value, bytes) else value
 
 
+def selected_fields(reader, fields):
+  result = {}
+  for key in fields:
+    value = getattr(reader, key, None)
+    if key in ('gearShifter', 'state', 'longitudinalPlanSource') and value is not None:
+      value = str(value)
+    elif key in ('speeds', 'accels') and value is not None:
+      value = list(value)
+    elif key == 'errors' and value is not None:
+      value = [str(error) for error in value]
+    elif hasattr(value, 'to_dict'):
+      value = value.to_dict()
+    result[key] = value
+  return result
+
+
 class AutomaticController:
   def __init__(self, root='/data/community/automatic_drive'):
     self.root = Path(root)
@@ -95,7 +111,8 @@ class AutomaticController:
       metadata['dbc_sha256'] = hashlib.sha256(dbc.read_bytes()).hexdigest()
     with self.lock:
       self.recorder = AutoRecorder(ChunkStore(self.root), metadata)
-    last_metadata = -100
+    last_metadata = last_context = -100
+    services = {}
     while not self.shutdown.is_set():
       sm.update(0)
       now = time.monotonic()
@@ -108,11 +125,13 @@ class AutomaticController:
             with car.CarParams.from_bytes(raw) as cp:
               metadata['car_fingerprint'] = cp.carFingerprint
         last_metadata = now
-      services = {}
-      for name, fields in FIELDS.items():
-        data = sm[name].to_dict()
-        services[name] = {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]),
-                          'data': {key: data.get(key) for key in fields}}
+      if now - last_context >= .2:
+        # Read only required fields at the recorded rate. Full carState/deviceState
+        # conversion on every CAN drain needlessly copies unrelated payloads.
+        for name, fields in FIELDS.items():
+          services[name] = {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]),
+                            'data': selected_fields(sm[name], fields)}
+        last_context = now
       with self.lock:
         self.recorder.update(services, now)
       # Bounded drains; lag is recorded explicitly and stale CAN is discarded.

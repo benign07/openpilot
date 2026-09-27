@@ -11,7 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from .automatic import AutoRecorder, ChunkStore, control_mode
 from .automatic_routes import register
-from .automatic_runtime import read_param
+from .automatic_runtime import read_param, selected_fields
 from tools.can_auto_sync import analyze, download
 
 
@@ -26,6 +26,18 @@ def services(now=100, started=True, lat=False, long=False):
 
 
 class RuntimeTests(unittest.TestCase):
+  def test_only_selected_fields_are_converted(self):
+    class Nested:
+      def to_dict(self): return {'enabled': False}
+    class Reader:
+      vEgo = 12.5
+      gearShifter = 'drive'
+      cruiseState = Nested()
+      speeds = (1., 2.)
+      def to_dict(self): raise AssertionError('Full message conversion is unnecessary')
+    self.assertEqual(selected_fields(Reader(), ('vEgo', 'gearShifter', 'cruiseState', 'speeds', 'absent')),
+                     {'vEgo':12.5,'gearShifter':'drive','cruiseState':{'enabled':False},'speeds':[1.,2.],'absent':None})
+
   def test_typed_params_and_legacy_bytes_need_no_encoding_keyword(self):
     class Params:
       def get(self, key):
