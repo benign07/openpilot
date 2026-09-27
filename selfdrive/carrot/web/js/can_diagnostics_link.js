@@ -3,8 +3,8 @@
   if (document.getElementById('canDiagnosticsLink')) return;
   const link = document.createElement('a');
   link.id = 'canDiagnosticsLink'; link.href = '/diagnostics.html';
-  const title = document.createElement('strong'); title.textContent = '주행 평가 · CAN 진단';
-  const subtitle = document.createElement('span'); subtitle.textContent = '신호 정합성 기록 / 정차 조작 검사';
+  const title = document.createElement('strong'); title.textContent = '자동 주행 기록 · CAN 진단';
+  const subtitle = document.createElement('span'); subtitle.textContent = '자동 기록 상태 / 선택 조작 검사';
   subtitle.style.cssText = 'display:block;font-size:11px;font-weight:500;margin-top:4px;';
   link.append(title, subtitle);
   link.setAttribute('aria-label', '주행 평가와 CAN 신호 정합성 진단 열기');
