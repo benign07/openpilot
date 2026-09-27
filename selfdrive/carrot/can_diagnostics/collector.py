@@ -157,57 +157,64 @@ class Controller:
     sockets = {name: messaging.sub_sock(name, conflate=name != 'can', timeout=0)
                for name in ('can', 'carState', 'selfdriveState', 'radarState', 'carControl', 'longitudinalPlan', 'modelV2')}
     self.capture.error = None
+    last_context_read = 0.0
     while not self.shutdown.is_set():
       now = time.monotonic()
       with self.lock:
         if not self.capture.active() and now - self.capture.last_client > 30:
           return
-      for service in ('carState', 'selfdriveState', 'radarState', 'carControl', 'longitudinalPlan', 'modelV2'):
+      context_services = ('carState', 'selfdriveState', 'radarState', 'carControl', 'longitudinalPlan', 'modelV2') if now - last_context_read >= .05 else ()
+      if context_services:
+        last_context_read = now
+      for service in context_services:
         raw = sockets[service].receive(non_blocking=True)
         if raw is None:
           continue
         event = messaging.log_from_bytes(raw)
         timestamp = event.logMonoTime / 1e9
+        reader = getattr(event, service)
         if service == 'modelV2':
           leads = [lead.to_dict() for lead in list(event.modelV2.leadsV3)[:3]]
           data = {'leadsV3': [{k: lead.get(k) for k in ('prob', 'x', 'y', 'v', 'a', 't')} for lead in leads]}
-        else:
-          data = getattr(event, service).to_dict()
-        if service == 'carState':
-          data = {key: data.get(key) for key in CAR_FIELDS}
+        elif service == 'carState':
+          data = {key: getattr(reader, key) for key in CAR_FIELDS if key not in ('gearShifter', 'cruiseState')}
+          data.update(gearShifter=str(reader.gearShifter), cruiseState=reader.cruiseState.to_dict())
         elif service == 'selfdriveState':
-          data = {key: data.get(key) for key in ('enabled', 'active', 'state')}
+          data = {'enabled': reader.enabled, 'active': reader.active, 'state': str(reader.state)}
         elif service == 'radarState':
-          data = {lead: {k: (data.get(lead) or {}).get(k) for k in ('status', 'dRel', 'yRel', 'vRel', 'aRel')}
+          data = {lead: {k: getattr(getattr(reader, lead), k) for k in ('status', 'dRel', 'yRel', 'vRel', 'aRel')}
                   for lead in ('leadOne', 'leadTwo')}
         elif service == 'carControl':
-          actuators = data.get('actuators') or {}
-          data = {'enabled': data.get('enabled'), 'latActive': data.get('latActive'), 'longActive': data.get('longActive'),
-                  'actuators': {key: actuators.get(key) for key in ('accel', 'steer', 'longControlState')}}
+          actuators = reader.actuators.to_dict()
+          data = {'enabled': reader.enabled, 'latActive': reader.latActive, 'longActive': reader.longActive,
+                  'actuators': {key: actuators.get(key) for key in ('accel', 'torque', 'steeringAngleDeg', 'longControlState')}}
         elif service == 'longitudinalPlan':
-          data = {key: data.get(key) for key in ('speeds', 'accels', 'hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop')}
+          data = {'speeds': list(reader.speeds), 'accels': list(reader.accels), 'hasLead': reader.hasLead,
+                  'longitudinalPlanSource': str(reader.longitudinalPlanSource), 'fcw': reader.fcw, 'shouldStop': reader.shouldStop}
         with self.lock:
           self.capture.telemetry.update({service: data, service + '_received': timestamp,
                                          service + '_received_ns': event.logMonoTime,
                                          service + '_valid': bool(event.valid)})
       with self.lock:
         self.capture.tick()
-      for packet in range(128):
+      backlog = True
+      for packet in range(16):
         raw = sockets['can'].receive(non_blocking=True)
         if raw is None:
+          backlog = False
           break
         event = messaging.log_from_bytes(raw)
         if not event.valid:
           continue
         with self.lock:
+          if self.capture.active() and time.monotonic() - event.logMonoTime / 1e9 > .5:
+            self.capture.finish('CAN 수집 지연이 0.5초를 넘어 기록을 중단했습니다.', completed=False)
           for frame in event.can:
             self.capture.receive_frame(frame.src, frame.address, bytes(frame.dat), event.logMonoTime)
-      else:
-        with self.lock:
-          self.capture.finish('CAN 수신이 처리 속도를 초과하여 진단을 중단했습니다.', completed=False)
       with self.lock:
         self.capture.tick()
-      self.shutdown.wait(.02)
+      # Refresh decoded context between bounded batches, even while catching up.
+      self.shutdown.wait(0 if backlog else .01)
 
   def _demo_loop(self):
     # Explicit demo data for UI development. Never available through production routes.

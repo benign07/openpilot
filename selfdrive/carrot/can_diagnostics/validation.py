@@ -1,7 +1,6 @@
 """Observe real driving against installed DBC definitions, with explicit evidence limits."""
 from __future__ import annotations
 
-import copy
 import re
 
 from .analysis import MAX_MESSAGE_KEYS
@@ -25,6 +24,20 @@ class DrivingValidator:
     self.dbc = dbc
     self.rows = {}
     self.previous_counters = {}
+    self.plans = {}
+    self.public_definitions = {}
+    self.known_definitions = []
+    for address, definitions in dbc.messages.items():
+      for definition in definitions:
+        public = {k: v for k, v in definition.items() if k != 'signals'}
+        public['signals'] = []
+        for signal in definition['signals']:
+          item = {k: v for k, v in signal.items() if k != 'bits'}
+          if re.search(r'CHECKSUM|CRC', signal['name'], re.I) and not signal['checksum_configured']:
+            item['validation_note'] = '현재 DBC 파서에 체크섬 검증 함수가 연결되어 있지 않음'
+          public['signals'].append(item)
+        self.public_definitions[id(definition)] = public
+        self.known_definitions.append(dict(public, address=address))
 
   def consume(self, bus, address, payload, mono_ns):
     key = (bus, address, len(payload))
@@ -41,9 +54,13 @@ class DrivingValidator:
                         'expected_lengths': sorted({m['dlc'] for m in scoped}),
                         'definition_status': 'unknown_address' if not scoped else ('ambiguous' if len(exact) > 1 else 'defined'),
                         'bus_scope': 'runtime_configured' if binding is not None else 'unverified',
-                        'definitions': copy.deepcopy(exact), 'signal_observations': {},
+                        'definitions': exact, 'signal_observations': {},
                         'checksum_checks': 0, 'checksum_failures': 0, 'counter_discontinuities': 0,
                         'last_decode_ns': 0, 'mapping_status': 'definition_only'}
+      if len(exact) == 1:
+        plan = [(signal, self.dbc.checksum_functions.get((exact[0]['dbc'], address, signal['name'])))
+                for signal in exact[0]['signals']]
+        self.plans[key] = (plan, [(signal, check) for signal, check in plan if signal['counter_configured'] or check is not None])
     row = self.rows[key]
     row['max_gap_ms'] = max(row['max_gap_ms'], (mono_ns - row['last_mono_ns']) / 1e6)
     row['last_mono_ns'] = mono_ns
@@ -51,12 +68,8 @@ class DrivingValidator:
     definitions = row['definitions']
     if len(definitions) != 1:
       return
-    definition = definitions[0]
     sampled = mono_ns - row['last_decode_ns'] >= 100_000_000
-    for signal in definition['signals']:
-      check = self.dbc.checksum_functions.get((definition['dbc'], address, signal['name']))
-      if not sampled and not signal['counter_configured'] and check is None:
-        continue
+    for signal, check in self.plans[key][0 if sampled else 1]:
       raw, value = decode_signal(payload, signal)
       if check is not None:
         row['checksum_checks'] += 1
@@ -69,9 +82,11 @@ class DrivingValidator:
           row['counter_discontinuities'] += 1
         self.previous_counters[counter_key] = raw
       if sampled:
-        stats = row['signal_observations'].setdefault(signal['name'],
-                  {'samples': 0, 'minimum_observed': value, 'maximum_observed': value,
-                   'last_value': value, 'out_of_declared_range': 0, 'semantic_status': 'unverified'})
+        stats = row['signal_observations'].get(signal['name'])
+        if stats is None:
+          stats = {'samples': 0, 'minimum_observed': value, 'maximum_observed': value,
+                   'last_value': value, 'out_of_declared_range': 0, 'semantic_status': 'unverified'}
+          row['signal_observations'][signal['name']] = stats
         stats['samples'] += 1
         stats['minimum_observed'] = min(stats['minimum_observed'], value)
         stats['maximum_observed'] = max(stats['maximum_observed'], value)
@@ -95,7 +110,11 @@ class DrivingValidator:
             'dbc_sources': self.dbc.sources, 'runtime_database': self.dbc.runtime_info}
 
   def catalog(self):
-    rows = copy.deepcopy(list(self.rows.values()))
+    # Copy only changing statistics while the caller holds the capture lock.
+    # DBC definitions are immutable during a session and already JSON-ready.
+    rows = [dict(row, definitions=[self.public_definitions[id(d)] for d in row['definitions']],
+                 signal_observations={name: dict(stats) for name, stats in row['signal_observations'].items()})
+            for row in self.rows.values()]
     latest = max((r['last_mono_ns'] for r in rows), default=0)
     for row in rows:
       duration = (row['last_mono_ns'] - row['first_mono_ns']) / 1e9
@@ -103,16 +122,7 @@ class DrivingValidator:
       row['max_gap_ms'] = round(row['max_gap_ms'], 2)
       row['silence_at_end_ms'] = round((latest - row['last_mono_ns']) / 1e6, 2)
       row.pop('last_decode_ns', None)
-      for definition in row['definitions']:
-        for signal in definition['signals']:
-          signal.pop('bits', None)
-          if re.search(r'CHECKSUM|CRC', signal['name'], re.I) and not signal['checksum_configured']:
-            signal['validation_note'] = '현재 DBC 파서에 체크섬 검증 함수가 연결되어 있지 않음'
-    definitions = copy.deepcopy([dict(d, address=address) for address, values in self.dbc.messages.items() for d in values])
-    for definition in definitions:
-      for signal in definition['signals']:
-        signal.pop('bits', None)
-    return {'schema_version': 1, 'summary': self.summary(), 'known_definitions': definitions,
+    return {'schema_version': 1, 'summary': self.summary(), 'known_definitions': self.known_definitions,
             'messages': sorted(rows, key=lambda r: (r['bus'], r['address'], r['dlc'])),
             'evidence_policy': 'DBC 이름이나 상관관계만으로 실제 의미가 검증되지는 않습니다. 미정의 주소는 곧바로 오류가 아닙니다. 카운터 불연속은 수집 누락과 함께 검토해야 합니다.',
             'timebase': 'Device monotonic nanoseconds, same domain as rlog logMonoTime',

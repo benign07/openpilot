@@ -130,6 +130,16 @@ class ValidatorTests(unittest.TestCase):
       validator.consume(bus, 0x123, bytes(8), 1000000000)
     self.assertEqual(validator.summary()['observed_messages'], 2)
 
+  def test_catalog_snapshot_keeps_decode_bits_and_freezes_observations(self):
+    validator = DrivingValidator(self.dbc)
+    validator.consume(0, 0x123, bytes(8), 1000000000)
+    snapshot = validator.catalog()
+    self.assertNotIn('bits', snapshot['messages'][0]['definitions'][0]['signals'][0])
+    self.assertIn('bits', self.dbc.messages[0x123][0]['signals'][0])
+    validator.consume(0, 0x123, bytes([4, 0, 0, 0, 0, 0, 0, 0]), 1200000000)
+    self.assertEqual(snapshot['messages'][0]['signal_observations']['PEDAL']['last_value'], 0)
+    self.assertEqual(validator.catalog()['messages'][0]['signal_observations']['PEDAL']['last_value'], 1)
+
 
 class CaptureTests(unittest.TestCase):
   def setUp(self):

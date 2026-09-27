@@ -85,7 +85,7 @@ class Capture:
     self.validator = DrivingValidator(self.dbc)
     self.previous_auto = {}
     self.metadata = {'demo': False}
-    self.counters = {'can_frames': 0, 'echo_frames_ignored': 0, 'invalid_frames': 0}
+    self.counters = {'can_frames': 0, 'echo_frames_ignored': 0, 'invalid_frames': 0, 'stale_frames_ignored': 0}
 
   def preflight(self, mode='drive'):
     if mode != 'drive':
@@ -120,7 +120,7 @@ class Capture:
     now = self.clock()
     self.session = {'id': session_id, 'test_id': test_id, 'state': 'driving' if test_id == 'drive' else 'awaiting_action', 'step': 0,
                     'started': now, 'bytes': 0, 'frame_count': 0, 'label_source': 'natural_driving' if test_id == 'drive' else 'user_confirmed',
-                    'windows': [], 'last_sample': now, 'last_disk_check': now}
+                    'windows': [], 'last_sample': now, 'last_disk_check': now, 'initial_counters': dict(self.counters)}
     self.report = None
     self.error = None
     self.validator = DrivingValidator(self.dbc)
@@ -166,6 +166,7 @@ class Capture:
     # A queued old CAN event is not evidence of current vehicle connectivity.
     age = now - log_mono_time / 1e9
     if not 0 <= age <= .5:
+      self.counters['stale_frames_ignored'] += 1
       return
     key = (bus, address, len(data))
     if key not in self.latest and len(self.latest) >= MAX_MESSAGE_KEYS:
@@ -181,10 +182,11 @@ class Capture:
       self.finish(reason, completed=False)
       return
     cycle, phase = self.phase()
-    row = {'mono_ns': log_mono_time, 'received_ns': int(now * 1e9), 'bus': bus,
-           'address': address, 'dlc': len(data), 'data': data.hex(), 'cycle': cycle,
-           'phase': phase, 'stage': self.session['state']}
-    line = json.dumps(row, separators=(',', ':')) + '\n'
+    # Only validated integers, hex bytes and internal enum strings are formatted.
+    # Avoid constructing a dict and JSON encoder for every received CAN frame.
+    line = (f'{{"mono_ns":{log_mono_time},"received_ns":{int(now * 1e9)},"bus":{bus},'
+            f'"address":{address},"dlc":{len(data)},"data":"{data.hex()}","cycle":{cycle},'
+            f'"phase":"{phase}","stage":"{self.session["state"]}"}}\n')
     if self.session['bytes'] + len(line) > MAX_BYTES:
       self.finish('수집 용량 한도에 도달했습니다.', completed=False)
       return
@@ -289,11 +291,12 @@ class Capture:
     self.report = {'schema_version': SCHEMA_VERSION, 'session_id': s['id'], 'test_id': s['test_id'],
                    'completed': completed, 'reason': reason, 'label_source': s['label_source'], 'metadata': self.metadata,
                    'frame_count': s['frame_count'], 'raw_bytes': s['bytes'],
+                   'capture_counters': {k: v-s['initial_counters'].get(k, 0) for k, v in self.counters.items()},
                    'dbc_sources': self.dbc.sources, 'candidates': candidates,
                    'drive_validation': self.validator.summary(),
                    'start_monotonic_ns': int(s['started'] * 1e9), 'end_monotonic_ns': int(self.clock() * 1e9),
                    'limitations': ['상관관계 후보이며 CAN 매핑이 확정된 것이 아닙니다.',
-                                   '기존 DBC 이름은 주소/길이/비트가 겹치는 참고 정보이며 버스 매칭은 미확인입니다.',
+                                   'DBC 이름과 런타임 버스 범위는 참고 근거이며 개별 신호의 실제 의미는 별도 검증해야 합니다.',
                                    '수신 CAN만 기록합니다. 전송·차량 제어·설정 변경은 수행하지 않습니다.'],
                    'windows': [{'cycle': w.cycle, 'phase': w.phase,
                                 'message_samples': [{'bus': k[0], 'address': k[1], 'dlc': k[2], 'count': row[0]}

@@ -4,6 +4,12 @@
   let last = null, busy = false, catalog = null, initialized = false, shownResult = '';
   const activeStates = new Set(['driving', 'awaiting_action', 'settling', 'recording']);
   const names = {'report.json':'결과 JSON','catalog.json':'신호 사전','raw_can.jsonl.gz':'원시 CAN','events.jsonl':'표식·주행 문맥','candidates.csv':'비트 후보 CSV'};
+  // A live installation can use a temporary standalone server until the
+  // manager's preimported web modules are refreshed by the next normal boot.
+  if (location.port === '7010') {
+    const hud = document.querySelector('a[href="/?view=hud"]');
+    if (hud) { const url = new URL(hud.href); url.port = '7000'; hud.href = url.href; }
+  }
   function el(tag, text, cls) { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; }
   function message(text, error = false) { $('message').textContent = text; $('message').className = error ? 'error' : ''; }
   function clock(s) { return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(Math.floor(s % 60)).padStart(2, '0'); }
@@ -11,6 +17,12 @@
     const options = {cache: 'no-store'};
     if (payload !== undefined) Object.assign(options, {method:'POST', headers:{'Content-Type':'application/json','X-Carrot-Diagnostics':'1'}, body:JSON.stringify(payload)});
     const response = await fetch(prefix + path, {...options, signal: AbortSignal.timeout(8000)});
+    if (response.status === 404 && path === '/status' && location.port === '7000') {
+      const standalone = new URL(location.href);
+      standalone.port = '7010';
+      location.replace(standalone.href);
+      throw new Error('진단 서버로 연결하고 있습니다.');
+    }
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '요청을 완료하지 못했습니다.');
     return data;
