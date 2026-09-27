@@ -1,4 +1,5 @@
 import copy
+import math
 import numpy as np
 from opendbc.car import CanBusBase
 from opendbc.car.crc import CRC16_XMODEM
@@ -684,10 +685,28 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control,
     if blink_pairs:
       _apply_radar_blink(values, blink_pairs, frame, t=blink_t)
 
+def _make_ccnc_cluster_msg(packer, name, bus, values, lx3_hev, rx_counter=None):
+  msg = packer.make_can_msg(name, bus, values, rx_counter=rx_counter)
+  address, data, bus = msg
+  if lx3_hev and address in (0x161, 0x162) and len(data) == 32:
+    # The dedicated LX3 DBC has no native checksum callback. Unlike the
+    # buffered steering/SCC messages, these cluster frames leave Panda as-is.
+    # Recompute only their checksum after editing the display payload.
+    checksum = hkg_can_fd_checksum(address, None, data)
+    return address, checksum.to_bytes(2, 'little') + data[2:], bus
+  return msg
+
+
 def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
                          disp_angle, left_lane_warning, right_lane_warning,
                          enable_corner_radar, stopping, canfd_debug):
   ret = []
+  lx3_hev = CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV"
+  lead_visible = hud_control.leadVisible
+  lead_distance = hud_control.leadDistance
+  if lx3_hev:
+    lead_visible = lead_visible and math.isfinite(lead_distance) and 0 < lead_distance <= 204.7
+    lead_distance = lead_distance if lead_visible else 0
 
   md = CS.modelV2
   if not hasattr(create_ccnc_messages, '_lane_line_check') or frame % 100 == 0:
@@ -758,12 +777,12 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         values["vSetDis"] = int(set_speed_in_units + 0.5)
 
         values["DISTANCE"] = 4 if hdp_active else hud_control.leadDistanceBars
-        values["DISTANCE_LEAD"] = 2 if cruise_enabled and hud_control.leadVisible else 1 if main_enabled and hud_control.leadVisible else 0
+        values["DISTANCE_LEAD"] = 2 if cruise_enabled and lead_visible else 1 if main_enabled and lead_visible else 0
         values["DISTANCE_CAR"] = 3 if hdp_active else 2 if cruise_enabled else 1 if main_enabled else 0
         values["DISTANCE_SPACING"] = 5 if hdp_active else 1 if cruise_enabled else 0
 
-        values["TARGET"] = 1 if hud_control.leadVisible and cruise_enabled else 0
-        values["TARGET_DISTANCE"] = int(hud_control.leadDistance)
+        values["TARGET"] = 1 if lead_visible and cruise_enabled else 0
+        values["TARGET_DISTANCE"] = lead_distance if lx3_hev else int(lead_distance)
 
         values["BACKGROUND"] = 6 if CS.paddle_button_prev > 0 else 1 if cruise_enabled else 3 if lat_active else 7
         values["CENTERLINE"] = 1 if HDA_CntrlModSta > 0 else 0
@@ -797,12 +816,18 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         # curvature 표시(0x161쪽 기존 로직 유지)
         _suppress_trailer_mode_warning(values, CS)
 
-        curvature = round(CS.out.steeringAngleDeg / 3)
-        values["LANELINE_CURVATURE"] = (min(abs(curvature), 15) + (-1 if curvature < 0 else 0)) if lat_active else 0
-        values["LANELINE_CURVATURE_DIRECTION"] = 1 if curvature < 0 and lat_active else 0
+        if not lx3_hev:
+          curvature = round(CS.out.steeringAngleDeg / 3)
+          values["LANELINE_CURVATURE"] = (min(abs(curvature), 15) + (-1 if curvature < 0 else 0)) if lat_active else 0
+          values["LANELINE_CURVATURE_DIRECTION"] = 1 if curvature < 0 and lat_active else 0
 
         trailer_lane_change_blocked = CS.trailer_connected
-        if trailer_lane_change_blocked:
+        if lx3_hev:
+          # LX3 carries the OEM lane glyph (including dashed lines) in these
+          # fields. Availability colors from other platforms erase that glyph.
+          # Leave the received lane values intact, including OEM warnings.
+          pass
+        elif trailer_lane_change_blocked:
           values["LANELINE_LEFT"] = 2 if hud_control.leftLaneVisible else 0
           values["LANELINE_RIGHT"] = 2 if hud_control.rightLaneVisible else 0
         else:
@@ -841,7 +866,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         values["LANE_LEFT"] = 0 if trailer_lane_change_blocked else 1 if desire in (1, 3) else 0
         values["LANE_RIGHT"] = 0 if trailer_lane_change_blocked else 1 if desire in (2, 4) else 0
 
-        ret.append(packer.make_can_msg("ADRV_0x161", CAN.ECAN, values, rx_counter = rx_counter))
+        ret.append(_make_ccnc_cluster_msg(packer, "ADRV_0x161", CAN.ECAN, values, lx3_hev, rx_counter))
 
       if CS.adrv_0x200 is not None:
         values = copy.copy(CS.adrv_0x200)
@@ -858,7 +883,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
 
         _make_ccnc_values(
           values, CS, lat_active, frame, hud_control,
-          lane_line=True,
+          lane_line=not lx3_hev,
           corner_radar=True,
           desire=desire,
           # 기존대로 LR/RR만 깜빡임
@@ -872,7 +897,17 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
       if CS.ccnc_0x162 is not None:
         values = copy.copy(CS.ccnc_0x162)
 
-        if hud_control.leadDistance > 0:
+        if lx3_hev:
+          # Relative speed and radar/vision association are not object types.
+          # A near-zero relative speed must not flash gray/white or turn a car
+          # into a cone. This affects only the cluster, never the lead tracker.
+          if lead_visible:
+            values["FF_DISTANCE"] = lead_distance
+            values["FF_DETECT"] = 4 if CC.enabled else 3
+          else:
+            values["FF_DISTANCE"] = 0
+            values["FF_DETECT"] = 0
+        elif hud_control.leadDistance > 0:
           values["FF_DISTANCE"] = hud_control.leadDistance
           ff_type = 3 if hud_control.leadRadar == 1 else 13
           values["FF_DETECT"] = ff_type if hud_control.leadRelSpeed > -0.1 else ff_type + 1
@@ -895,7 +930,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           values["FAULT_LSS"] = 0
           values["FAULT_DAS"] = 0
 
-        ret.append(packer.make_can_msg("CCNC_0x162", CAN.ECAN, values))
+        ret.append(_make_ccnc_cluster_msg(packer, "CCNC_0x162", CAN.ECAN, values, lx3_hev))
 
     # --- NEW_MSG_4B9 (corner radar keep-alive?) ---
     if enable_corner_radar > 0:
