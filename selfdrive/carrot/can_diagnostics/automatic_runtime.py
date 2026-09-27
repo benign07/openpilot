@@ -21,6 +21,12 @@ PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFol
           'ModelTurnSpeedFactor', 'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar')
 
 
+def read_param(params, key):
+  # This device's typed Params API does not accept the legacy encoding keyword.
+  value = params.get(key)
+  return value.decode('utf-8', errors='replace') if isinstance(value, bytes) else value
+
+
 class AutomaticController:
   def __init__(self, root='/data/community/automatic_drive'):
     self.root = Path(root)
@@ -94,8 +100,8 @@ class AutomaticController:
       sm.update(0)
       now = time.monotonic()
       if now - last_metadata >= 5:
-        metadata['route'] = params.get('CurrentRoute', encoding='utf-8') or None
-        metadata['settings'] = {key: params.get(key, encoding='utf-8') for key in PARAMS}
+        metadata['route'] = read_param(params, 'CurrentRoute') or None
+        metadata['settings'] = {key: read_param(params, key) for key in PARAMS}
         if metadata['car_fingerprint'] is None:
           raw = params.get('CarParams')
           if raw:

@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from .automatic import AutoRecorder, ChunkStore, control_mode
 from .automatic_routes import register
+from .automatic_runtime import read_param
 from tools.can_auto_sync import analyze, download
 
 
@@ -22,6 +23,19 @@ def services(now=100, started=True, lat=False, long=False):
           'selfdriveState': {'enabled': lat or long, 'active': lat or long},
           'radarState': {'leadOne': {'status': True, 'dRel': 30.}}}
   return {key: {'mono_ns': int(now * 1e9), 'valid': True, 'data': value} for key, value in data.items()}
+
+
+class RuntimeTests(unittest.TestCase):
+  def test_typed_params_and_legacy_bytes_need_no_encoding_keyword(self):
+    class Params:
+      def get(self, key):
+        return {'route': b'route1', 'mode': 4, 'flag': False, 'text': 'current', 'missing': None}[key]
+    params = Params()
+    self.assertEqual(read_param(params, 'route'), 'route1')
+    self.assertEqual(read_param(params, 'mode'), 4)
+    self.assertIs(read_param(params, 'flag'), False)
+    self.assertEqual(read_param(params, 'text'), 'current')
+    self.assertIsNone(read_param(params, 'missing'))
 
 
 class RecorderTests(unittest.TestCase):
