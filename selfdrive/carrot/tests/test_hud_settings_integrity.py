@@ -11,6 +11,7 @@ from unittest.mock import patch
 from aiohttp import web
 from selfdrive.carrot.server.services import params as service, settings, setting_profiles
 from selfdrive.carrot.server.services.setting_safety import parked_state_error, require_parked
+from selfdrive.carrot.server.live_runtime.snapshot import _build_car_state, _build_car_control, _build_selfdrive_state
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFS = {p['name']: p for p in json.loads((ROOT / 'selfdrive/carrot_settings.json').read_text(encoding='utf-8'))['params']}
@@ -99,6 +100,13 @@ def safe_telemetry():
   return sm
 
 class TestParkedGate(unittest.TestCase):
+  def test_runtime_contract_preserves_validity_and_control_state(self):
+    for flag in (False,True):
+      self.assertEqual(_build_car_state(NS(canValid=flag))['canValid'],flag)
+      self.assertEqual(_build_car_control(NS(enabled=flag))['enabled'],flag)
+      self.assertEqual(_build_selfdrive_state(NS(active=flag))['active'],flag)
+  def test_missing_can_validity_is_not_invented(self):
+    self.assertFalse(_build_car_state(NS())['canValid'])
   def test_fresh_parked_passes(self): self.assertIsNone(parked_state_error(safe_telemetry(),100))
   def test_manual_motion_and_neutral_rejected(self):
     for gear,speed in [('drive',20),('neutral',0),('park',.03),('park',math.nan)]:

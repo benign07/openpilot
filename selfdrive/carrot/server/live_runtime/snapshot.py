@@ -307,6 +307,7 @@ def _sync_radar_payloads(target: list[Any], source: Any, limit: int = 8) -> list
 def _build_selfdrive_state(service: Any, previous: dict[str, Any] | None = None) -> dict[str, Any]:
   p = previous if isinstance(previous, dict) else {}
   p["enabled"] = safe_bool(safe_get(service, "enabled"))
+  p["active"] = safe_bool(safe_get(service, "active"))
   p["experimentalMode"] = safe_bool(safe_get(service, "experimentalMode"))
   p["alertType"] = safe_text(safe_get(service, "alertType"))
   p["alertText1"] = safe_text(safe_get(service, "alertText1"))
@@ -318,6 +319,7 @@ def _build_selfdrive_state(service: Any, previous: dict[str, Any] | None = None)
 
 def _build_car_state(service: Any, previous: dict[str, Any] | None = None) -> dict[str, Any]:
   p = previous if isinstance(previous, dict) else {}
+  p["canValid"] = safe_bool(safe_get(service, "canValid"))
   p["vEgo"] = safe_float(safe_get(service, "vEgo"))
   p["aEgo"] = safe_float(safe_get(service, "aEgo"))
   p["vEgoCluster"] = safe_float(safe_get(service, "vEgoCluster"))
@@ -553,6 +555,7 @@ def _build_nav_route(service: Any, previous: dict[str, Any] | None = None) -> di
 
 def _build_car_control(service: Any, previous: dict[str, Any] | None = None) -> dict[str, Any]:
   p = previous if isinstance(previous, dict) else {}
+  p["enabled"] = safe_bool(safe_get(service, "enabled"))
   p["latActive"] = safe_bool(safe_get(service, "latActive"))
   p["longActive"] = safe_bool(safe_get(service, "longActive"))
   return p
