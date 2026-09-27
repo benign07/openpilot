@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), prefix = '/api/can_diagnostics';
-  let last = null, busy = false, catalog = null, initialized = false, shownResult = '';
+  let last = null, busy = false, catalog = null, initialized = false, shownResult = '', selectedTest = 'brake';
   const activeStates = new Set(['driving', 'awaiting_action', 'settling', 'recording']);
   const names = {'report.json':'결과 JSON','catalog.json':'신호 사전','raw_can.jsonl.gz':'원시 CAN','events.jsonl':'표식·주행 문맥','candidates.csv':'비트 후보 CSV'};
   // A live installation can use a temporary standalone server until the
@@ -30,9 +30,9 @@
   async function act(kind, payload = {}) {
     if (busy) return;
     busy = true;
-    try { const data = await api('/' + kind, payload); render(data); message(kind === 'marker' ? '이 순간을 기록했습니다.' : ''); }
+    try { const data = await api('/' + kind, payload); message(kind === 'marker' ? `${data.markers[payload.code]} · 저장됨` : ''); last = data; }
     catch (error) { message(error.message, true); }
-    finally { busy = false; }
+    finally { busy = false; if (last) render(last); }
   }
   function links(host, id, files) {
     host.replaceChildren();
@@ -52,6 +52,9 @@
     $('startDrive').disabled = busy || active || !data.ready;
     $('stop').disabled = !active;
     $('startGuided').disabled = active || !!data.guided_block_reason;
+    $('captureEnd').hidden = !session || active;
+    $('captureEnd').textContent = session && !active ? '기록 종료 · ' + (data.report?.reason || '저장된 기록을 확인하세요.') : '';
+    $('markerHint').textContent = driving ? '해당 순간에 한 번 누르면 시각과 평가가 저장됩니다.' : '‘주행 기록 시작’을 누르면 평가 버튼이 켜집니다.';
     $('preflight').textContent = data.error || (driving ? '주행 CAN과 해석·계획 값을 기록하고 있습니다.' : (data.block_reason || 'CAN 수신 중 · 주행 상태에서도 기록할 수 있습니다.'));
     $('guidedReason').textContent = data.guided_block_reason || '정차 조작 검증을 시작할 수 있습니다.';
     $('captureState').textContent = active ? (driving ? '기록 중' : '조작 검증 중') : '대기';
@@ -67,12 +70,22 @@
     $('checksum').textContent = v.checksum_checks ? `${v.checksum_failures} / ${v.checksum_checks.toLocaleString()}` : '미검사';
     $('dbStatus').textContent = v.runtime_database?.note || '수신한 주소와 길이를 DBC 정의에 대조합니다.';
     if (!initialized) {
-      for (const test of data.tests) { const option = el('option', test.title); option.value = test.id; $('test').append(option); }
+      for (const test of data.tests) {
+        const button = el('button', test.title); button.dataset.test = test.id;
+        button.addEventListener('click', () => { selectedTest = test.id; render(last); });
+        $('testChoices').append(button);
+      }
       for (const [code, title] of Object.entries(data.markers)) { const button = el('button', title); button.dataset.marker = code; button.addEventListener('click', () => act('marker', {code})); $('markers').append(button); }
       initialized = true;
     }
     document.querySelectorAll('[data-marker]').forEach(button => { button.disabled = !driving; });
+    document.querySelectorAll('[data-test]').forEach(button => {
+      button.disabled = !!active;
+      button.classList.toggle('selected', button.dataset.test === selectedTest);
+      button.setAttribute('aria-pressed', String(button.dataset.test === selectedTest));
+    });
     const guided = active && !driving;
+    $('stopGuided').hidden = !guided;
     $('guide').hidden = !guided;
     if (guided) {
       $('step').textContent = `${session.step + 1} / 9 · ${session.cycle}번째 반복`;
@@ -92,7 +105,7 @@
   }
   async function poll() {
     try { render(await api('/status')); }
-    catch (error) { $('connection').textContent = '연결 끊김'; $('connection').className = 'badge'; $('startDrive').disabled = true; $('startGuided').disabled = true; $('mark').disabled = true; $('preflight').textContent = '연결을 확인하고 있습니다. 진행 중인 주행 기록은 기기에서 계속됩니다.'; }
+    catch (error) { $('connection').textContent = '연결 끊김'; $('connection').className = 'badge'; $('startDrive').disabled = true; $('startGuided').disabled = true; $('mark').disabled = true; document.querySelectorAll('[data-marker]').forEach(button => { button.disabled = true; }); $('preflight').textContent = '연결을 확인하고 있습니다. 진행 중인 주행 기록은 기기에서 계속됩니다.'; }
     finally { setTimeout(poll, 1000); }
   }
   function renderCatalog() {
@@ -138,7 +151,8 @@
   }));
   $('startDrive').addEventListener('click', () => act('start', {test_id:'drive'}));
   $('stop').addEventListener('click', () => act('stop'));
-  $('startGuided').addEventListener('click', () => act('start', {test_id:$('test').value}));
+  $('startGuided').addEventListener('click', () => act('start', {test_id:selectedTest}));
+  $('stopGuided').addEventListener('click', () => act('stop'));
   $('mark').addEventListener('click', () => act('mark'));
   $('refreshCatalog').addEventListener('click', refreshCatalog);
   $('refreshHistory').addEventListener('click', refreshHistory);
