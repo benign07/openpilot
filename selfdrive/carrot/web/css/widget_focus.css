@@ -1,0 +1,99 @@
+/* ============================================================
+   widget_focus.css — focus/"widget" mode (?view=hud).
+   widget_pwa.js overlays a self-contained #wfHud (its own card +
+   /api/live_runtime polling). This file styles it responsively so it
+   fits BOTH full screen and the small floating overlay window.
+   ============================================================ */
+
+/* ---------- floating control buttons ---------- */
+#wfBtns {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  right: calc(env(safe-area-inset-right, 0px) + 8px);
+  display: none;
+  gap: 8px;
+  z-index: 100000;
+}
+body[data-view="hud"] #wfBtns { display: flex; }
+#wfBtns button,
+#wfLaunch {
+  width: 40px; height: 40px; padding: 0;
+  border: none; border-radius: 50%;
+  background: rgba(20, 26, 32, 0.66);
+  color: #fff; font-size: 19px; line-height: 1; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+#wfBtns button:active, #wfLaunch:active { transform: scale(0.94); }
+#wfLaunch {
+  position: fixed;
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  z-index: 100000; display: none;
+  align-items: center; justify-content: center;
+  background: rgba(46, 130, 64, 0.85);
+}
+body.wf-standalone:not([data-view="hud"]) #wfLaunch { display: flex; }
+
+/* ---------- focus mode: self-contained HUD ---------- */
+body[data-view="hud"] { overflow: hidden !important; }
+body[data-view="hud"] .topbar { display: none !important; }
+
+#wfHud {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0a0e12;
+  padding: 2.5vmin;
+  box-sizing: border-box;
+}
+body:not([data-view="hud"]) #wfHud { display: none; }
+
+.wfCard {
+  width: 100%;
+  height: 100%;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2vmin;
+  box-sizing: border-box;
+  padding: clamp(8px, 4vmin, 28px) clamp(10px, 5vmin, 36px);
+  border-radius: clamp(10px, 4vmin, 28px);
+  background: linear-gradient(160deg, #11291c, #0b1d14);
+  border: 1px solid #29463a;
+  color: #fff;
+  font-family: -apple-system, system-ui, "Noto Sans KR", sans-serif;
+}
+
+.wfHead {
+  display: flex; align-items: center; gap: 1.6vmin;
+  font-size: clamp(10px, 3.4vmin, 18px);
+  color: #9fb3a8;
+}
+.wfDot {
+  width: clamp(7px, 2vmin, 12px); height: clamp(7px, 2vmin, 12px);
+  border-radius: 50%; background: #888; display: inline-block;
+}
+
+.wfMain {
+  display: flex; align-items: flex-end; justify-content: center;
+  gap: 1.4vmin; flex: 1; min-height: 0;
+}
+.wfSpeed {
+  font-weight: 800; line-height: 0.9;
+  font-size: clamp(46px, 33vmin, 220px);
+}
+.wfUnit {
+  font-size: clamp(11px, 4.4vmin, 26px);
+  color: #9fb3a8; padding-bottom: clamp(6px, 4vmin, 24px);
+}
+
+.wfRow { display: flex; gap: 2.4vmin; }
+.wfCell { flex: 1; text-align: center; }
+.wfVal { font-weight: 700; font-size: clamp(17px, 8.4vmin, 46px); line-height: 1; }
+.wfSet { color: #7CE38A; }
+.wfLimit { color: #FFD479; }
+.wfLbl { font-size: clamp(9px, 2.8vmin, 14px); color: #9fb3a8; margin-top: 0.6vmin; }

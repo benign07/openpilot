@@ -1,0 +1,376 @@
+{
+  "captured_date": "2026-09-27",
+  "base_commit": "6a3d7783b50490370e4a58f3f9a9ce683fd94845",
+  "device_branch": "0627-lx3-hev",
+  "openpilot_version": "0.11.1",
+  "agnos_version": "18.4",
+  "car": "HYUNDAI_PALISADE_LX3_HEV",
+  "classification_counts": {
+    "raw_bytes_unchanged_lfs_filter_mismatch": 552,
+    "source_changed": 1
+  },
+  "snapshot_files": [
+    {
+      "path": "selfdrive/selfdrived/events.py",
+      "bytes": 47412,
+      "sha256": "bdfa54b6c913df7f9e295de40dc8fccb3679a0649d1d5884be8395f33b920b6f",
+      "classification": "source_changed",
+      "mode": "0o755"
+    },
+    {
+      "path": "opendbc_repo/opendbc/car/hyundai/carcontroller.py.ccncbak",
+      "bytes": 34838,
+      "sha256": "ecefe20f217d089b6de4998c1bf18b2f5db3f44b1ccae8e0ebb8de8205d7c3b7",
+      "mode": "0o644"
+    },
+    {
+      "path": "opendbc_repo/opendbc/car/hyundai/carcontroller.py.scc2bak",
+      "bytes": 34866,
+      "sha256": "40429a76344962ae2439a18e43428882855db0453502bf8d273ced3b2fa5f18a",
+      "mode": "0o644"
+    },
+    {
+      "path": "opendbc_repo/opendbc/car/hyundai/carstate.py.fpbak",
+      "bytes": 39122,
+      "sha256": "6b570c018f9e16f64e658a935663551c9a1e302a8c8fa562cf9383478e7d8277",
+      "mode": "0o644"
+    },
+    {
+      "path": "opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_radar.dbc",
+      "bytes": 44616,
+      "sha256": "4cc931bd337559e6ed09e4d1cce3f82b09b1936d5b120d786c346a78242cef1f",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack-1.1.2.dist-info/INSTALLER",
+      "bytes": 4,
+      "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack-1.1.2.dist-info/METADATA",
+      "bytes": 8091,
+      "sha256": "856c42ca5c61ed8b440a0e8b10b3ffcc9557397a500ee223c10d9ff9945bf80b",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack-1.1.2.dist-info/RECORD",
+      "bytes": 1181,
+      "sha256": "42f721722a8d3845315b6ad3b44d423e73899be809e15f7e2defa1568acb88b1",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack-1.1.2.dist-info/REQUESTED",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack-1.1.2.dist-info/WHEEL",
+      "bytes": 193,
+      "sha256": "f1d2df21a11d661bca31cc6372d8e5445f4e321b1727e3adf1d01c1b884873c5",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack-1.1.2.dist-info/licenses/COPYING",
+      "bytes": 614,
+      "sha256": "492dedba85da5872f78e6091bcd1fea474d660d35acb4dee964b8aab3f007427",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack-1.1.2.dist-info/top_level.txt",
+      "bytes": 8,
+      "sha256": "dadca4498d695dd880db16130d1ea33f0d2a239646c518a1ca17f84b9859c979",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack/__init__.py",
+      "bytes": 1109,
+      "sha256": "440f2072a2b5ed8a64c419cdc172556b5a1ad8bca058381f1759c0d4d3f0de6a",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack/exceptions.py",
+      "bytes": 1081,
+      "sha256": "7424d67a2f1da64accb100dc8d093be004e5f47b08047d326edf3338f36a3187",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack/ext.py",
+      "bytes": 5726,
+      "sha256": "92d789bf4de7f6d633779a28df1628a554e8e2f45a031a27050409857a21659a",
+      "mode": "0o644"
+    },
+    {
+      "path": "pydeps/msgpack/fallback.py",
+      "bytes": 32390,
+      "sha256": "d20d4fce9d2fb66044989e70f45decffe24c55444ff114b81b571ce5345a02c2",
+      "mode": "0o644"
+    },
+    {
+      "path": "scripts/add/events_en.py",
+      "bytes": 45700,
+      "sha256": "2913cd82806d9789e92c70f5839c78f6038a79f19fb73ea2239e919cfd14c4bf",
+      "mode": "0o755"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Black.fnt",
+      "bytes": 25050,
+      "sha256": "38fcfcfaf70e6c70d789543e7337ad0774d6570842f1a9efe98a8f2c02ac78cf",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Black.png",
+      "bytes": 406015,
+      "sha256": "ee8cd91a5906bef8e5d17c7cccfa9024c49a5a96ce639350cf40c3b74668a3b3",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Bold.fnt",
+      "bytes": 25048,
+      "sha256": "91a34b5027b30ecf2b406e2e56860129ef9ba9396d9a8c293b4c5fb123f92758",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Bold.png",
+      "bytes": 416743,
+      "sha256": "e56dd3a3b9d06b9e2c4c3a6a4180d8a50d4f463220c25464bed9c1f4078b2c57",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-ExtraBold.fnt",
+      "bytes": 25058,
+      "sha256": "6a5d7090eb5f4ae3e31cc438f5a32df1ec8b940c3b70d98dff6862b30296e9d3",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-ExtraBold.png",
+      "bytes": 413006,
+      "sha256": "b7ab64a4cbb0098384f6f2012164cdf35e4b3380cf807a0ac70b9ef1ee716ff6",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-ExtraLight.fnt",
+      "bytes": 25060,
+      "sha256": "321635653169776ba7b418b6e05b5584532062c0e27272bcf2d253ba1a8d1e2b",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-ExtraLight.png",
+      "bytes": 440652,
+      "sha256": "f145e62f6bbea2e23b37f0f9091f0dc85f707f6f28d26f41a9ad0ce945fe7c78",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Light.fnt",
+      "bytes": 25050,
+      "sha256": "d71fab6e304d4a6a30995032e97a489b7b63adb3a80cd166e2530ed4a7cb97c1",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Light.png",
+      "bytes": 435239,
+      "sha256": "2777298a6581451f402bb30f56477048abbad9e4f8c0a146dafd803fe534e854",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Medium.fnt",
+      "bytes": 25052,
+      "sha256": "9687dcadd13325b77f6376e500fd5b0dfd6050b2d62f5767535f9585309b5018",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Medium.png",
+      "bytes": 428080,
+      "sha256": "e6a1c60339ea57f3060012bf289a488ac4747f78f0c98703e38f39e69bede922",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Regular.fnt",
+      "bytes": 25054,
+      "sha256": "c279a65bfd9ed7d3438f4e107d902084f88f02b8d955fd326a9d8c4de9e3daf2",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Regular.png",
+      "bytes": 427473,
+      "sha256": "391c036a711b24b282dfd2a2091cb2571f1f1dab48a55b04169812303a66f64d",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-SemiBold.fnt",
+      "bytes": 25056,
+      "sha256": "8d25e63e0c1fb8d8ed6a83a4e59ed4b5e982100b8bd2121976a5fa21f4074553",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-SemiBold.png",
+      "bytes": 423313,
+      "sha256": "01df1469bd804a75baa4706a6f194abcee5022358ea5c139f45cc4655bf06c99",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Thin.fnt",
+      "bytes": 25048,
+      "sha256": "9d56808f7dc143bc926d44351807e690023b8ae3c1d118d3485e32cb71216b79",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/Inter-Thin.png",
+      "bytes": 439049,
+      "sha256": "808fd8c134ca1089c71c0c3b23b13f12ba06d6a1f7dc9588a3ee6d4f8398608e",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/JetBrainsMono-Medium.fnt",
+      "bytes": 24617,
+      "sha256": "30a867407c4da38d53d899fdf8f858edd072b8883ea3cf199abcae188599a9b3",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/JetBrainsMono-Medium.png",
+      "bytes": 369483,
+      "sha256": "bbb765d775f0e52e481b531ed6926c06dedf07fb58cf9c8ab0923fb7faca951c",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/KaiGenGothicKR-Bold.fnt",
+      "bytes": 1363061,
+      "sha256": "92bcfe1339312c790058b1a9372593ba4d7a4ef4f2636ed10b19f0bf44675388",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/KaiGenGothicKR-Bold.png",
+      "bytes": 5610766,
+      "sha256": "a73403126bc49ed7e1d10fb1fd5156a8cb080bbb5cfccbac35aa795a73a99ca8",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/unifont.fnt",
+      "bytes": 1370158,
+      "sha256": "6ab7cdb591d1d24df8d9089d2685021bfbdc04f568e7ff472e735d63129c28fc",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/assets/fonts/unifont.png",
+      "bytes": 574312,
+      "sha256": "74f2db6052f2919c0226f379f1d2f7b6217515dbe69ee233a5b05e7993814586",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/car/card.py.nonebak",
+      "bytes": 11940,
+      "sha256": "55c59ea1b2d1d17f16252c360ee209dbb1ed1a1253fbd5b092f4c9b8b5a3764b",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/carrot/web/css/widget_focus.css",
+      "bytes": 3101,
+      "sha256": "15e839e79ee96389e457480043aa1a1834acec5c665916778512fe71d2f5cc0e",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/carrot/web/hud.html",
+      "bytes": 5531,
+      "sha256": "ac3104a5d37eea5dde35afe4d731fa3fba91e45c8fb34c6c607c0d68ba5b51b8",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/carrot/web/index.html.bak_widget",
+      "bytes": 42076,
+      "sha256": "eee6e552cc1b07eac7994fbf0dc1e4aa0a97ef6d5b3f94433253b6bdbb05c2e1",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/carrot/web/js/widget_pwa.js",
+      "bytes": 7334,
+      "sha256": "a18842a23e482dea08fbfdf0b5e886fbe64e98cff93e3bd025e76eea4e6610c3",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/carrot/web/manifest.webmanifest",
+      "bytes": 699,
+      "sha256": "b929c0df77386ba4c501986d45008bbb47d9ec555a3557c11be4b108fa8ee0ec",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/modeld/models/.build_stamp",
+      "bytes": 123,
+      "sha256": "ce9aeaea9ee5d1eb14f563cf9131dc760313541c32baac51b4ccedcb3c76a046",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/modeld/models/dmonitoring_model_tinygrad.pkl.chunk01of01",
+      "bytes": 24929713,
+      "sha256": "8a35d5dbf88db90e44ecac594e0cbb67d50835f3d2df0986b9bccabe78be89fb",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/modeld/models/dmonitoring_model_tinygrad.pkl.chunkmanifest",
+      "bytes": 1,
+      "sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/modeld/models/driving_tinygrad.pkl.chunk01of02",
+      "bytes": 47185920,
+      "sha256": "a9821a7da93cabb8fb00da8e4aa5a3d6b9471a3a4a5a79c738479d473892718a",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/modeld/models/driving_tinygrad.pkl.chunk02of02",
+      "bytes": 40135192,
+      "sha256": "528492cb87c8694d48886143ffcdb3e6e1d39a02c455d4855a6797bacbd5d557",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/modeld/models/driving_tinygrad.pkl.chunkmanifest",
+      "bytes": 1,
+      "sha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/modeld/models/tg_input_devices.json",
+      "bytes": 204,
+      "sha256": "9659da2fd696e671660a51bd73beb679a78174a9f9de7ffaf53e3f5e4fda20b7",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/ui/onroad/hud_renderer.py.prefinalbak",
+      "bytes": 41904,
+      "sha256": "14430efdfeb25df7535e6045cc454f9e8345bbe46a72115f03cac33a11f377a5",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/ui/onroad/hud_renderer.py.uxbak",
+      "bytes": 41904,
+      "sha256": "14430efdfeb25df7535e6045cc454f9e8345bbe46a72115f03cac33a11f377a5",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/ui/ui.py.carrotbak",
+      "bytes": 893,
+      "sha256": "c1242b8e7e39a922b4b12afabe8d446b5690f56707bf16ade1bdf7bc2d2d2726",
+      "mode": "0o644"
+    },
+    {
+      "path": "selfdrive/ui/ui.py.stockbak",
+      "bytes": 893,
+      "sha256": "c1242b8e7e39a922b4b12afabe8d446b5690f56707bf16ade1bdf7bc2d2d2726",
+      "mode": "0o644"
+    },
+    {
+      "path": "system/ui/lib/application.py.fontbak",
+      "bytes": 36876,
+      "sha256": "cfa4c71c6e30f114fdf7ea0e083155cb5a572eac2733a94690bc813d28ca7120",
+      "mode": "0o644"
+    }
+  ],
+  "privacy_exclusions": [
+    "device identity and credentials",
+    "raw parameters including binary CarParams",
+    "dashcam cache and runtime state",
+    "driving logs"
+  ],
+  "verification": "All 59 added/changed source and asset files match the device SHA-256 inventory. 552 tracked files flagged by git have identical raw bytes to HEAD; flags arise from existing Git LFS filter configuration."
+}
