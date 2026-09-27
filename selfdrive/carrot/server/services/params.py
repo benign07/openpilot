@@ -2,6 +2,7 @@ import base64
 import hashlib
 import importlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -257,11 +258,33 @@ def put_typed(params: "Params", key: str, value: Any, p: Optional[Dict[str, Any]
 
 
 def set_param_value(name: str, value: Any, p: Optional[Dict[str, Any]] = None) -> None:
+  value = validate_setting_value(name, value, p)
   if not HAS_PARAMS:
     _mem_store[name] = str(value)
     return
   params = Params()
   put_typed(params, name, value, p)
+
+
+def validate_setting_value(name: str, value: Any, meta: Optional[Dict[str, Any]] = None) -> Any:
+  if meta is None:
+    from .settings import get_settings_cached
+    _, _, definitions, _ = get_settings_cached()
+    meta = definitions.get(name)
+  if meta is None:
+    return value
+  if meta.get("supported") is False:
+    raise ValueError(meta.get("unsupported_reason") or f"Unsupported setting: {name}")
+  number = float(value)
+  if not math.isfinite(number):
+    raise ValueError(f"{name}: finite number required")
+  if not float(meta["min"]) <= number <= float(meta["max"]):
+    raise ValueError(f"{name}: allowed range {meta['min']}..{meta['max']}")
+  if all(isinstance(meta[k], int) for k in ("min", "max", "default")):
+    if not number.is_integer():
+      raise ValueError(f"{name}: integer required")
+    return int(number)
+  return number
 
 
 # -----------------------
@@ -370,41 +393,32 @@ def restore_param_values_from_backup(values: Dict[str, Any]) -> Dict[str, Any]:
     raise RuntimeError("Params/ParamKeyType not available")
 
   params = Params()
-  ok_cnt = 0
-  fail_cnt = 0
-  fails = []
-
+  # Validate every selected value before writing anything. Use the same schema
+  # as single-setting saves; bulk restore must not bypass limits.
+  normalized = {}
   for key, value in values.items():
-    try:
-      t = params.get_type(key)
-
-      if t == ParamKeyType.BOOL:
-        v = value in ("1", "true", "True", "on", "yes") if isinstance(value, str) else bool(value)
-        params.put_bool(key, v)
-
-      elif t == ParamKeyType.INT:
-        params.put_int(key, int(float(value)))
-
-      elif t == ParamKeyType.FLOAT:
-        params.put_float(key, float(value))
-
-      elif t == ParamKeyType.TIME:
-        params.put(key, str(value))
-
-      elif t == ParamKeyType.STRING:
-        params.put(key, str(value))
-
-      else:
-        # JSON/BYTES는 백업에서 제외했지만, 혹시 들어오면 skip
-        continue
-
-      ok_cnt += 1
-
-    except Exception as e:
-      fail_cnt += 1
-      fails.append({"key": key, "err": str(e)})
-
-  return {"ok_cnt": ok_cnt, "fail_cnt": fail_cnt, "fails": fails[:30]}
+    t = params.get_type(key)
+    if _is_unsupported_param_type(t):
+      raise ValueError(f"Unsupported restore type: {key}")
+    normalized[key] = validate_setting_value(key, _normalize_param_value(t, value))
+  originals = {key: params.get(key, return_default=False) for key in normalized}
+  written = []
+  try:
+    for key, value in normalized.items():
+      written.append(key)
+      put_typed(params, key, value)
+  except Exception as exc:
+    rollback_errors = []
+    for key in reversed(written):
+      try:
+        if originals[key] is None:
+          params.remove(key)
+        else:
+          params.put(key, originals[key])
+      except Exception as rollback_exc:
+        rollback_errors.append(f"{key}: {rollback_exc}")
+    raise RuntimeError(f"설정 복원 실패: {exc}; 복구 오류: {rollback_errors or '없음'}") from exc
+  return {"ok_cnt": len(written), "fail_cnt": 0, "fails": []}
 
 
 # -----------------------
@@ -1051,13 +1065,22 @@ def _normalize_param_value(t: Any, value: Any) -> Any:
         return True
       if v in ("0", "false", "off", "no", ""):
         return False
+      raise ValueError("boolean required")
+    if value not in (0, 1, False, True):
+      raise ValueError("boolean required")
     return bool(value)
 
   if ParamKeyType is not None and t == ParamKeyType.INT:
-    return int(float(value))
+    number = float(value)
+    if not math.isfinite(number) or not number.is_integer():
+      raise ValueError("finite integer required")
+    return int(number)
 
   if ParamKeyType is not None and t == ParamKeyType.FLOAT:
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+      raise ValueError("finite number required")
+    return number
 
   return str(value)
 
@@ -1077,7 +1100,7 @@ def preview_param_restore_values(values: Dict[str, Any], selected_keys: Optional
   if not HAS_PARAMS or ParamKeyType is None:
     raise RuntimeError("Params/ParamKeyType not available")
 
-  selected = set(selected_keys or [])
+  selected = set(selected_keys) if selected_keys is not None else None
   params = Params()
   current_values = get_param_values(list(values.keys()), {})
   entries = []
@@ -1099,7 +1122,7 @@ def preview_param_restore_values(values: Dict[str, Any], selected_keys: Optional
         reason = "unsupported type"
         can_apply = False
       else:
-        normalized_value = _normalize_param_value(t, raw_value)
+        normalized_value = validate_setting_value(key, _normalize_param_value(t, raw_value))
         current_value = current_values.get(key, "")
         if _values_equal(t, current_value, normalized_value):
           status = "same"
@@ -1110,7 +1133,7 @@ def preview_param_restore_values(values: Dict[str, Any], selected_keys: Optional
       reason = str(e)
       can_apply = False
 
-    is_selected = can_apply and (not selected or key in selected)
+    is_selected = can_apply and (selected is None or key in selected)
     if is_selected:
       summary["selected"] += 1
     summary[status] += 1
@@ -1133,6 +1156,11 @@ def preview_param_restore_values(values: Dict[str, Any], selected_keys: Optional
 
 def restore_param_values_validated(values: Dict[str, Any], selected_keys: Optional[List[str]] = None) -> Dict[str, Any]:
   preview = preview_param_restore_values(values, selected_keys)
+  selected = set(selected_keys) if selected_keys is not None else None
+  invalid = [entry["key"] for entry in preview["entries"]
+             if entry["status"] in ("invalid", "skipped") and (selected is None or entry["key"] in selected)]
+  if invalid:
+    raise ValueError("적용할 수 없는 설정: " + ", ".join(invalid))
   apply_values = {
     entry["key"]: entry["value"]
     for entry in preview["entries"]

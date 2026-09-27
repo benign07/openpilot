@@ -1,6 +1,7 @@
 import asyncio
 import os
 import subprocess
+import time
 from typing import Any
 
 from aiohttp import web
@@ -11,12 +12,14 @@ from ..config import OFFROAD_ASSETS_DIR
 from ..services.device_info import get_calibration_status, get_device_network
 from ..services.params import HAS_PARAMS, Params, restore_param_values_validated
 from ..services.settings import get_settings_cached
+from ..services.setting_safety import require_parked
 from ..services.time_sync import TIME_SYNC_DEBUG_DEFAULT, sync_system_time_from_browser
 
 
 _LIVE_RUNTIME_SERVICE_NAMES = (
   "selfdriveState",
   "carState",
+  "carControl",
   "controlsState",
   "deviceState",
   "peripheralState",
@@ -83,6 +86,8 @@ _CARROT_DEFAULT_RESET_EXCLUDED_PREFIXES = (
 
 
 def _is_carrot_default_reset_param(name: str, meta: Any) -> bool:
+  if isinstance(meta, dict) and (meta.get("supported") is False or meta.get("exclude_from_reset")):
+    return False
   if not name or not isinstance(meta, dict) or "default" not in meta:
     return False
   if name in _CARROT_DEFAULT_RESET_EXCLUDED_NAMES:
@@ -160,6 +165,11 @@ async def api_live_runtime(request: web.Request) -> web.Response:
 
   meta = broker.last_snapshot.get("meta") if isinstance(broker.last_snapshot, dict) else {}
   services = _select_live_runtime_services(broker.last_snapshot if isinstance(broker.last_snapshot, dict) else {})
+  # Per-service age is independent of the HTTP snapshot generation time.
+  runtime = dict(runtime or {})
+  now = time.monotonic()
+  runtime["serviceValid"] = {name: bool(broker.sm.valid.get(name, False)) for name in _LIVE_RUNTIME_SERVICE_NAMES}
+  runtime["serviceAgeMs"] = {name: (now - broker.sm.logMonoTime.get(name, 0) / 1e9) * 1000 for name in _LIVE_RUNTIME_SERVICE_NAMES}
   return web.json_response(to_transport_safe({
     "ok": True,
     "meta": meta if isinstance(meta, dict) else {},
@@ -170,6 +180,7 @@ async def api_live_runtime(request: web.Request) -> web.Response:
 
 
 async def api_reboot(request: web.Request) -> web.Response:
+  await require_parked(request)
   blocked = _reject_if_engaged(request)
   if blocked is not None:
     return blocked
@@ -258,6 +269,7 @@ async def api_regulatory(request: web.Request) -> web.Response:
 
 
 async def api_poweroff(request: web.Request) -> web.Response:
+  await require_parked(request)
   blocked = _reject_if_engaged(request)
   if blocked is not None:
     return blocked
@@ -271,6 +283,7 @@ async def api_poweroff(request: web.Request) -> web.Response:
 
 
 async def api_recalibrate(request: web.Request) -> web.Response:
+  await require_parked(request)
   blocked = _reject_if_engaged(request)
   if blocked is not None:
     return blocked
@@ -299,6 +312,7 @@ async def api_recalibrate(request: web.Request) -> web.Response:
 
 
 async def api_set_default(request: web.Request) -> web.Response:
+  await require_parked(request)
   if not HAS_PARAMS:
     return web.json_response({"ok": False, "error": "params unavailable"}, status=500)
   try:

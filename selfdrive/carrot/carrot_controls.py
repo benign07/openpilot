@@ -8,12 +8,33 @@ class CarrotControls:
     self.lat_suspend_active = False
     self.lat_suspend_enter_t = 0.0
     self.lat_suspend_hold_t = 0.0
+    self.manual_blinker_suspended = False
+    self.manual_blinker_release_t = 0.0
 
   def lat_suspend_control(self, CS, latActive):
     suspend_angle = float(self.params.get_int("LatSuspendAngleDeg"))
     resume_angle  = 15
     delay_sec     = 1.0
     hold_sec      = 0.5
+
+    # Negative LaneChangeNeedTorque disables blinker-triggered model lane
+    # changes. On LX3, also yield centering to the driver's manual maneuver.
+    manual_lane_change = (self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" and
+                          self.params.get_int("LaneChangeNeedTorque") < 0)
+    if not latActive or not manual_lane_change:
+      self.manual_blinker_suspended = False
+      self.manual_blinker_release_t = 0.0
+    elif CS.leftBlinker != CS.rightBlinker:
+      self.manual_blinker_suspended = True
+      self.manual_blinker_release_t = 0.0
+    elif self.manual_blinker_suspended:
+      if CS.leftBlinker or CS.rightBlinker or CS.steeringPressed or abs(CS.steeringAngleDeg) >= resume_angle:
+        self.manual_blinker_release_t = 0.0
+      else:
+        self.manual_blinker_release_t += DT_CTRL
+        if self.manual_blinker_release_t >= hold_sec:
+          self.manual_blinker_suspended = False
+          self.manual_blinker_release_t = 0.0
 
     # 1) enter condition timer
     enter_cond = CS.steeringPressed and abs(CS.steeringAngleDeg) > suspend_angle
@@ -35,6 +56,6 @@ class CarrotControls:
         self.lat_suspend_active = False
         self.lat_suspend_enter_t = 0.0
 
-    if self.lat_suspend_active:
+    if self.lat_suspend_active or self.manual_blinker_suspended:
       latActive = False
     return latActive
