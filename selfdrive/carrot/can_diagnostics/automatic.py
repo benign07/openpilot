@@ -228,6 +228,10 @@ class AutoRecorder:
   def can_frame(self, bus, address, data, mono_ns, now, direction='rx'):
     if self.state != 'recording' or address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64:
       return
+    if self.store.full(now):
+      # Rotate on the next context update; a burst must not bypass the chunk bound.
+      self.sampled_out += 1
+      return
     if not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
       return

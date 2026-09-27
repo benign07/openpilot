@@ -87,6 +87,15 @@ class RecorderTests(unittest.TestCase):
     self.assertEqual(self.recorder.sampled_out, 1)
     self.assertEqual(self.recorder.stale_packets, 1)
 
+  def test_fault_burst_cannot_grow_chunk_without_bound(self):
+    self.recorder.update(services(), 100)
+    for index in range(1000):
+      now = 100 + index / 10000
+      data = ((index % 2) << 219).to_bytes(32, 'little')
+      self.recorder.can_frame(2, 0x162, data, int(now * 1e9), now)
+    self.assertLess(self.store.size, self.store.chunk_bytes + 1000)
+    self.assertGreater(self.recorder.sampled_out, 900)
+
   def test_quota_preserves_existing_records(self):
     self.recorder.update(services(), 100)
     self.recorder.close()
