@@ -9,7 +9,6 @@ from ..services.params import (
   HAS_PARAMS,
   ParamKeyType,
   build_params_qr_payload,
-  clamp_numeric,
   ensure_qr_dependency,
   get_param_values,
   get_qr_dependency_status,
@@ -20,6 +19,7 @@ from ..services.params import (
   set_param_value,
 )
 from ..services.settings import get_settings_cached
+from ..services.setting_safety import DISPLAY_SETTINGS, require_parked
 
 
 async def api_params_bulk(request: web.Request) -> web.Response:
@@ -59,13 +59,18 @@ async def api_param_set(request: web.Request) -> web.Response:
   except Exception:
     return web.json_response({"ok": False, "error": "invalid json"}, status=400)
 
+  if not isinstance(body, dict) or not isinstance(body.get("name"), str):
+    return web.json_response({"ok": False, "error": "name must be a string"}, status=400)
   name = body.get("name")
   value = body.get("value")
 
   if not name:
     return web.json_response({"ok": False, "error": "missing name"}, status=400)
 
-  # clamp using settings if numeric
+  if name not in DISPLAY_SETTINGS:
+    await require_parked(request)
+
+  # Validate against the same definition used by restore/profile operations.
   p = None
   try:
     _, _, by_name, _ = get_settings_cached()
@@ -73,22 +78,13 @@ async def api_param_set(request: web.Request) -> web.Response:
   except Exception:
     pass
 
-  # If value numeric -> clamp
-  try:
-    if p is not None and isinstance(p.get("min"), (int, float)) and isinstance(p.get("max"), (int, float)):
-      fv = float(value)
-      fv = clamp_numeric(fv, p)
-      # keep int if setting looks int-ish
-      if isinstance(p.get("min"), int) and isinstance(p.get("max"), int) and isinstance(p.get("default"), int):
-        value = int(round(fv))
-      else:
-        value = fv
-  except Exception:
-    pass
-
   try:
     set_param_value(name, value, p)
-    return web.json_response({"ok": True, "name": name, "value": value, "has_params": HAS_PARAMS})
+    saved = get_param_values([name], {name: value})[name]
+    return web.json_response({"ok": True, "name": name, "value": saved, "has_params": HAS_PARAMS,
+                              "restart_required": bool(p and p.get("restart_required"))})
+  except (TypeError, ValueError) as e:
+    return web.json_response({"ok": False, "error": str(e)}, status=400)
   except Exception as e:
     return web.json_response({"ok": False, "error": str(e)}, status=500)
 
@@ -105,6 +101,7 @@ async def handle_download_params_backup(request: web.Request) -> web.Response:
 
 
 async def api_params_restore(request: web.Request) -> web.Response:
+  await require_parked(request)
   if not HAS_PARAMS or ParamKeyType is None:
     return web.json_response({"ok": False, "error": "Params/ParamKeyType not available"}, status=500)
 
@@ -176,6 +173,7 @@ async def api_params_restore_preview(request: web.Request) -> web.Response:
 
 
 async def api_params_restore_json(request: web.Request) -> web.Response:
+  await require_parked(request)
   if not HAS_PARAMS or ParamKeyType is None:
     return web.json_response({"ok": False, "error": "Params/ParamKeyType not available"}, status=500)
 

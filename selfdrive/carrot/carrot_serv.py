@@ -961,6 +961,11 @@ class CarrotServ:
       #self.debugText = ""
       pass
 
+    # A navigation OFF selection also covers OEM camera and Waze input paths.
+    if self.autoNaviSpeedCtrlMode == 0:
+      sdi_speed = 250
+      hda_active = False
+
     if self.autoTurnControl not in [2, 3]:    # auto turn speed control
       atc_desired = atc_desired_next = 250
 
@@ -986,7 +991,7 @@ class CarrotServ:
       #speed_n_sources.append((self.calculate_current_speed(dist, speed * self.mapTurnSpeedFactor, 0, 1.2), "route"))
 
     model_turn_speed = max(sm['modelV2'].meta.modelTurnSpeed, self.autoCurveSpeedLowerLimit)
-    if model_turn_speed < 200 and abs(vturn_speed) < 120:
+    if self.turnSpeedControlMode > 0 and model_turn_speed < 200 and abs(vturn_speed) < 120:
       speed_n_sources.append((model_turn_speed, "model"))
 
     desired_speed, source = min(speed_n_sources, key=lambda x: x[0])

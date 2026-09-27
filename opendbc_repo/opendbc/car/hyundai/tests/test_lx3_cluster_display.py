@@ -83,11 +83,27 @@ class TestLx3ClusterDisplay(unittest.TestCase):
     for radar in (0, 1, 2):
       for speed in (-0.11, -0.1, -0.09, 0.0):
         self.hud.leadRadar, self.hud.leadRelSpeed = radar, speed
-        self.assertEqual(self.messages()['CCNC_0x162']['FF_DETECT'], 4)
+        self.assertEqual(self.messages()['CCNC_0x162']['FF_DETECT'], 2)
 
   def test_unengaged_lead_is_gray(self):
     self.cc.enabled = False
-    self.assertEqual(self.messages()['CCNC_0x162']['FF_DETECT'], 3)
+    self.assertEqual(self.messages()['CCNC_0x162']['FF_DETECT'], 1)
+
+  def test_oem_corner_types_status_and_distances_are_not_repurposed(self):
+    self.cs.adrv_0x1ea = defaultdict(int)
+    for code in (1, 3, 4, 6, 8, 10, 12, 14):
+      for side in ('LF', 'RF', 'LR', 'RR'):
+        self.cs.ccnc_0x162[side + '_DETECT'] = code
+        self.cs.ccnc_0x162[side + '_DETECT_DISTANCE'] = 20
+        # 0x1EA uses presence/color/hide, not the CCNC class encoding.
+        self.cs.adrv_0x1ea[side + '_DETECT'] = 4
+        self.cs.adrv_0x1ea[side + '_DETECT_DISTANCE'] = 20
+      values = self.messages()
+      for side in ('LF', 'RF', 'LR', 'RR'):
+        self.assertEqual(values['CCNC_0x162'][side + '_DETECT'], code)
+        self.assertEqual(values['CCNC_0x162'][side + '_DETECT_DISTANCE'], 20)
+        self.assertEqual(values['ADRV_0x1ea'][side + '_DETECT'], 4)
+        self.assertEqual(values['ADRV_0x1ea'][side + '_DETECT_DISTANCE'], 20)
 
   def test_lost_lead_clears_stale_copied_icon(self):
     self.hud.leadVisible = False

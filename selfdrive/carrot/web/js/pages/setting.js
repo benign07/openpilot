@@ -391,6 +391,8 @@ function cacheSettingValue(name, value, group = null) {
   if (!name) return;
   const loadedAt = Date.now();
   settingValueCache.set(name, { value, loadedAt });
+  if (SETTINGS) SETTINGS.current_values = { ...(SETTINGS.current_values || {}), [name]: value };
+  refreshSettingAvailability();
   if (!group) return;
   const cachedGroup = settingGroupValueCache.get(group);
   if (!cachedGroup) return;
@@ -403,6 +405,7 @@ function primeSettingGroupValueCache(group, values) {
   const loadedAt = Date.now();
   const snapshot = { values: { ...(values || {}) }, loadedAt };
   settingGroupValueCache.set(group, snapshot);
+  if (SETTINGS) SETTINGS.current_values = { ...(SETTINGS.current_values || {}), ...snapshot.values };
   Object.entries(snapshot.values).forEach(([name, value]) => {
     settingValueCache.set(name, { value, loadedAt });
   });
@@ -1212,7 +1215,36 @@ function getSettingOptionValues(config) {
   return out;
 }
 
+function settingAvailabilityText(p, values, steeringType) {
+  const notes = [];
+  if (p.supported === false) notes.push(p.unsupported_reason || "이 버전에서는 지원하지 않습니다.");
+  if (p.steering_type && steeringType && p.steering_type !== steeringType) {
+    notes.push("현재 차량의 조향 방식에는 적용되지 않습니다.");
+  }
+  for (const rule of p.requires || []) {
+    const current = values[rule.name];
+    if (current == null) { notes.push("관련 설정 확인 필요: " + rule.name); continue; }
+    if (("equals" in rule && Number(current) !== Number(rule.equals)) ||
+        ("not_equal" in rule && Number(current) === Number(rule.not_equal))) notes.push(rule.reason);
+  }
+  if (p.applies_to) notes.push(p.applies_to);
+  if (p.restart_required) notes.push("저장 후 정차 상태에서 기기를 재시작해야 적용됩니다.");
+  if (p.exclude_from_profile && p.supported !== false) notes.push("차량별 설정: 프로필 및 일괄 기본값 초기화에서 제외됩니다.");
+  return notes.join(" · ");
+}
+
+function refreshSettingAvailability() {
+  document.querySelectorAll(".setting[data-setting-name]").forEach((row) => {
+    const p = row.__settingDefinition;
+    if (!p) return;
+    const node = row.querySelector(".setting-availability");
+    if (node) node.textContent = settingAvailabilityText(p,
+      { ...(SETTINGS?.current_values || {}), ...(row.__settingProfile?.values || {}) }, SETTINGS?.steering_type);
+  });
+}
+
 function getSettingOptionLabel(name, value) {
+  if (name === "MyDrivingMode") return ({1:"연비", 2:"완만", 3:"일반", 4:"고속"})[Number(value)] || String(value);
   return formatSettingDisplayValue({ name }, value);
 }
 
@@ -1224,6 +1256,12 @@ function syncSettingControlState(row, value) {
     const displayText = formatSettingDisplayValue({ name: row.dataset.settingName || "" }, value);
     valueButton.textContent = displayText;
     valueButton.dataset.rawValue = text;
+    valueButton.setAttribute("aria-label", `${row.dataset.settingName}: ${displayText}`);
+  }
+  const physical = row.querySelector(".setting-physical");
+  const p = row.__settingDefinition;
+  if (physical && p?.display_scale) {
+    physical.textContent = `환산값: ${Number((Number(value) * p.display_scale).toFixed(3))} ${p.physical_unit || ""}`;
   }
 
   const toggle = row.querySelector(".setting-switch__input");
@@ -1410,6 +1448,7 @@ async function applySettingProfile(profile) {
 
   try {
     const result = await postJson("/api/setting_profiles/apply", { id: profile.id, values: profile.values || {} });
+    if (Number(result.result?.fail_cnt || 0) > 0) throw new Error("일부 설정을 저장하지 못했습니다. 기기 값을 다시 확인하세요.");
     const failed = new Set((result.result?.fails || []).map((entry) => String(entry?.key || "")).filter(Boolean));
     const restoredValues = {};
     (result.preview?.entries || []).forEach((entry) => {
@@ -2746,6 +2785,8 @@ async function renderItems(group, options = {}) {
     if (animateItems) el.style.setProperty("--i", String(index));
     el.dataset.settingName = name;
     el.dataset.settingGroup = originGroup;
+    el.__settingDefinition = p;
+    el.__settingProfile = profile;
     el.classList.toggle("is-favorite", isSettingFavorite(name));
 
     const top = document.createElement("div");
@@ -2887,6 +2928,15 @@ async function renderItems(group, options = {}) {
 
     el.appendChild(top);
     el.appendChild(d);
+    const availability = document.createElement("div");
+    availability.className = "setting-availability";
+    availability.style.cssText = "font-size:13px;line-height:1.5;color:#d8ac65;margin-top:8px;";
+    availability.textContent = settingAvailabilityText(p, { ...(SETTINGS?.current_values || {}), ...values }, SETTINGS?.steering_type);
+    el.appendChild(availability);
+    const physical = document.createElement("div");
+    physical.className = "setting-physical";
+    physical.style.cssText = "font-size:13px;margin-top:6px;opacity:.8;";
+    el.appendChild(physical);
 
     const popularTopValues = Array.isArray(popularEntry?.top_values) ? popularEntry.top_values : [];
     let popularDetail = null;
@@ -2939,8 +2989,9 @@ async function renderItems(group, options = {}) {
         },
       );
       if (!ok) return;
-      await commitSettingValue(target);
-      showAppToast(getUIText("setting_reset_default_done", "Restored to default"));
+      if (await commitSettingValue(target)) {
+        showAppToast(getUIText("setting_reset_default_done", "Restored to default"));
+      }
     };
     actions.appendChild(defaultBtn);
     el.classList.add("setting--has-actions");
@@ -2951,6 +3002,9 @@ async function renderItems(group, options = {}) {
     const cur = (name in values) ? values[name] : p.default;
     syncSettingControlState(el, cur);
     val.dataset.committedValue = String(cur);
+    const unavailable = p.supported === false || (p.steering_type && SETTINGS?.steering_type && p.steering_type !== SETTINGS.steering_type);
+    if (unavailable) el.querySelectorAll("button,input,select").forEach((node) => { node.disabled = true; });
+    let saveBusy = false;
 
     function normalizeSettingValue(raw) {
       const text = String(raw).trim();
@@ -2969,6 +3023,8 @@ async function renderItems(group, options = {}) {
     }
 
     async function commitSettingValue(next) {
+      if (unavailable || saveBusy) return false;
+      saveBusy = true;
       try {
         if (profile) {
           const nextValues = { ...(profile.values || {}), [name]: next };
@@ -2979,7 +3035,9 @@ async function renderItems(group, options = {}) {
             profile.values = nextValues;
           }
         } else {
-          await setParam(name, next);
+          const saved = await setParam(name, next);
+          next = saved.value;
+          if (saved.restart_required) showAppToast("저장됨 · 정차 후 기기 재시작 시 적용됩니다.");
         }
         syncSettingControlState(el, next);
         val.dataset.committedValue = String(next);
@@ -2987,8 +3045,14 @@ async function renderItems(group, options = {}) {
           cacheSettingValue(name, next, group);
           if (originGroup !== group) cacheSettingValue(name, next, originGroup);
         }
+        refreshSettingAvailability();
+        return true;
       } catch (e) {
+        syncSettingControlState(el, val.dataset.committedValue);
         showAppToast((UI_STRINGS[LANG].set_failed || "set failed: ") + e.message, { tone: "error" });
+        return false;
+      } finally {
+        saveBusy = false;
       }
     }
 

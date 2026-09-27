@@ -149,7 +149,10 @@ class CarrotPlanner:
         self.myDrivingMode_disable_auto = True
       self.myDrivingMode_last = myDrivingMode
       
+      was_auto = getattr(self, "myDrivingModeAuto", 0)
       self.myDrivingModeAuto = self.params.get_int("MyDrivingModeAuto")
+      if self.myDrivingModeAuto > 0 and was_auto <= 0:
+        self.myDrivingMode_disable_auto = False
       if self.myDrivingModeAuto > 0 and not self.myDrivingMode_disable_auto:
         self.myDrivingMode = self.drivingModeDetector.get_mode()
       else:

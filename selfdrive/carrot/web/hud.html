@@ -47,64 +47,9 @@
       <div class="stat"><span class="dot" id="dot"></span><span id="stat">연결 중…</span></div>
     </div>
     <div class="mid"><span class="speed" id="speed">--</span><span class="unit" id="unit">km/h</span></div>
-    <button class="mode" id="mode" type="button"><small>운전모드 (탭하면 변경)</small><span id="modeTxt">--</span></button>
+    <button class="mode" id="mode" type="button" disabled><small id="modeHint">운전모드 · 변경은 정차/P에서</small><span id="modeTxt">--</span></button>
   </div>
-  <script>
-    "use strict";
-    var curMode = 0, metric = true;
-    function num(v){ return (typeof v==="number"&&isFinite(v))?v:null; }
-    function setTxt(id,t){ var e=document.getElementById(id); if(e&&e.textContent!==t)e.textContent=t; }
-
-    function gearText(cs){
-      if(!cs) return "--";
-      var g = (cs.gearShifter==null?"":(""+cs.gearShifter)).toUpperCase();
-      if(g.indexOf("DRIVE")>=0){ var s=num(cs.gearStep); return (s&&s>0)?(""+s):"D"; }
-      if(g.indexOf("PARK")>=0) return "P";
-      if(g.indexOf("REVERSE")>=0) return "R";
-      if(g.indexOf("NEUTRAL")>=0) return "N";
-      return g?g.charAt(0):"--";
-    }
-    var MODES = {1:"연비", 2:"안전", 3:"일반", 4:"고속"};
-    function applyMode(m){
-      curMode = m;
-      var mb = document.getElementById("mode");
-      mb.className = "mode" + (m>=1&&m<=4 ? " m"+m : "");
-      setTxt("modeTxt", MODES[m] || "--");
-    }
-
-    function pollRuntime(){
-      fetch("/api/live_runtime",{cache:"no-store"}).then(function(r){return r.ok?r.json():null;}).then(function(d){
-        var dot=document.getElementById("dot"), st=document.getElementById("stat");
-        if(!d){ dot.style.background="#E5534B"; st.textContent="오프라인"; return; }
-        var s=d.services||{}, p=(d.runtime&&d.runtime.params)||{};
-        metric = String(p.IsMetric==null?"1":p.IsMetric)==="1";
-        var f = metric?3.6:2.2369363;
-        var cs=s.carState||null, speed=null;
-        if(cs){ var v=num(cs.vEgoCluster); if(v==null)v=num(cs.vEgo); if(v!=null)speed=Math.max(0,Math.round(v*f)); }
-        setTxt("speed", speed==null?"--":""+speed);
-        setTxt("unit", metric?"km/h":"mph");
-        setTxt("gear", gearText(cs));
-        dot.style.background="#3DDC84"; st.textContent="연결됨";
-      }).catch(function(){ document.getElementById("dot").style.background="#E5534B"; setTxt("stat","오프라인"); });
-    }
-    function pollMode(){
-      fetch("/api/params_bulk?names=MyDrivingMode",{cache:"no-store"}).then(function(r){return r.ok?r.json():null;}).then(function(d){
-        var m = d && d.values ? parseInt(d.values.MyDrivingMode,10) : NaN;
-        if(!isNaN(m)) applyMode(m);
-      }).catch(function(){});
-    }
-    document.getElementById("mode").addEventListener("click", function(){
-      var next = (curMode>=1&&curMode<=4) ? (curMode%4+1) : 1;
-      applyMode(next); // optimistic
-      fetch("/api/param_set",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:"MyDrivingMode",value:""+next})})
-        .then(function(){ setTimeout(pollMode,300); })
-        .catch(function(){ setTimeout(pollMode,300); });
-    });
-
-    pollRuntime(); pollMode();
-    setInterval(pollRuntime, 1000);
-    setInterval(pollMode, 2000);
-  </script>
-  <script src="/js/can_diagnostics_link.js?v=20260927-2"></script>
+  <script src="/js/simple_hud.js?v=20260927-3"></script>
+  <script src="/js/can_diagnostics_link.js?v=20260927-3"></script>
 </body>
 </html>

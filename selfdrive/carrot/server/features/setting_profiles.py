@@ -1,4 +1,5 @@
 from aiohttp import web
+from ..services.setting_safety import require_parked
 
 from ..services.setting_profiles import (
   apply_setting_profile,
@@ -78,6 +79,7 @@ async def preview_setting_profile_route(request: web.Request) -> web.Response:
 
 
 async def apply_setting_profile_route(request: web.Request) -> web.Response:
+  await require_parked(request)
   try:
     body = await request.json()
   except Exception:

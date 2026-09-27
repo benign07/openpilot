@@ -12,7 +12,7 @@ async function setParam(name, value) {
   window.dispatchEvent(new CustomEvent("carrot:paramchange", {
     detail: { name, value: j.value ?? value },
   }));
-  return true;
+  return j;
 }
 
 

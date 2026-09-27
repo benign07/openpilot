@@ -884,7 +884,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         _make_ccnc_values(
           values, CS, lat_active, frame, hud_control,
           lane_line=not lx3_hev,
-          corner_radar=True,
+          corner_radar=not lx3_hev,
           desire=desire,
           # 기존대로 LR/RR만 깜빡임
           blink_pairs=[('LR_DETECT', 'LR_DETECT_DISTANCE'),
@@ -903,7 +903,9 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           # into a cone. This affects only the cluster, never the lead tracker.
           if lead_visible:
             values["FF_DISTANCE"] = lead_distance
-            values["FF_DETECT"] = 4 if CC.enabled else 3
+            # LeadData has no object class. Show a generic object, not a
+            # fabricated car/truck/cone inferred from the sensor source.
+            values["FF_DETECT"] = 2 if CC.enabled else 1
           else:
             values["FF_DISTANCE"] = 0
             values["FF_DETECT"] = 0
@@ -915,7 +917,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         _make_ccnc_values(
           values, CS, lat_active, frame, hud_control,
           lane_line=False,
-          corner_radar=True,
+          corner_radar=not lx3_hev,
           desire=0,
           # 필요하면 162도 깜빡임 적용(원래 코드처럼 LR/RR만)
           blink_pairs=[('LR_DETECT', 'LR_DETECT_DISTANCE'),
