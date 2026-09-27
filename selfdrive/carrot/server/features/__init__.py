@@ -1,5 +1,7 @@
 from aiohttp import web
 
+from ...can_diagnostics import routes as can_diagnostics
+
 from . import (
   cars,
   dashcam,
@@ -23,6 +25,7 @@ from . import (
 
 
 def register_all(app: web.Application) -> None:
+  can_diagnostics.register(app)
   static.register(app)
   stream.register(app)
   ws.register(app)

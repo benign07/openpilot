@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b1116">
+  <title>Carrot HUD · CAN 진단</title>
+  <link rel="stylesheet" href="/css/can_diagnostics.css?v=20260927-1">
+  <script src="/js/can_diagnostics.js?v=20260927-1" defer></script>
+</head>
+<body>
+  <header class="top"><a href="/?view=hud" class="back">‹ HUD</a><span>CARROT <b>LAB</b></span><span id="connection" class="badge">연결 중</span></header>
+  <main>
+    <div id="demo" class="notice" hidden>데모 화면 · 실제 차량 데이터가 아닙니다.</div>
+    <div class="intro"><p class="eyebrow">CAN · DBC · RLOG</p><h1>주행 CAN 진단</h1><p>실제 신호와 데이터베이스를 비교하고,<br>아쉬웠던 순간의 근거를 남깁니다.</p></div>
+    <nav class="tabs" aria-label="진단 메뉴"><button data-tab="record" class="selected">기록</button><button data-tab="catalog">신호 백과사전</button><button data-tab="history">저장 기록</button></nav>
+    <div id="message" role="status" aria-live="polite"></div>
+    <section id="record" class="panel">
+      <div class="card primary">
+        <div class="row"><h2>주행 정합성 기록</h2><span id="captureState" class="badge">대기</span></div>
+        <p>주행·제어 활성 상태에서도 수신 CAN을 기록합니다. 앱 화면을 닫아도 기록은 계속됩니다.</p>
+        <div class="metrics"><div><strong id="elapsed">00:00</strong><span>기록 시간</span></div><div><strong id="frames">0</strong><span>수신 프레임</span></div><div><strong id="vehicle">—</strong><span id="gear">차량 상태 대기</span></div></div>
+        <p id="preflight" class="hint">CAN 수신 상태를 확인하고 있습니다.</p>
+        <div class="actions"><button id="startDrive" class="accent" disabled>주행 기록 시작</button><button id="stop" class="danger" disabled>기록 종료</button></div>
+        <p class="fine">최대 30분 / 원시 데이터 512MB · 기기에 압축 저장 · 기존 rlog와 같은 단조 시간축으로 비교</p>
+      </div>
+      <div class="card"><div class="row"><h2>관측 현황</h2><span class="muted">이번 기록</span></div><div class="stats"><div><b id="seen">0</b><span>버스·주소·길이</span></div><div><b id="unknown">0</b><span>미정의 주소</span></div><div><b id="length">0</b><span>길이 불일치</span></div><div><b id="checksum">—</b><span>체크섬 실패 / 검사</span></div><div><b id="counter">0</b><span>카운터 불연속</span></div></div><p id="dbStatus" class="fine">DBC 정의를 확인하고 있습니다.</p><p class="fine">미정의 주소와 카운터 불연속은 검토할 단서입니다. 곧바로 차량 오류를 뜻하지 않습니다.</p></div>
+      <div class="card"><h2>아쉬웠던 순간 표시</h2><p>브레이크·감속·방향지시등·앞차 인식 변화는 자동으로 표시됩니다. 동승자가 아래 버튼으로 느낌을 덧붙일 수 있습니다.</p><div id="markers" class="markerGrid"></div></div>
+      <details class="card"><summary>정차 조작 검증 <span class="muted">선택</span></summary><p>안내한 조작을 한 뒤 ‘유지하며 측정’을 누르면, 변화와 원상 복귀를 3회 비교해 주소·비트 후보를 찾습니다.</p><label for="test">검증할 조작</label><select id="test"></select><button id="startGuided" class="secondary" disabled>안내 진단 시작</button><p id="guidedReason" class="fine"></p><div id="guide" hidden><div class="row"><b id="step">1 / 9</b><span id="feedback"></span></div><progress id="progress" max="9" value="0"></progress><h3 id="instruction"></h3><p id="countdown"></p><button id="mark" class="accent">유지하며 측정</button></div></details>
+      <div id="result" class="card" hidden><h2>기록 결과</h2><p id="resultText"></p><div id="resultLinks" class="downloads"></div><div id="candidates"></div></div>
+    </section>
+    <section id="catalog" class="panel" hidden>
+      <div class="row"><h2>관측에서 쌓는 백과사전</h2><button id="refreshCatalog" class="small">새로고침</button></div>
+      <p>버스·주소·길이를 기준으로 DBC 정의와 실제 관측을 묶습니다. 신호의 실제 의미는 검증 근거가 쌓일 때 확정합니다.</p>
+      <label for="search" class="sr-only">주소나 신호 검색</label><input id="search" placeholder="주소 또는 신호 이름 검색 · 예: 0x105, BRAKE">
+      <p id="catalogInfo" class="fine"></p><div id="catalogRows"></div>
+    </section>
+    <section id="history" class="panel" hidden><div class="row"><h2>저장된 진단</h2><button id="refreshHistory" class="small">새로고침</button></div><p>원시 CAN, 사건 표식, 신호 사전을 내려받아 rlog와 비교할 수 있습니다.</p><div id="historyRows"></div></section>
+    <footer>관측 → 정의 대조 → 반복 검증 → 매핑 확정<br>이 진단은 CAN을 전송하거나 주행 제어 설정을 변경하지 않습니다.</footer>
+  </main>
+</body>
+</html>
