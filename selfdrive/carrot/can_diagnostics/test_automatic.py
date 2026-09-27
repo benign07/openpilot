@@ -170,6 +170,31 @@ class DownloadTests(unittest.TestCase):
 
 
 class RouteTests(unittest.IsolatedAsyncioTestCase):
+  async def test_completed_chunk_range_matches_manifest_bytes(self):
+    with tempfile.TemporaryDirectory() as folder:
+      store = ChunkStore(folder, reserve=0)
+      recorder = AutoRecorder(store, {'boot_id': 'test'})
+      recorder.update(services(), 100)
+      recorder.close()
+      class Controller:
+        root = Path(folder)
+        def start(self): pass
+        def close(self): pass
+        def status(self): return {'state': 'stopped'}
+        def chunks(self): return store.list_chunks()
+      app = web.Application()
+      register(app, Controller())
+      async with TestClient(TestServer(app), auto_decompress=False) as client:
+        response = await client.get('/api/automatic_drive/chunks')
+        row = (await response.json())['chunks'][0]
+        response = await client.get('/api/automatic_drive/chunks/' + row['id'])
+        full = await response.read()
+        self.assertEqual(hashlib.sha256(full).hexdigest(), row['sha256'])
+        response = await client.get('/api/automatic_drive/chunks/' + row['id'], headers={'Range': 'bytes=7-'})
+        self.assertEqual(response.status, 206)
+        self.assertEqual(await response.read(), full[7:])
+        self.assertEqual(response.headers['Content-Range'], f'bytes 7-{len(full)-1}/{len(full)}')
+
   async def test_startup_is_automatic_and_partial_files_are_not_downloadable(self):
     with tempfile.TemporaryDirectory() as folder:
       class Controller:
