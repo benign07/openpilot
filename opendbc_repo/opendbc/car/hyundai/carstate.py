@@ -7,7 +7,8 @@ import ast
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.hyundai.hyundaicanfd import CanBus
+from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
+from opendbc.car.hyundai.lx3_time import Lx3Clock, MESSAGE as LX3_TIME_MESSAGE, UTC_MESSAGE as LX3_UTC_MESSAGE, utc_snapshot_millis
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, CAMERA_SCC_CAR, HyundaiExtFlags
 from opendbc.car.interfaces import CarStateBase
 
@@ -161,6 +162,7 @@ class CarState(CarStateBase):
     self.GEAR_ALT = True if 64 in fingerprints[pt_bus] else False
     self.TPMS = True if 0x3a0 in fingerprints[pt_bus] else False
     self.LOCAL_TIME = True if 1264 in fingerprints[pt_bus] else False
+    self.lx3_clock = Lx3Clock() if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV else None
     self.CCNC_0x161 = True if 0x161 in fingerprints[cam_bus] else False  # v10: LX3_HEV LFA_ICON source (ADRV_0x161)
 
     self.cp_bsm = None
@@ -703,7 +705,11 @@ class CarState(CarStateBase):
         #ret.cruiseState.nonAdaptive = cp.vl["MANUAL_SPEED_LIMIT_ASSIST"]["MSLA_ENABLED"] == 1
         ret.cruiseState.nonAdaptive = self.manual_speed_limit_assist["MSLA_ENABLED"] == 1
 
-    if self.LOCAL_TIME and self.time_zone != "UTC":
+    if self.lx3_clock is not None:
+      ret.datetime = self.lx3_clock.update(cp.vl[LX3_TIME_MESSAGE], cp.ts_nanos[LX3_TIME_MESSAGE]['SECONDS'],
+                                          cp._last_update_nanos, utc_snapshot_millis(cp.vl[LX3_UTC_MESSAGE]),
+                                          cp.ts_nanos[LX3_UTC_MESSAGE]['SECONDS'])
+    elif self.LOCAL_TIME and self.time_zone != "UTC":
       lt = cp.vl["LOCAL_TIME"]
       y, m, d, H, M, S = int(lt["YEAR"]) + 2000, int(lt["MONTH"]), int(lt["DATE"]), int(lt["HOURS"]), int(lt["MINUTES"]), int(lt["SECONDS"])
       try:
@@ -791,14 +797,26 @@ class CarState(CarStateBase):
 
   def get_can_parsers_canfd(self, CP):
     msgs = []
+    if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV:
+      # Optional clock: its absence/checksum failure must never invalidate driving CAN.
+      # RAW_COUNTER is informational, so it cannot contribute to counter_fail.
+      msgs.append((LX3_TIME_MESSAGE, float('nan')))
+      msgs.append((LX3_UTC_MESSAGE, float('nan')))
     if not (CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS):
       # TODO: this can be removed once we add dynamic support to vl_all
       msgs += [
         ("CRUISE_BUTTONS", 50)
       ]
 
+    pt_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN)
+    if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV:
+      # The LX3 DBC filename does not opt into the generic checksum binding.
+      # Bind only this optional clock; do not change validation of control messages.
+      for message in (LX3_TIME_MESSAGE, LX3_UTC_MESSAGE):
+        pt_parser.dbc.name_to_msg[message].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
+
     return {
-      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
+      Bus.pt: pt_parser,
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
       Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).ACAN),
     }

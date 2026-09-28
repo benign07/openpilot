@@ -157,7 +157,7 @@ def control_mode(services, now):
 
 
 class AutoRecorder:
-  ADDRESSES = {0x161, 0x162, 0x1EA, 0x2A4, 0x362, 0x1A0}
+  ADDRESSES = {0x161, 0x162, 0x1EA, 0x2A4, 0x362, 0x1A0, 0x41B, 0x417, 0x367}
 
   def __init__(self, store, metadata):
     self.store, self.metadata = store, metadata

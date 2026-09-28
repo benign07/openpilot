@@ -1,0 +1,47 @@
+# LX3 HEV CAN calendar validation — 2026-09-28
+
+실차 기록에서는 기존 DBC의 `0x4EB` / `0x4F0`가 관측되지 않았다. 다른 주소를 전체 비트 탐색한 결과 `0x41B`에서 한국 날짜·시각을 확인했다. 아래 변경은 소스 준비 상태이며, 실기기가 오프라인이라 설치·재부팅 검증은 아직 하지 않았다.
+
+## Evidence
+
+- Deduplicated 159 rlog/qlog files by SHA-256, preferring rlog over the qlog in the same segment directory. Eight files have truncated tails; their intact prefixes were retained and the errors recorded.
+- Read 48,973,491 receive-log frames, including Panda echo copies; 30,544,944 were on physical bus indices below 128. There were 372 distinct addresses. This is recorded coverage, not proof of visibility into every vehicle network.
+- Inventoried every captured ID without relying on its DBC name. Discovery searched keys with at least 40 sampled frames in the first 156 files, using binary and BCD bit fields in both byte orders, time-of-day/epoch comparisons and independent second-by-second progression checks. Three additional rlogs were included in the full-frame candidate validation. GPS fixes were preferred as wall-time anchors; valid `clocks` records were the fallback.
+- `0x41B`: 18,569 physical receive frames in 90 files; all valid calendars, all Hyundai CAN FD CRC matches, all within 2 seconds of their time anchor. No `sendcan` frames for this ID. Most samples are from full rlogs; qlogs provide sparse supplemental coverage.
+- Two additional real diagnostic captures contained 1,396 `0x41B` frames; all passed CRC and matched their contemporaneous wall-time anchors within 2 seconds. Demo captures were excluded.
+- Recorded dates span April and September 2026. Year encoding is consistent with the independently carried full UTC year; future year/month rollover behavior is tested synthetically, not claimed as observed on the car.
+- Original raw CAN, route identifiers, GPS positions, private manifests and replay caches remain on the PC and are not published here.
+
+## Mappings
+
+Offsets below are zero-based Intel/LSB bit positions. Byte fields are binary, not BCD.
+
+| ID / DLC | Fields | Use |
+| --- | --- | --- |
+| `0x41B` / 16 | H `72:8`, M `80:8`, S `88:8`, month `98:4`, year-minus-2000 `104:8`, day `112:8` | Running Korean calendar (UTC+09:00) |
+| `0x417` / 32 | full year `64:16`, month `80:8`, day `88:8`, H `96:8`, M `104:8`, S `112:8` | UTC snapshot, used only to confirm the local calendar's timezone |
+| `0x367` / 32 | H `203:5`, M `208:8`, S `216:8` | Supporting local time of day; date not established |
+
+All three use checksum bytes 0–1 and an observed rolling byte at byte 2. Unknown flag bits are intentionally left unnamed. ECU identity is not inferred solely from the observed bus.
+
+`0x417` has valid CRCs but its calendar can lag by roughly **303 seconds** while fresh CAN frames continue to arrive. It must not be used as a continuously current clock. `0x367` is a 32-byte CAN FD message here; the legacy 8-byte `LVR12` definition at that address does not fit this vehicle.
+
+## Implementation
+
+- The LX3-specific DBC defines these messages. Existing legacy calendar definitions are retained for other vehicles.
+- Only the LX3 HEV parser subscribes to the local calendar and UTC snapshot. They are optional messages (`ignore_alive`) with explicit CRC binding limited to these two messages. Their raw rolling bytes cannot invalidate driving CAN when packets are missed.
+- A local clock must advance twice and match a fresh UTC snapshot within 5 seconds before `carState.datetime` becomes available. This confirms UTC+09:00 without depending on the absent old `HDA_INFO_4A3` country-code signal. Later stale UTC snapshots do not become clock samples. Missing/frozen local time or a discontinuity clears validation and requires confirmation again.
+- `timed` may recover an invalid boot clock only for this vehicle, with fresh valid CAN, P gear, standstill and all control states inactive. It never uses CAN to override an already valid system clock or current-boot NTP synchronization. Usable GPS remains the preferred source. All epoch-to-date conversions and comparisons use UTC.
+- The recovery is once per `timed` process lifetime; after success the valid system-clock guard also suppresses recovery if `timed` restarts. It does not restore elapsed power-off time from a saved date.
+- Automatic phone-bound diagnostic chunks also include these three raw addresses and decoded `carState.datetime`, so later PC analysis can compare clock sources without manual diagnostic activation. Existing retention/rate limits remain in force.
+- No CAN messages are transmitted. Steering, acceleration, braking parameters and the updater's NTP/expiry requirements are unchanged. The CAN fallback starts with `card`/`timed`; it is not available during the earlier pre-manager updater phase.
+
+## Validation and deployment
+
+- 65 offline unit/regression tests passed on the Windows PC, including CRC rejection, missing messages, counter gaps, frozen clocks, date rollovers, timezone disagreement, parked gates, GPS priority and existing HUD/updater behavior.
+- Production parser/clock logic was replayed against 7,605 sampled bus-0 clock frames from 90 files. It accepted 5,877, all within 2 seconds of the reference; it withheld the others during warm-up, gaps or unavailable timezone confirmation. Each file starts with a new validation state, including sparse qlogs. The six recent September rlogs all produced accepted samples. This is not a full vehicle-process replay.
+- The existing GitHub workflow runs these tests under Linux Python 3.11 and 3.12.
+- This change includes a new Python module, generated DBC and `system/timed.py`, outside the existing HUD source-bundle allowlist. It requires a parked SSH installation, an atomic backup, regeneration/copy of the LX3 generated DBC, and native startup verification. It is not advertised as installed through `updates/hud/latest.json`.
+- Remaining on-device checks: fresh P/inactive gate; before/after file hashes and Params preservation; native tests; reboot; running `card`/`timed`, `canValid`, `carState.datetime` vs GPS; controlled next cold boot before NTP while parked. Do not force the system clock backward merely to simulate a cold boot on a live vehicle.
+
+Local analysis: `can_inventory/time_research_20260928/validated_candidates.json` and `implementation_replay.json`. Reproduction helpers are in the PC workspace's `can_inventory_work` folder.

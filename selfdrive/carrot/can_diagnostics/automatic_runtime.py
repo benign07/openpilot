@@ -11,7 +11,7 @@ FIELDS = {
   'carState': ('vEgo', 'aEgo', 'standstill', 'gearShifter', 'canValid', 'canTimeout', 'brakePressed',
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'seatbeltUnlatched',
-               'steerFaultTemporary', 'steerFaultPermanent'),
+               'steerFaultTemporary', 'steerFaultPermanent', 'datetime'),
   'carControl': ('enabled', 'latActive', 'longActive', 'actuators'),
   'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),

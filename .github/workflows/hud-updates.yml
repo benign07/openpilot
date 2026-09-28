@@ -21,5 +21,6 @@ jobs:
           python -m unittest selfdrive.carrot.tests.test_hud_updater
           selfdrive.carrot.tests.test_live_driving_mode
           selfdrive.carrot.tests.test_driving_setting_switches
-          selfdrive.carrot.tests.test_hud_settings_integrity -v
+          selfdrive.carrot.tests.test_hud_settings_integrity
+          selfdrive.carrot.tests.test_lx3_can_time -v
       - run: bash -n launch_chffrplus.sh

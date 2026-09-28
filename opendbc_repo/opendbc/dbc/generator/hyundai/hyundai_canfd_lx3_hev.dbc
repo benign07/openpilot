@@ -907,6 +907,37 @@ BO_ 1214 NEW_MSG_4BE: 8 XXX
  SG_ BYTE_7 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ BYTE_8 : 63|8@0+ (1,0) [0|255] "" XXX
 
+BO_ 1051 LX3_LOCAL_TIME: 16 XXX
+ SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
+ SG_ RAW_COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
+ SG_ HOURS : 72|8@1+ (1,0) [0|23] "" XXX
+ SG_ MINUTES : 80|8@1+ (1,0) [0|59] "" XXX
+ SG_ SECONDS : 88|8@1+ (1,0) [0|59] "" XXX
+ SG_ MONTH : 98|4@1+ (1,0) [1|12] "" XXX
+ SG_ YEAR : 104|8@1+ (1,0) [0|99] "" XXX
+ SG_ DATE : 112|8@1+ (1,0) [1|31] "" XXX
+
+BO_ 1047 LX3_UTC_SNAPSHOT: 32 XXX
+ SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
+ SG_ RAW_COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
+ SG_ YEAR : 64|16@1+ (1,0) [2000|2099] "" XXX
+ SG_ MONTH : 80|8@1+ (1,0) [1|12] "" XXX
+ SG_ DATE : 88|8@1+ (1,0) [1|31] "" XXX
+ SG_ HOURS : 96|8@1+ (1,0) [0|23] "" XXX
+ SG_ MINUTES : 104|8@1+ (1,0) [0|59] "" XXX
+ SG_ SECONDS : 112|8@1+ (1,0) [0|59] "" XXX
+
+BO_ 871 LX3_LOCAL_TIME_OF_DAY: 32 XXX
+ SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
+ SG_ RAW_COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
+ SG_ HOURS : 203|5@1+ (1,0) [0|23] "" XXX
+ SG_ MINUTES : 208|8@1+ (1,0) [0|59] "" XXX
+ SG_ SECONDS : 216|8@1+ (1,0) [0|59] "" XXX
+
+CM_ BO_ 1051 "Korean LX3 HEV KST calendar. YEAR is years since 2000. Receive-only validation; unknown flag bits are deliberately omitted.";
+CM_ BO_ 1047 "UTC calendar snapshot may be stale despite fresh CAN frames. Research only; do not synchronize the system clock from this message.";
+CM_ BO_ 871 "Korean LX3 HEV time of day only, no validated date. This is CAN FD DLC 32, not the legacy DLC 8 LVR12 at the same address.";
+
 BO_ 1259 LOCAL_TIME2: 8 XXX
  SG_ HOURS : 15|5@0+ (1,0) [0|31] "" XXX
  SG_ MINUTES : 21|6@0+ (1,0) [0|63] "" XXX
