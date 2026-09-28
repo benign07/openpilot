@@ -82,6 +82,15 @@ function invalidate_native_build_if_needed {
 }
 
 function launch {
+  # A signed HUD release is installed before manager imports driving modules.
+  # An incomplete transaction is recovered here before normal startup.
+  if [ -f /data/community/hud_updates/config.json ]; then
+    if ! /usr/local/venv/bin/python "$DIR/selfdrive/carrot/hud_update/boot_apply.py"; then
+      echo "HUD update recovery failed; manager startup stopped."
+      start_carrot_recovery
+      while true; do sleep 1; done
+    fi
+  fi
   # Remove orphaned git lock if it exists on boot
   [ -f "$DIR/.git/index.lock" ] && rm -f $DIR/.git/index.lock
 
@@ -94,7 +103,7 @@ function launch {
   # 2. The FINALIZED consistent file has to exist, indicating there's an update
   #    that completed successfully and synced to disk.
 
-  if [ -f "${DIR}/.overlay_init" ]; then
+  if [ ! -f /data/community/hud_updates/config.json ] && [ -f "${DIR}/.overlay_init" ]; then
     find ${DIR}/.git -newer ${DIR}/.overlay_init | grep -q '.' 2> /dev/null
     if [ $? -eq 0 ]; then
       echo "${DIR} has been modified, skipping overlay update installation"

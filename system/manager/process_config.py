@@ -62,6 +62,8 @@ def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not started
 
 def enable_updated(started: bool, params: Params, CP: car.CarParams) -> bool:
+  if os.path.isfile('/data/community/hud_updates/config.json'):
+    return False
   return not started and params.get_bool("SoftwareMenu")
 
 def check_fleet(started, params, CP: car.CarParams) -> bool:

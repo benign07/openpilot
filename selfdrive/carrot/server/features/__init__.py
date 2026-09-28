@@ -2,6 +2,7 @@ from aiohttp import web
 
 from ...can_diagnostics import routes as can_diagnostics
 from ...can_diagnostics import automatic_routes
+from ...hud_update import service as hud_update
 
 from . import (
   cars,
@@ -26,6 +27,7 @@ from . import (
 
 
 def register_all(app: web.Application) -> None:
+  hud_update.register(app)
   automatic_routes.register(app)
   can_diagnostics.register(app)
   static.register(app)

@@ -41,6 +41,9 @@ async def _git(args: list[str], timeout: float) -> tuple[int, str]:
 
 
 def _auto_update_enabled() -> bool:
+  # Signed HUD-managed devices must not lose local porting work to reset/pull.
+  if os.path.isfile('/data/community/hud_updates/config.json'):
+    return False
   try:
     return bool(read_web_settings().get("auto_update_git_pull"))
   except Exception:
