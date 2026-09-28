@@ -191,7 +191,8 @@ def apply_at_boot(root=ROOT, state_root=STATE_ROOT, boot_id=None, now=None, writ
   boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip() if boot_id is None else boot_id
   # Delayed unrelated power cycles must not consume an old parked authorization.
   if boot_id == state.get('armed_boot') or not 0 <= now - state.get('armed_at', 0) <= 120:
-    state.update(phase='waiting_parked', message='재시작 지연 · P 정차 상태를 다시 확인합니다')
+    # Do not automatically re-arm an expired request and loop through reboots.
+    state.update(phase='failed', message='재시작 지연 · 기존 파일 유지. P 정차 후 업데이트를 다시 예약하세요.')
     save(state_root / 'state.json', state)
     return 'deferred'
   release = state['release']

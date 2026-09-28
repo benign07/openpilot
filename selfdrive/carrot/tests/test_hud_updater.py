@@ -12,7 +12,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from selfdrive.carrot.hud_update import core, service
+from selfdrive.carrot.hud_update import boot_apply, core, service
 
 
 class ReleaseTests(unittest.TestCase):
@@ -104,6 +104,39 @@ class ReleaseTests(unittest.TestCase):
       self.arm()
       self.assertEqual(core.apply_at_boot(self.root, self.folder, boot, now), 'deferred')
       self.assertEqual((self.root / self.release['files'][0]['path']).read_bytes(), b'value = 1\n')
+      self.assertEqual(core.load(self.folder/'state.json')['phase'], 'failed')
+
+  def test_unsynchronized_boot_preserves_originals_and_stops_retrying(self):
+    self.arm()
+    with patch.object(boot_apply, 'wait_for_synchronized_clock', return_value=False), patch.object(core, 'apply_at_boot') as apply:
+      self.assertEqual(boot_apply.apply_with_clock(self.root, self.folder), 'clock_unavailable')
+      apply.assert_not_called()
+    self.assertEqual(core.load(self.folder/'state.json')['phase'], 'failed')
+    self.assertEqual((self.root/self.release['files'][0]['path']).read_bytes(), b'value = 1\n')
+
+  def test_interrupted_transaction_recovers_without_network_clock(self):
+    state = self.arm(); state['phase'] = 'applying'; core.save(self.folder/'state.json', state)
+    (self.root/self.release['files'][0]['path']).write_bytes(b'value = 2\n')
+    with patch.object(boot_apply, 'wait_for_synchronized_clock') as clock:
+      self.assertEqual(boot_apply.apply_with_clock(self.root, self.folder), 'rolled_back')
+      clock.assert_not_called()
+    self.assertEqual((self.root/self.release['files'][0]['path']).read_bytes(), b'value = 1\n')
+
+
+class BootClockTests(unittest.TestCase):
+  def test_waits_for_current_boot_sync_marker_with_monotonic_deadline(self):
+    elapsed = [0]
+    def sleep(seconds): elapsed[0] += seconds
+    marker = SimpleNamespace(is_file=lambda: elapsed[0] >= 3)
+    self.assertTrue(boot_apply.wait_for_synchronized_clock(marker, 5, lambda: elapsed[0], sleep))
+    self.assertEqual(elapsed[0], 3)
+
+  def test_missing_sync_marker_times_out(self):
+    elapsed = [0]
+    def sleep(seconds): elapsed[0] += seconds
+    marker = SimpleNamespace(is_file=lambda: False)
+    self.assertFalse(boot_apply.wait_for_synchronized_clock(marker, 5, lambda: elapsed[0], sleep))
+    self.assertEqual(elapsed[0], 5)
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
