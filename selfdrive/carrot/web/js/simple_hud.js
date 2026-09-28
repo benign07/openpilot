@@ -1,5 +1,5 @@
 "use strict";
-let requestedMode = 0, effectiveMode = 0, parked = false, saveBusy = false, runtimeBusy = false, lastRuntimeAt = 0;
+let requestedMode = 0, effectiveMode = 0, modeAvailable = false, saveBusy = false, runtimeBusy = false, lastRuntimeAt = 0;
 const MODES = {1:"연비", 2:"완만", 3:"일반", 4:"고속"};
 function num(v) { return typeof v === "number" && Number.isFinite(v) ? v : null; }
 function setTxt(id, text) { const node = document.getElementById(id); if (node) node.textContent = text; }
@@ -15,15 +15,15 @@ function gearText(cs) {
 function renderMode() {
   const button = document.getElementById("mode");
   button.className = "mode" + (MODES[effectiveMode] ? " m" + effectiveMode : "");
-  button.disabled = !parked || saveBusy;
+  button.disabled = !modeAvailable || saveBusy;
   setTxt("modeTxt", MODES[effectiveMode] || "--");
   const requested = MODES[requestedMode];
   setTxt("modeHint", (effectiveMode ? "실제 모드" : "실제 모드 확인 중") +
     (requested && requestedMode !== effectiveMode ? ` · 저장값: ${requested}` : "") +
-    (effectiveMode === 4 ? " · 신호 정지 OFF" : "") + " · 변경은 정차/P에서");
+    (effectiveMode === 4 ? " · 신호 정지 OFF" : "") + " · 탭하여 운행모드 변경");
 }
 function markOffline(message = "차량 데이터 끊김") {
-  parked = false; effectiveMode = 0;
+  modeAvailable = false; effectiveMode = 0;
   setTxt("speed", "--"); setTxt("gear", "--");
   document.getElementById("dot").style.background = "#E5534B";
   setTxt("stat", message); renderMode();
@@ -33,7 +33,7 @@ function acceptRuntime(data) {
       data.snapshotAgeMs >= 1500 || !serviceFresh(data, "carState")) {
     markOffline(); return false;
   }
-  const services = data.services || {}, cs = services.carState || {}, cc = services.carControl || {}, sd = services.selfdriveState || {};
+  const services = data.services || {}, cs = services.carState || {};
   if (cs.canValid !== true || num(cs.vEgo) === null) { markOffline(); return false; }
   lastRuntimeAt = Date.now();
   const metric = ![false, 0, "0"].includes(data.runtime?.params?.IsMetric);
@@ -41,9 +41,7 @@ function acceptRuntime(data) {
   setTxt("speed", String(Math.max(0, Math.round(speed * (metric ? 3.6 : 2.2369363)))));
   setTxt("unit", metric ? "km/h" : "mph"); setTxt("gear", gearText(cs));
   effectiveMode = serviceFresh(data, "longitudinalPlan") ? Number(services.longitudinalPlan?.myDrivingMode || 0) : 0;
-  parked = serviceFresh(data, "carControl", 500) && serviceFresh(data, "selfdriveState", 500) &&
-    cs.gearShifter === "park" && Math.abs(cs.vEgo) < .03 &&
-    cc.enabled === false && cc.latActive === false && cc.longActive === false && sd.enabled === false && sd.active === false;
+  modeAvailable = true;
   document.getElementById("dot").style.background = "#3DDC84";
   setTxt("stat", "차량 데이터 수신 중"); renderMode(); return true;
 }
@@ -67,7 +65,7 @@ async function pollMode() {
   } catch (_) { /* Saved preference must never replace the actual runtime mode. */ }
 }
 async function changeMode() {
-  if (!parked || saveBusy) return;
+  if (!modeAvailable || saveBusy) return;
   saveBusy = true; renderMode();
   try {
     const next = requestedMode >= 1 && requestedMode <= 4 ? requestedMode % 4 + 1 : 1;

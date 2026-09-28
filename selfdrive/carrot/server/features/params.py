@@ -67,7 +67,16 @@ async def api_param_set(request: web.Request) -> web.Response:
   if not name:
     return web.json_response({"ok": False, "error": "missing name"}, status=400)
 
-  if name not in DISPLAY_SETTINGS:
+  # DrivingMode is an existing live driver preset, polled by CarrotPlanner.
+  # Keep the exception exact and bounded; calibration/profile writes stay parked.
+  if name == "MyDrivingMode":
+    if type(value) is int and 1 <= value <= 4:
+      pass
+    elif type(value) is str and value in ("1", "2", "3", "4"):
+      value = int(value)
+    else:
+      return web.json_response({"ok": False, "error": "운행모드는 1~4의 정수만 선택할 수 있습니다."}, status=400)
+  elif name not in DISPLAY_SETTINGS:
     await require_parked(request)
 
   # Validate against the same definition used by restore/profile operations.
