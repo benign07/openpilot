@@ -1,0 +1,24 @@
+{
+  "release_id": "palisade-20260928-01",
+  "sequence": 1,
+  "car_fingerprint": "HYUNDAI_PALISADE_LX3_HEV",
+  "notes": [
+    "운행 중 연비·완만·일반·고속(1~4) 모드 선택을 복원합니다.",
+    "실제 적용 모드와 목표 차간 시간, 안전벨트·조향 오류 상태를 진단 기록에 추가합니다.",
+    "오파 업데이트 기능의 최초 설치 이후 사용할 수 있습니다. 조향·제동 튜닝 값은 변경하지 않습니다."
+  ],
+  "files": [
+    {
+      "path": "selfdrive/carrot/server/features/params.py",
+      "before": "79f9901bc9ec65b1824e1771cbbd0d0623c31a2d4411edb2d5753ce71fd9e344"
+    },
+    {
+      "path": "selfdrive/carrot/web/js/simple_hud.js",
+      "before": "c9c7b81fefdb9acebb55c44622189845e5be9d0c7e1cf428d1c43e3351aeb158"
+    },
+    {
+      "path": "selfdrive/carrot/can_diagnostics/automatic_runtime.py",
+      "before": "8e779e2e7f45401c6893820b3fc8ef5b91e25dbe38264f138a1b63798110ddad"
+    }
+  ]
+}
