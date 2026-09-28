@@ -191,12 +191,13 @@ class SystemClockTests(unittest.TestCase):
       self.assertIsNone(self.candidate())
 
   def main_once(self,valid_clock=False,ntp=False,gps=False,lx3=True,iterations=1):
+    self.sleeps=Mock()
     self.sm.update=Mock(side_effect=[None]*iterations+[StopIteration])
     self.sm['gpsLocationExternal'].hasFix=gps
     env=dict(self.env,Params=lambda:None,get_gps_location_service=lambda _: 'gpsLocationExternal',
              messaging=NS(PubMaster=lambda _:NS(send=lambda *a:None),SubMaster=lambda _:self.sm,
                           new_message=lambda _:NS(clocks=NS())),
-             time=NS(monotonic=lambda:100,monotonic_ns=lambda:100_000_000_000,time_ns=lambda:0,sleep=lambda _:None),
+             time=NS(monotonic=lambda:100,monotonic_ns=lambda:100_000_000_000,time_ns=lambda:0,sleep=self.sleeps),
              system_time_valid=lambda:valid_clock,Path=lambda _:NS(exists=lambda:ntp),
              has_lx3_calendar=lambda _:lx3,NoReturn=object,set_time=Mock(return_value=True),cloudlog=NS(info=lambda _:None))
     definitions(ROOT/'system/timed.py',env,{'main'})
@@ -205,6 +206,12 @@ class SystemClockTests(unittest.TestCase):
 
   def test_invalid_boot_clock_recovers(self):
     self.main_once(iterations=3).assert_called_once_with(self.target)
+
+  def test_fast_vehicle_telemetry_cannot_busy_loop_without_gps(self):
+    self.main_once(iterations=3)
+    self.assertEqual([c.args[0] for c in self.sleeps.call_args_list],[1,1,1])
+    self.main_once(gps=True,iterations=2)
+    self.assertEqual([c.args[0] for c in self.sleeps.call_args_list],[10,10])
 
   def test_valid_clock_ntp_and_other_vehicles_are_never_overridden(self):
     for kwargs in ({'valid_clock':True},{'ntp':True},{'lx3':False}):

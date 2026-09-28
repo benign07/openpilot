@@ -96,6 +96,9 @@ def main() -> NoReturn:
           if can_recovered:
             cloudlog.info('timed recovered invalid boot clock from parked car calendar')
     if not gps_usable:
+      # Car telemetry wakes SubMaster at 100 Hz. Keep this background clock
+      # service bounded even while GPS is missing or has no usable fix.
+      time.sleep(1)
       continue
 
     set_time(gps_time)
