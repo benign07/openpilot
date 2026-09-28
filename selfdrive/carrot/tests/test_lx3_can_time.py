@@ -40,7 +40,7 @@ def parser_environment():
   definitions(OP/'can/parser.py',env)
   factory_env=dict(env, Bus=NS(pt=0,cam=2,alt=1), CAR=NS(HYUNDAI_PALISADE_LX3_HEV='lx3'),
              HyundaiFlags=NS(CANFD_ALT_BUTTONS=1), CanBus=lambda _:NS(ECAN=0,CAM=2,ACAN=1),
-             DBC={'lx3':{0:str(DBC_FILE)}}, LX3_TIME_MESSAGE='LX3_LOCAL_TIME', LX3_UTC_MESSAGE='LX3_UTC_SNAPSHOT')
+             DBC={'lx3':{0:str(DBC_FILE)}}, LX3_TIME_MESSAGE='LX3_LOCAL_TIME')
   node=next(n for n in ast.walk(ast.parse((OP/'car/hyundai/carstate.py').read_text(encoding='utf-8')))
             if isinstance(n,ast.FunctionDef) and n.name=='get_can_parsers_canfd')
   exec(compile(ast.Module(body=[node],type_ignores=[]),'carstate-parser-factory','exec'),factory_env)
@@ -51,15 +51,7 @@ def parser_environment():
 ENV = parser_environment()
 
 
-def payload(stamp, counter=0, utc=False):
-  if utc:
-    stamp=stamp.astimezone(datetime.timezone.utc)
-    d=bytearray([255]*32)
-    d[2]=counter
-    d[8:10]=stamp.year.to_bytes(2,'little')
-    d[10:15]=bytes((stamp.month,stamp.day,stamp.hour,stamp.minute,stamp.second))
-    d[:2]=ENV['hkg_can_fd_checksum'](0x417,None,d).to_bytes(2,'little')
-    return bytes(d)
+def payload(stamp, counter=0):
   d=bytearray([255]*16)
   d[2]=counter
   d[8]=0x4a
@@ -77,15 +69,13 @@ class CalendarTests(unittest.TestCase):
     self.clock=Lx3Clock()
     self.date=datetime.datetime(2026,4,29,8,7,58,tzinfo=CLOCK['KST'])
 
-  def feed(self,seconds,stamp=None,utc_offset=0,counter=None,corrupt=False):
+  def feed(self,seconds,stamp=None,counter=None,corrupt=False):
     ns=int((10+seconds)*1e9)
     stamp=stamp or self.date+datetime.timedelta(seconds=seconds)
     d=bytearray(payload(stamp,(int(seconds)*17)%256 if counter is None else counter))
     if corrupt: d[10]^=1
-    utc_data=payload(stamp+datetime.timedelta(seconds=utc_offset),utc=True)
-    self.parser.update([[ns,[(0x41b,bytes(d),0),(0x417,utc_data,0)]]])
-    return self.clock.update(self.parser.vl['LX3_LOCAL_TIME'],self.parser.ts_nanos['LX3_LOCAL_TIME']['SECONDS'],ns,
-                             CLOCK['utc_snapshot_millis'](self.parser.vl['LX3_UTC_SNAPSHOT']),ns)
+    self.parser.update([[ns,[(0x41b,bytes(d),0)]]])
+    return self.clock.update(self.parser.vl['LX3_LOCAL_TIME'],self.parser.ts_nanos['LX3_LOCAL_TIME']['SECONDS'],ns)
 
   def test_dbc_crc_is_bound_only_to_optional_time(self):
     state=self.parser.message_states[0x41b]
@@ -122,8 +112,10 @@ class CalendarTests(unittest.TestCase):
     self.assertTrue(self.parser.can_valid)
     self.assertEqual(self.parser.message_states[0x41b].counter_fail,0)
 
-  def test_wrong_timezone_never_produces_a_time(self):
-    for i in range(5): self.assertEqual(self.feed(i,utc_offset=3600),0)
+  def test_korean_midnight_is_previous_utc_date(self):
+    value=CLOCK['calendar_millis'](dict(YEAR=26,MONTH=9,DATE=28,HOURS=0,MINUTES=0,SECONDS=0))
+    expected=datetime.datetime(2026,9,27,15,0,tzinfo=datetime.timezone.utc)
+    self.assertEqual(value,int(expected.timestamp()*1000))
 
   def test_frozen_fresh_messages_expire(self):
     for i in range(3): self.feed(i)
@@ -135,15 +127,10 @@ class CalendarTests(unittest.TestCase):
     for i in range(3): self.feed(i)
     self.assertEqual(self.clock.update(self.parser.vl['LX3_LOCAL_TIME'],12_000_000_000,15_000_000_000),0)
 
-  def test_missing_or_stale_utc_cannot_confirm_timezone(self):
-    for i in range(4):
-      self.feed(i,utc_offset=600)
-    self.assertEqual(self.clock.update(self.parser.vl['LX3_LOCAL_TIME'],13_000_000_000,13_000_000_000,
-                                      self.clock.millis,1_000_000_000),0)
-
-  def test_later_frozen_utc_does_not_freeze_verified_local_clock(self):
+  def test_korea_only_profile_needs_no_country_or_utc_messages(self):
+    self.assertEqual(self.parser.addresses,{0x41b})
     for i in range(3): self.feed(i)
-    self.assertGreater(self.feed(3,utc_offset=-180),0)
+    self.assertGreater(self.feed(3),0)
 
   def test_backward_and_large_forward_jumps_need_new_validation(self):
     for delta in (-10,3600):
@@ -230,6 +217,14 @@ class SystemClockTests(unittest.TestCase):
   def test_invalid_gps_date_does_not_block_valid_car_fallback(self):
     self.sm['gpsLocationExternal'].unixTimestampMillis=0
     self.main_once(gps=True).assert_called_once_with(self.target)
+
+  def test_charger_only_without_can_leaves_internet_time_sync_available(self):
+    for synchronized in (False,True):
+      self.setUp()
+      for s in ('carState','carControl','selfdriveState'):
+        self.sm.valid[s]=False
+        self.sm.logMonoTime[s]=0
+      self.main_once(valid_clock=synchronized,ntp=synchronized,iterations=3).assert_not_called()
 
 
 if __name__=='__main__':

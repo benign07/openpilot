@@ -8,7 +8,7 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
-from opendbc.car.hyundai.lx3_time import Lx3Clock, MESSAGE as LX3_TIME_MESSAGE, UTC_MESSAGE as LX3_UTC_MESSAGE, utc_snapshot_millis
+from opendbc.car.hyundai.lx3_time import Lx3Clock, MESSAGE as LX3_TIME_MESSAGE
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, CAMERA_SCC_CAR, HyundaiExtFlags
 from opendbc.car.interfaces import CarStateBase
 
@@ -707,8 +707,7 @@ class CarState(CarStateBase):
 
     if self.lx3_clock is not None:
       ret.datetime = self.lx3_clock.update(cp.vl[LX3_TIME_MESSAGE], cp.ts_nanos[LX3_TIME_MESSAGE]['SECONDS'],
-                                          cp._last_update_nanos, utc_snapshot_millis(cp.vl[LX3_UTC_MESSAGE]),
-                                          cp.ts_nanos[LX3_UTC_MESSAGE]['SECONDS'])
+                                          cp._last_update_nanos)
     elif self.LOCAL_TIME and self.time_zone != "UTC":
       lt = cp.vl["LOCAL_TIME"]
       y, m, d, H, M, S = int(lt["YEAR"]) + 2000, int(lt["MONTH"]), int(lt["DATE"]), int(lt["HOURS"]), int(lt["MINUTES"]), int(lt["SECONDS"])
@@ -801,7 +800,6 @@ class CarState(CarStateBase):
       # Optional clock: its absence/checksum failure must never invalidate driving CAN.
       # RAW_COUNTER is informational, so it cannot contribute to counter_fail.
       msgs.append((LX3_TIME_MESSAGE, float('nan')))
-      msgs.append((LX3_UTC_MESSAGE, float('nan')))
     if not (CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS):
       # TODO: this can be removed once we add dynamic support to vl_all
       msgs += [
@@ -812,8 +810,7 @@ class CarState(CarStateBase):
     if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV:
       # The LX3 DBC filename does not opt into the generic checksum binding.
       # Bind only this optional clock; do not change validation of control messages.
-      for message in (LX3_TIME_MESSAGE, LX3_UTC_MESSAGE):
-        pt_parser.dbc.name_to_msg[message].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
+      pt_parser.dbc.name_to_msg[LX3_TIME_MESSAGE].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
 
     return {
       Bus.pt: pt_parser,
