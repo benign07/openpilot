@@ -63,6 +63,10 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: uv run --no-sync python -m unittest openpilot.selfdrive.carrot.tests.test_manual_blinker_suspend -v
+      - name: Actual LX3 parameter, interface, generated DBC and controller configuration
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run --no-sync python -m unittest openpilot.selfdrive.selfdrived.tests.test_lx3_runtime_configuration -v
       - uses: actions/upload-artifact@v4
         if: always()
         with:

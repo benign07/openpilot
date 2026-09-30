@@ -434,8 +434,10 @@ class CarController(CarControllerBase):
         can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, self.lkas_max_torque, angle_control))
 
       # prevent LFA from activating on HDA2 by sending "no lane lines detected" to ADAS ECU
-      # v24: LX3_HEV(camera_scc_params==3, HDA2+camera_scc 동시)에서도 stock LFA suppress
-      if self.frame % 5 == 0 and hda2 and (not camera_scc or self.camera_scc_params == 3):
+      # Legacy platforms keep their suppression policy. LX3 must not inject
+      # camera lane suppression outside its accepted active session. Keep the
+      # stream stable during temporary blinker/standstill lateral suspension.
+      if self.frame % 5 == 0 and hda2 and (not camera_scc or self.camera_scc_params == 3) and (self.lx3_cluster is None or CS.out.latEnabled):
         can_sends.extend(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS))
 
       # LFA and HDA icons

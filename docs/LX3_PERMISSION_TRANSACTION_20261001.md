@@ -180,3 +180,13 @@ active0xCB requests. Historical inactive/display TX may still be accepted.
 Recorded batch timestamps do not validate hardware RX timing; original logs do
 not contain the new protocol, so this is a no-self-grant replay, not evidence
 that the new handshake was used successfully on a vehicle.
+
+Follow-up display ownership/opaque-bit commit b68db657 has all five CI jobs
+successful (run36754256291), including actual msgq/Capnp production publisher,
+AlertManager, nine manual-blinker tests, H7 and full runtime. Its200 PC Python
+regressions and40 actual-C forwarding phase/jitter schedules pass. The startup
+display duplicate remains a documented vehicle qualification condition.
+See [display transport review](LX3_CLUSTER_TRANSPORT_REVIEW_20261001.md) and
+[OEM ownership timing](LX3_OEM_OWNERSHIP_TIMING_20261001.md) for subsequent
+changes and the unresolved650ms correlation. These do not establish warning
+removal, EPS acceptance or vehicle control qualification.

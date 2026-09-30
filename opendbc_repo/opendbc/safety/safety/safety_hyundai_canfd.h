@@ -896,6 +896,12 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
     if ((addr == 0xEA) || (addr == 0x175) || (addr == 0x2AF) || (addr == 0x1AA) || (addr == 0x1CF)) {
       return false;  // Do not synthesize driver/EPS feedback or enable buttons.
     }
+    if (((addr == 0x362) || (addr == 0x2A4)) &&
+        (!controls_allowed || (lx3_mode == 0) || safety_rx_checks_invalid || relay_malfunction)) {
+      // Lane suppression is camera input interference, even with zero torque.
+      // A pending/refused/off host may not inject it into the stock CAN path.
+      return false;
+    }
     if (addr == 0xCB) {
       const int active = (GET_BYTE(to_send, 3) >> 4) & 0x3U;
       const int torque_limit = GET_BYTE(to_send, 6);

@@ -897,6 +897,46 @@ static void release_audit(uint16_t param) {
   printf("RELEASE_AUDIT blockers=%u; this is not vehicle qualification\n", blockers);
 }
 
+static void camera_suppression_permission_regressions(void) {
+  for (unsigned int variant = 0; variant < 4U; variant++) {
+    const unsigned int address = (variant & 1U) != 0U ? 0x2A4U : 0x362U;
+    const unsigned int bus = variant / 2U;
+    CANPacket_t p = packet(address, bus, address == 0x362U ? 13U : 12U);
+    hyundai_canfd_update_checksum(&p);
+    reset(190);
+    assert(!controls_allowed && safety_tx_hook(&p));  // Existing platforms unchanged.
+    reset(lx3_param());
+    assert(!safety_tx_hook(&p));
+    physical_baseline();
+    physical_button(128);
+    physical_button(0);
+    assert(lx3_pending && !safety_tx_hook(&p));
+    acknowledge_request();
+    assert(lx3_mode == 1 && safety_tx_hook(&p));
+    safety_host_heartbeat(lx3_heartbeat_value(false, 0, 0, 0), 0);
+    assert(!controls_allowed && !safety_tx_hook(&p));
+    for (unsigned int fault = 0; fault < 3U; fault++) {
+      reset(lx3_param());
+      physical_baseline();
+      physical_button(128);
+      physical_button(0);
+      acknowledge_request();
+      if (fault == 0U) safety_rx_checks_invalid = true;
+      if (fault == 1U) set_relay_malfunction(true);
+      if (fault == 2U) set_timer(microsecond_timer_get() + 200001U);
+      assert(!safety_tx_hook(&p));
+    }
+    reset(lx3_param());
+    CANPacket_t original = p;
+    original.bus = 1U;
+    original.data[7] = 0x33U;
+    CANPacket_t saved = original;
+    assert(safety_fwd_hook(&original) == -1);  // Bus1 is local, never OP replacement.
+    assert(memcmp(original.data, saved.data, GET_LEN(&original)) == 0);
+  }
+  puts("PASS: LX3 camera suppression requires accepted permission; OFF/pending/fault rejected and legacy preserved");
+}
+
 int main(int argc, char **argv) {
   if (argc == 2 && strcmp(argv[1], "--release-audit") == 0) {
     release_audit(lx3_param());
@@ -913,5 +953,6 @@ int main(int argc, char **argv) {
   physical_permission_regressions();
   transaction_regressions();
   snapshot_state_regressions();
+  camera_suppression_permission_regressions();
   return 0;
 }

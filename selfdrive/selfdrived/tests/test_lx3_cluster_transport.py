@@ -23,7 +23,7 @@ class TestLx3ClusterTransport(unittest.TestCase):
                     HyundaiFlags=NS(CAMERA_SCC=NS(value=1)), CV=NS(MS_TO_KPH=3.6, MS_TO_MPH=2.236936),
                     _get_desire_and_lane_changing=lambda _: (0, 0))
     definitions(ROOT / 'opendbc_repo/opendbc/can/packer.py', self.env)
-    names = {'create_lfahda_cluster', 'create_lfa_icon_non_camera_scc', 'create_ccnc_messages', '_make_ccnc_cluster_msg',
+    names = {'create_suppress_lfa', 'create_lfahda_cluster', 'create_lfa_icon_non_camera_scc', 'create_ccnc_messages', '_make_ccnc_cluster_msg',
              '_make_ccnc_values', '_suppress_trailer_mode_warning', '_apply_radar_blink'}
     definitions(ROOT / 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py', self.env, names)
     self.packer = self.env['CANPacker'](str(DBC_FILE))
@@ -222,6 +222,40 @@ class TestLx3ClusterTransport(unittest.TestCase):
         values = dict(parser.vl[name])
         _, rebuilt, _ = self.env['_make_ccnc_cluster_msg'](self.packer, name, 0, values, True, raw[2])
         self.assertEqual(rebuilt, raw, (name, seq))
+
+  def test_actual_controller_suppression_branch_requires_lx3_accepted_session(self):
+    path = ROOT / 'opendbc_repo/opendbc/car/hyundai/carcontroller.py'
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    node = next(n for n in ast.walk(tree) if isinstance(n, ast.If) and
+                any(isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute) and
+                    x.func.attr == 'create_suppress_lfa' for x in ast.walk(n)) and
+                ast.unparse(n.test).startswith('self.frame % 5 == 0 and hda2'))
+    self.cs.cam_0x362 = dict.fromkeys(self.packer.dbc.name_to_msg['CAM_0x362'].sigs, 0)
+    self.cs.cam_0x2a4 = None
+    self.can.ACAN = 1
+    for lx3 in (False, True):
+      for session_active, lat_active in ((False, False), (False, True), (True, False), (True, True)):
+        self.cs.out.latEnabled, self.cc.latActive = session_active, lat_active
+        sends = []
+        context = NS(frame=5, camera_scc_params=3, packer=self.packer, CAN=self.can,
+                     lx3_cluster=self.cluster if lx3 else None)
+        env = dict(self.env, self=context, camera_scc=True, hda2=True, CC=self.cc, CS=self.cs, can_sends=sends,
+                   hyundaicanfd=NS(create_suppress_lfa=self.env['create_suppress_lfa']))
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), env)
+        self.assertEqual(len(sends), int(not lx3 or session_active), (lx3, session_active, lat_active))
+        if sends:
+          self.assertEqual((sends[0][0], sends[0][2]), (0x362, 1))
+
+  def test_display_dbc_has_no_overlapping_fields_and_covers_every_bit(self):
+    for name in Lx3ClusterTransport.SOURCES:
+      msg = self.packer.dbc.name_to_msg[name]
+      covered = bytearray(msg.size)
+      for sig in msg.sigs.values():
+        bits = bytearray(msg.size)
+        self.env['set_value'](bits, sig, (1 << sig.size) - 1)
+        self.assertFalse(any(a & b for a, b in zip(covered, bits)), (name, sig.name))
+        covered = bytearray(a | b for a, b in zip(covered, bits))
+      self.assertEqual(covered, bytes([255] * msg.size), name)
 
 
 if __name__ == '__main__':
