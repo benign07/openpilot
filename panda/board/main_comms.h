@@ -76,12 +76,26 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
   switch (req->request) {
     // Guarded LX3 transaction companion; universal health remains v16.
     case LX3_PERMISSION_REQUEST: {
-      COMPILE_TIME_ASSERT(sizeof(lx3_permission_t) == 12U);
+      COMPILE_TIME_ASSERT(sizeof(lx3_permission_t) == 20U);
       ENTER_CRITICAL();
       const lx3_permission_t state = safety_lx3_permission();
       EXIT_CRITICAL();
       (void)memcpy(resp, &state, sizeof(state));
       resp_len = sizeof(state);
+      break;
+    }
+    case LX3_EPOCH_HIGH_REQUEST:
+    case LX3_EPOCH_LOW_REQUEST: {
+      ENTER_CRITICAL();
+      (void)safety_lx3_set_transport_epoch(req->request == LX3_EPOCH_HIGH_REQUEST, req->param1, req->param2);
+      EXIT_CRITICAL();
+      break;
+    }
+    case LX3_ACK_HIGH_REQUEST:
+    case LX3_ACK_LOW_REQUEST: {
+      ENTER_CRITICAL();
+      safety_lx3_stage_transport_ack(req->request == LX3_ACK_HIGH_REQUEST, req->param1, req->param2);
+      EXIT_CRITICAL();
       break;
     }
     // **** 0xa8: get microsecond timer
@@ -360,7 +374,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
         heartbeat_lost = false;
         heartbeat_disabled = false;
         ENTER_CRITICAL();
-        safety_host_heartbeat(req->param1, req->param2);
+        safety_transport_heartbeat(req->param1, req->param2);
         EXIT_CRITICAL();
         break;
       }

@@ -23,7 +23,7 @@ class Companion(C.LittleEndianStructure):
   _pack_ = 1
   _fields_ = [('version', C.c_uint8), ('requested', C.c_uint8), ('accepted', C.c_uint8),
               ('counter', C.c_uint8), ('generation', C.c_uint16), ('age_ms', C.c_uint16),
-              ('allowed', C.c_uint8), ('phase', C.c_uint8), ('reserved', C.c_uint16)]
+              ('allowed', C.c_uint8), ('phase', C.c_uint8), ('reserved', C.c_uint16), ('epoch', C.c_uint64)]
 
 
 def library(path):
@@ -93,7 +93,7 @@ def run_case(lib, spec):
   def snapshot():
     value = Companion()
     lib.lx3_test_state(C.byref(value))
-    assert value.version == 1 and value.reserved == 0
+    assert value.version == 2 and value.reserved == 0 and value.epoch != 0
     assert not (value.phase == 1 and value.allowed)
     return value
   def publish(ms):
@@ -107,6 +107,7 @@ def run_case(lib, spec):
     p.lx3RequestAgeMs = value.age_ms
     p.lx3ControlsAllowed = p.controlsAllowed = bool(value.allowed)
     p.lx3PermissionPhase = value.phase
+    p.lx3TransportEpoch = value.epoch
     p.safetyRxChecksInvalid = not lib.lx3_test_rx_valid()
     case.ctx.sm.logMonoTime['pandaStates'] = 1_000_000_000 + ms * 1_000_000
   def step_host(ms):

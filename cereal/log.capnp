@@ -429,6 +429,11 @@ struct CanData {
   address @0 :UInt32;
   dat     @2 :Data;
   src     @3 :UInt8;
+  lx3Generation @4 :UInt16;
+  lx3PhysicalCounter @5 :UInt8;
+  lx3Mode @6 :UInt8;
+  lx3TransportEpoch @7 :UInt64;
+  lx3IdentityValid @8 :Bool;
 
   deprecated :group {
     busTime @1 :UInt16;
@@ -598,6 +603,7 @@ struct PandaState @0xa7649e2575e4591e {
   lx3RequestAgeMs @45 :UInt16;
   lx3ControlsAllowed @46 :Bool;
   lx3PermissionPhase @47 :UInt8;
+  lx3TransportEpoch @48 :UInt64;
 
   enum FaultStatus {
     none @0;
@@ -829,6 +835,10 @@ struct SelfdriveState {
   lx3AckGeneration @16 :UInt16;
   lx3AckPhysicalCounter @17 :UInt8;
   lx3AckValid @18 :Bool;
+  lx3AcceptedGeneration @19 :UInt16;
+  lx3AcceptedPhysicalCounter @20 :UInt8;
+  lx3AcceptedTransportEpoch @21 :UInt64;
+  lx3AckTransportEpoch @22 :UInt64;
 
   enum OpenpilotState @0xdbe58b96d2d1ac61 {
     disabled @0;

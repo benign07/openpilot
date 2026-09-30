@@ -34,6 +34,10 @@ static CANPacket_t fixture_packet(int address, int bus, int length) {
 }
 
 LX3_EXPORT void lx3_test_reset(void) {
+  if (safety_lx3_transport_epoch() == 0U) {
+    assert(safety_lx3_set_transport_epoch(true, 0x1234U, 0x5678U));
+    assert(safety_lx3_set_transport_epoch(false, 0x9ABCU, 0xDEF0U));
+  }
   assert(set_safety_hooks(SAFETY_HYUNDAI_CANFD, 190U | HYUNDAI_PARAM_LX3_ENGAGEMENT_GUARD) == 0);
   init_tests();
   set_timer(1000000U);

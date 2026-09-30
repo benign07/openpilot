@@ -1,5 +1,6 @@
 import time
 from cereal import log
+from openpilot.selfdrive.selfdrived.lx3_transport import GUARDED_ADDRESSES, identity_valid
 
 NO_TRAVERSAL_LIMIT = 2**64 - 1
 
@@ -26,7 +27,7 @@ def _get_writer_fields(schema):
   return _cached_writer_fields
 
 
-def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True):
+def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True, lx3_identity=None):
   """Convert list of CAN messages to Cap'n Proto serialized bytes.
 
   Args:
@@ -53,6 +54,13 @@ def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True):
       f._set_by_field(addr_f, msg[0])
       f._set_by_field(dat_f, msg[1])
       f._set_by_field(src_f, msg[2])
+      if (msgtype == 'sendcan' and msg[0] in GUARDED_ADDRESSES and lx3_identity is not None
+          and identity_valid(**lx3_identity)):
+        f.lx3Generation = lx3_identity['generation']
+        f.lx3PhysicalCounter = lx3_identity['counter']
+        f.lx3Mode = lx3_identity['mode']
+        f.lx3TransportEpoch = lx3_identity['epoch']
+        f.lx3IdentityValid = True
 
   return dat.to_bytes()
 

@@ -400,6 +400,11 @@ struct CarControl {
   orientationNED @13 :List(Float32);
   angularVelocity @14 :List(Float32);
   currentCurvature @17 :Float32;  # From vehicle model
+  lx3Generation @18 :UInt16;
+  lx3PhysicalCounter @19 :UInt8;
+  lx3Mode @20 :UInt8;
+  lx3TransportEpoch @21 :UInt64;
+  lx3IdentityValid @22 :Bool;
 
   cruiseControl @4 :CruiseControl;
   hudControl @5 :HUDControl;

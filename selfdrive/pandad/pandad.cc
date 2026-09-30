@@ -225,6 +225,7 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
       ps.setLx3RequestAgeMs(state->age_ms);
       ps.setLx3ControlsAllowed(state->controls_allowed != 0U);
       ps.setLx3PermissionPhase(state->phase);
+      ps.setLx3TransportEpoch(state->transport_epoch);
     }
   }
 
@@ -304,7 +305,9 @@ void process_panda_state(Panda *panda, PubMaster *pm, bool engaged, bool is_onro
   panda->send_heartbeat(lx3_guard ? (ss_fresh && engaged) : engaged, lx3_guard,
                         ack_valid ? ss.getLx3AckMode() : 0U,
                         ack_valid ? ss.getLx3AckGeneration() : 0U,
-                        ack_valid ? ss.getLx3AckPhysicalCounter() : 0U);
+                        ack_valid ? ss.getLx3AckPhysicalCounter() : 0U,
+                        lx3_host_heartbeat_epoch(ss_fresh, engaged, ack_valid,
+                          ss.getLx3AckTransportEpoch(), ss.getLx3AcceptedTransportEpoch()));
 }
 
 void process_peripheral_state(Panda *panda, PubMaster *pm, bool no_fan_control) {

@@ -236,6 +236,13 @@ bool can_check_checksum(CANPacket_t *packet) {
 }
 
 bool safety_tx_buffered_for_fwd = false;
+void can_reject(CANPacket_t *to_push) {
+  safety_tx_blocked += 1U;
+  to_push->returned = 0U;
+  to_push->rejected = 1U;
+  can_set_checksum(to_push);
+  rx_buffer_overflow += can_push(&can_rx_q, to_push) ? 0U : 1U;
+}
 void can_send(CANPacket_t *to_push, uint8_t bus_number, bool skip_tx_hook) {
   safety_tx_buffered_for_fwd = false;
   if (skip_tx_hook || safety_tx_hook(to_push) != 0) {
@@ -247,13 +254,7 @@ void can_send(CANPacket_t *to_push, uint8_t bus_number, bool skip_tx_hook) {
       process_can(CAN_NUM_FROM_BUS_NUM(bus_number));
     }
   } else {
-    safety_tx_blocked += 1U;
-    to_push->returned = 0U;
-    to_push->rejected = 1U;
-
-    // data changed
-    can_set_checksum(to_push);
-    rx_buffer_overflow += can_push(&can_rx_q, to_push) ? 0U : 1U;
+    can_reject(to_push);
   }
 }
 

@@ -1,6 +1,7 @@
 #include "selfdrive/pandad/panda.h"
 
 #include <unistd.h>
+#include <sys/random.h>
 
 #include <cassert>
 #include <stdexcept>
@@ -38,6 +39,27 @@ std::vector<std::string> Panda::list() {
 
 void Panda::set_safety_model(cereal::CarParams::SafetyModel safety_model, uint16_t safety_param) {
   handle->control_write(0xdc, (uint16_t)safety_model, safety_param);
+  if (safety_model == cereal::CarParams::SafetyModel::HYUNDAI_CANFD && (safety_param & 1024U) != 0U) {
+    const auto state = get_lx3_permission();
+    if (!state) {
+      LOGE("LX3 permission v2 unavailable; guarded engagement remains disabled");
+      return;
+    }
+    if (state->transport_epoch == 0U) {
+      uint64_t epoch = 0U;
+      do {
+        if (getrandom(&epoch, sizeof(epoch), 0) != static_cast<ssize_t>(sizeof(epoch))) {
+          throw std::runtime_error("LX3 transport incarnation unavailable");
+        }
+      } while (epoch == 0U);
+      handle->control_write(LX3_EPOCH_HIGH_REQUEST, epoch >> 48U, epoch >> 32U);
+      handle->control_write(LX3_EPOCH_LOW_REQUEST, epoch >> 16U, epoch);
+      const auto sealed = get_lx3_permission();
+      if (!sealed || sealed->transport_epoch != epoch) {
+        throw std::runtime_error("LX3 transport incarnation was not sealed");
+      }
+    }
+  }
 }
 
 void Panda::set_alternative_experience(uint16_t alternative_experience) {
@@ -140,14 +162,26 @@ void Panda::enable_deepsleep() {
   handle->control_write(0xfb, 0, 0);
 }
 
-void Panda::send_heartbeat(bool engaged, bool lx3_guard, uint8_t ack_mode, uint16_t ack_generation, uint8_t ack_counter) {
+void Panda::send_heartbeat(bool engaged, bool lx3_guard, uint8_t ack_mode, uint16_t ack_generation, uint8_t ack_counter, uint64_t ack_epoch) {
+  pack_heartbeat(engaged, lx3_guard, ack_mode, ack_generation, ack_counter, ack_epoch,
+                 [&](uint8_t request, uint16_t value, uint16_t index) {
+                   handle->control_write(request, value, index);
+                 });
+}
+
+void Panda::pack_heartbeat(bool engaged, bool lx3_guard, uint8_t ack_mode, uint16_t ack_generation,
+                           uint8_t ack_counter, uint64_t ack_epoch,
+                           const std::function<void(uint8_t, uint16_t, uint16_t)> &write_func) {
   uint16_t value = engaged ? 1U : 0U;
   uint16_t generation = 0U;
   if (lx3_guard) {
     generation = ack_mode <= 2U ? ack_generation : 0U;
     value = lx3_heartbeat_value(engaged, ack_mode, generation, ack_counter);
+    const uint64_t binding = lx3_heartbeat_binding(ack_epoch, value, generation);
+    write_func(LX3_ACK_HIGH_REQUEST, binding >> 48U, binding >> 32U);
+    write_func(LX3_ACK_LOW_REQUEST, binding >> 16U, binding);
   }
-  handle->control_write(0xf3, value, generation);
+  write_func(0xf3, value, generation);
 }
 
 void Panda::set_can_speed_kbps(uint16_t bus, uint16_t speed) {
@@ -206,6 +240,27 @@ void Panda::pack_can_buffer(const capnp::List<cereal::CanData>::Reader &can_data
 
     // set checksum
     ((can_header *) &send_buf[pos])->checksum = calculate_checksum(&send_buf[pos], msg_size);
+
+    const lx3_tx_identity_t identity = {cmsg.getLx3TransportEpoch(), cmsg.getLx3Generation(),
+      cmsg.getLx3PhysicalCounter(), cmsg.getLx3Mode(), cmsg.getLx3IdentityValid()};
+    if (lx3_tx_guarded_address(cmsg.getAddress()) && lx3_tx_identity_valid(&identity)) {
+      uint8_t prefix[8], epoch[8];
+      lx3_tx_encode(&identity, &send_buf[pos], msg_size, prefix, epoch);
+      constexpr size_t marker_size = sizeof(can_header) + 8U;
+      memmove(&send_buf[pos + 2U * marker_size], &send_buf[pos], msg_size);
+      for (unsigned int i = 0U; i < 2U; i++) {
+        can_header marker = {};
+        marker.bus = LX3_TX_MARKER_BUS;
+        marker.addr = i == 0U ? LX3_TX_PREFIX_ADDR : LX3_TX_EPOCH_ADDR;
+        marker.extended = 1U;
+        marker.data_len_code = 8U;
+        uint8_t *start = &send_buf[pos + i * marker_size];
+        memcpy(start, &marker, sizeof(marker));
+        memcpy(start + sizeof(marker), i == 0U ? prefix : epoch, 8U);
+        ((can_header *)start)->checksum = calculate_checksum(start, marker_size);
+      }
+      pos += 2U * marker_size;
+    }
 
     pos += msg_size;
 

@@ -32,6 +32,11 @@ static void fresh_mdps(int angle, int torque) {
 }
 
 static void reset(uint16_t param) {
+  // Explicit desktop boot-incarnation fixture; no real board configuration.
+  if (safety_lx3_transport_epoch() == 0U) {
+    assert(safety_lx3_set_transport_epoch(true, 0x1234U, 0x5678U));
+    assert(safety_lx3_set_transport_epoch(false, 0x9ABCU, 0xDEF0U));
+  }
   assert(set_safety_hooks(SAFETY_HYUNDAI_CANFD, param) == 0);
   init_tests();
   set_timer(1000000U);
@@ -524,15 +529,15 @@ static void pending_lateral(void) {
 }
 
 static void transaction_regressions(void) {
-  assert(sizeof(lx3_permission_t) == 12U);
+  assert(sizeof(lx3_permission_t) == 20U);
   pending_lateral();
   lx3_permission_t s = safety_lx3_permission();
   assert(lx3_permission_valid(&s, sizeof(s)));
-  for (int len = -1; len <= 13; len++) {
-    if (len != 12) assert(!lx3_permission_valid(&s, len));
+  for (int len = -1; len <= 21; len++) {
+    if (len != 20) assert(!lx3_permission_valid(&s, len));
   }
   assert(!lx3_permission_valid(NULL, 12));
-  for (unsigned int field = 0; field < 9U; field++) {
+  for (unsigned int field = 0; field < 11U; field++) {
     lx3_permission_t invalid = s;
     if (field == 0U) invalid.version = 0;
     if (field == 1U) invalid.requested_mode = 3;
@@ -543,6 +548,8 @@ static void transaction_regressions(void) {
     if (field == 6U) invalid.phase = 3;
     if (field == 7U) invalid.reserved = 1;
     if (field == 8U) invalid.controls_allowed = 2;
+    if (field == 9U) invalid.transport_epoch = 0;
+    if (field == 10U) invalid.version = 1;  // Previous companion has no epoch.
     assert(!lx3_permission_valid(&invalid, sizeof(invalid)));
   }
   for (unsigned int counter = 0; counter < 256U; counter++) {
@@ -550,7 +557,7 @@ static void transaction_regressions(void) {
     assert((encoded & 0xF8U) == LX3_HEARTBEAT_TAG && (encoded >> 8U) == counter && (encoded & 7U) == 5U);
     assert(lx3_heartbeat_value(false, 2, 0, (uint8_t)counter) == LX3_HEARTBEAT_TAG);
   }
-  assert(s.version == 1U && s.phase == 1U && s.requested_mode == 1U && s.accepted_mode == 0U);
+  assert(s.version == 2U && s.phase == 1U && s.requested_mode == 1U && s.accepted_mode == 0U);
   assert(s.physical_counter == lx3_button_counter && s.generation != 0U && s.age_ms == 0U);
   CANPacket_t angle = angle_command(true);
   angle.data[6] = 0U;
@@ -643,12 +650,17 @@ static void transaction_regressions(void) {
   safety_host_heartbeat(ack_value(1, true, s.physical_counter), s.generation);
   assert(!controls_allowed);
 
-  // Generation zero is reserved, including wrap. Button counter wraps normally.
+  // Never reuse generation in this boot; exhausted identity requires reboot.
   reset(lx3_param()); physical_baseline();
+  const uint16_t fixture_generation = lx3_request_generation;
   lx3_request_generation = UINT16_MAX;
   physical_button(128); physical_button(0);
-  assert(lx3_pending && lx3_request_generation == 1U && lx3_request_counter == 2U);
-  acknowledge_request();
+  assert(!lx3_pending && !controls_allowed && lx3_generation_exhausted);
+  reset(lx3_param()); physical_baseline(); physical_button(128); physical_button(0);
+  assert(!lx3_pending && !controls_allowed && lx3_request_generation == UINT16_MAX);
+  // Only this synthetic fixture restores state for unrelated later tests.
+  lx3_generation_exhausted = false;
+  lx3_request_generation = fixture_generation;
 
   // RES/SET in combined is speed adjustment, not another permission transaction.
   reset(lx3_param()); physical_baseline();

@@ -18,6 +18,7 @@ from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
+from openpilot.selfdrive.selfdrived.lx3_transport import prepare_sendcan
 from openpilot.selfdrive.car.cruise import VCruiseCarrot
 from openpilot.selfdrive.car.car_specific import MockCarState
 from openpilot.selfdrive.selfdrived.lx3_engagement import lx3_alternative_experience
@@ -271,7 +272,11 @@ class Car:
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       model_v2 = self.sm['modelV2'] if self.sm.valid['modelV2'] and self.sm.alive['modelV2'] else None
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, model_v2)
-      self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
+      identity = None
+      if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
+        can_sends, identity = prepare_sendcan(can_sends, CC, self.sm.all_checks(['carControl']) and CS.canValid)
+      self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid,
+                                                 lx3_identity=identity))
 
       self.CC_prev = CC
 

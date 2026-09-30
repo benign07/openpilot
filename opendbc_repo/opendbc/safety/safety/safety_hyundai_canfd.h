@@ -27,6 +27,7 @@ static int lx3_requested_mode = 0;
 static bool lx3_pending = false;
 // Never reset this on a safety-mode change: old ACKs must not match a new request.
 static uint16_t lx3_request_generation = 0U;
+static bool lx3_generation_exhausted = false;
 static uint8_t lx3_request_counter = 0U;
 static uint32_t lx3_request_us = 0U;
 static bool lx3_button_seen = false;
@@ -556,8 +557,12 @@ static void lx3_clear_session(void) {
 }
 
 static void lx3_next_generation(void) {
-  lx3_request_generation++;
-  if (lx3_request_generation == 0U) lx3_request_generation = 1U;
+  if (lx3_request_generation == UINT16_MAX) {
+    lx3_generation_exhausted = true;
+    lx3_clear_session();
+  } else {
+    lx3_request_generation++;
+  }
 }
 
 static void lx3_revoke_permission(void) {
@@ -584,7 +589,8 @@ static void lx3_permission_maintenance(void) {
 }
 
 static bool lx3_request_context_valid(void) {
-  return hyundai_camera_scc && hyundai_canfd_hda2 && hyundai_hybrid_gas_signal && hyundai_longitudinal &&
+  return !lx3_generation_exhausted && (safety_lx3_transport_epoch() != 0U) &&
+         hyundai_camera_scc && hyundai_canfd_hda2 && hyundai_hybrid_gas_signal && hyundai_longitudinal &&
          lx3_button_seen && lx3_button_ready && (microsecond_timer_get() - lx3_button_us <= 200000U) &&
          lx3_angle_context_valid(0) && !safety_rx_checks_invalid && !relay_malfunction &&
          !brake_pressed && !regen_braking &&
@@ -658,6 +664,7 @@ static lx3_permission_t lx3_permission_snapshot(void) {
     .controls_allowed = controls_allowed ? 1U : 0U,
     .phase = lx3_pending ? 1U : ((controls_allowed && (lx3_mode != 0)) ? 2U : 0U),
     .reserved = 0U,
+    .transport_epoch = safety_lx3_transport_epoch(),
   };
   return state;
 }

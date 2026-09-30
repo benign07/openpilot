@@ -34,6 +34,8 @@ class Lx3Engagement:
     self.pending_generation = 0
     self.accepted_counter = 0
     self.accepted_generation = 0
+    self.pending_epoch = 0
+    self.accepted_epoch = 0
     self.rejection = None
     self.unbound_rejection = None
     self.clear_ack()
@@ -43,27 +45,29 @@ class Lx3Engagement:
     self.ack_generation = 0
     self.ack_counter = 0
     self.ack_valid = False
+    self.ack_epoch = 0
 
   def begin_step(self, now):
     self.clear_ack()
     # Keep a rejection long enough for the 10Hz transport to observe it. An old
     # rejection cannot consume a different generation's newly pending request.
     if self.rejection is not None:
-      generation, counter, stamp = self.rejection
+      generation, counter, stamp, epoch = self.rejection
       if 0 <= now - stamp < 0.5:
-        self.set_ack(EngagementMode.OFF, generation, counter)
+        self.set_ack(EngagementMode.OFF, generation, counter, epoch)
       else:
         self.rejection = None
     if self.unbound_rejection is not None and not 0 <= now - self.unbound_rejection[2] < 0.5:
       self.unbound_rejection = None
 
-  def set_ack(self, mode, generation, counter):
+  def set_ack(self, mode, generation, counter, epoch=None):
     self.ack_mode, self.ack_generation, self.ack_counter = mode, generation, counter
     self.ack_valid = generation != 0
+    self.ack_epoch = self.pending_epoch if epoch is None else epoch
 
   def reject(self, now):
     if self.pending_generation != 0:
-      self.rejection = self.pending_generation, self.pending_counter, now
+      self.rejection = self.pending_generation, self.pending_counter, now, self.pending_epoch
       self.set_ack(EngagementMode.OFF, self.pending_generation, self.pending_counter)
       self.unbound_rejection = None
     elif self.pending is not None:
@@ -75,6 +79,8 @@ class Lx3Engagement:
     self.accepted_counter = 0
     self.pending = None
     self.pending_generation = 0
+    self.pending_epoch = 0
+    self.accepted_epoch = 0
 
   def observe_rejection(self, panda, now):
     if self.unbound_rejection is None or panda is None:
@@ -82,13 +88,14 @@ class Lx3Engagement:
     mode, counter, stamp = self.unbound_rejection
     if (0 <= now - stamp < 0.5 and panda.lx3PermissionPhase == 1 and panda.lx3RequestAgeMs < 500 and
         panda.lx3RequestedMode == int(mode) and panda.lx3PhysicalCounter == counter):
-      self.rejection = panda.lx3RequestGeneration, counter, now
-      self.set_ack(EngagementMode.OFF, panda.lx3RequestGeneration, counter)
+      self.rejection = panda.lx3RequestGeneration, counter, now, panda.lx3TransportEpoch
+      self.set_ack(EngagementMode.OFF, panda.lx3RequestGeneration, counter, panda.lx3TransportEpoch)
       self.unbound_rejection = None
       if self.pending == mode and self.pending_counter == counter:
         # A replayed/default producer must not overwrite a retained refusal of
         # this same physical gesture with an enable ACK in the same frame.
         self.pending_generation = panda.lx3RequestGeneration
+        self.pending_epoch = panda.lx3TransportEpoch
         self.reject(now)
         return True
     return False
@@ -130,6 +137,7 @@ class Lx3Engagement:
         self.pending = candidate
         self.pending_counter = int(b.lx3PhysicalCounter)
         self.pending_generation = 0
+        self.pending_epoch = 0
         self.pending_since = now
     if candidate is not None:
       return candidate, True
@@ -145,8 +153,10 @@ class Lx3Engagement:
     self.mode = candidate if enabled else EngagementMode.OFF
     self.accepted_generation = self.pending_generation if enabled else 0
     self.accepted_counter = self.pending_counter if enabled else 0
+    self.accepted_epoch = self.pending_epoch if enabled else 0
     self.pending = None
     self.pending_generation = 0
+    self.pending_epoch = 0
     self.rejection = None
     self.unbound_rejection = None
     self.clear_ack()
@@ -192,7 +202,8 @@ def lx3_permission_sample(pandas):
   if len(active) != 1:
     return None
   p = active[0]
-  if getattr(p, 'lx3PermissionVersion', 0) != 1 or not 1 <= p.lx3RequestGeneration <= 65535:
+  if (getattr(p, 'lx3PermissionVersion', 0) != 2 or not 1 <= p.lx3RequestGeneration <= 65535
+      or not 1 <= getattr(p, 'lx3TransportEpoch', 0) <= 2**64 - 1):
     return None
   requested, accepted, phase = p.lx3RequestedMode, p.lx3AcceptedMode, p.lx3PermissionPhase
   if requested not in (0, 1, 2) or accepted not in (0, 1, 2) or phase not in (0, 1, 2):
@@ -205,10 +216,11 @@ def lx3_permission_sample(pandas):
   return p if idle or pending or enabled else None
 
 
-def lx3_permission_matches(panda, mode, generation, counter, accepted=False):
+def lx3_permission_matches(panda, mode, generation, counter, accepted=False, epoch=None):
   if panda is None or generation == 0:
     return False
-  return (panda.lx3RequestGeneration == generation and panda.lx3PhysicalCounter == counter and
+  return ((epoch is None or panda.lx3TransportEpoch == epoch) and
+          panda.lx3RequestGeneration == generation and panda.lx3PhysicalCounter == counter and
           panda.lx3RequestedMode == int(mode) and
           (panda.lx3PermissionPhase == 2 and panda.lx3ControlsAllowed and panda.lx3AcceptedMode == int(mode)
            if accepted else panda.lx3PermissionPhase == 1 and not panda.lx3ControlsAllowed))

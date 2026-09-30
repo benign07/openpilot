@@ -538,6 +538,10 @@ class SelfdriveD:
       ss.lx3AckGeneration = self.lx3_engagement.ack_generation
       ss.lx3AckPhysicalCounter = self.lx3_engagement.ack_counter
       ss.lx3AckValid = self.lx3_engagement.ack_valid
+      ss.lx3AcceptedGeneration = self.lx3_engagement.accepted_generation
+      ss.lx3AcceptedPhysicalCounter = self.lx3_engagement.accepted_counter
+      ss.lx3AcceptedTransportEpoch = self.lx3_engagement.accepted_epoch
+      ss.lx3AckTransportEpoch = self.lx3_engagement.ack_epoch
     ss.engageable = not self.events.contains(ET.NO_ENTRY)
     ss.experimentalMode = self.experimental_mode
     ss.personality = self.personality
@@ -620,6 +624,7 @@ class SelfdriveD:
         intent.mode = EngagementMode.OFF
         intent.accepted_generation = 0
         intent.accepted_counter = 0
+        intent.accepted_epoch = 0
         # One state-machine transition per frame preserves the disengage alert.
         # The pending request is associated and entered on the next frame.
         return
@@ -636,6 +641,7 @@ class SelfdriveD:
       if (panda is not None and intent.pending_generation == 0 and panda.lx3PermissionPhase == 1 and
           panda.lx3RequestedMode == int(candidate) and panda.lx3PhysicalCounter == intent.pending_counter):
         intent.pending_generation = panda.lx3RequestGeneration
+        intent.pending_epoch = panda.lx3TransportEpoch
       if not healthy:
         self.events.add(EventName.controlsMismatch)
       barriers = any(self.events.contains(et) for et in (ET.NO_ENTRY, ET.USER_DISABLE, ET.SOFT_DISABLE, ET.IMMEDIATE_DISABLE))
@@ -654,8 +660,10 @@ class SelfdriveD:
         # is no enable or ACK until the same physical request is associated.
         self.enabled, self.active = self.state_machine.update(self.events)
         return
-      accepted = lx3_permission_matches(panda, candidate, intent.pending_generation, intent.pending_counter, accepted=True)
-      pending = lx3_permission_matches(panda, candidate, intent.pending_generation, intent.pending_counter)
+      accepted = lx3_permission_matches(panda, candidate, intent.pending_generation, intent.pending_counter,
+                                        accepted=True, epoch=intent.pending_epoch)
+      pending = lx3_permission_matches(panda, candidate, intent.pending_generation, intent.pending_counter,
+                                       epoch=intent.pending_epoch)
       if not accepted and not pending:
         self.events.add(EventName.controlsMismatch)
       elif not accepted:
@@ -675,7 +683,7 @@ class SelfdriveD:
       return
 
     if not healthy or not lx3_permission_matches(panda, intent.mode, intent.accepted_generation,
-                                                intent.accepted_counter, accepted=True):
+                                                intent.accepted_counter, accepted=True, epoch=intent.accepted_epoch):
       self.events.add(EventName.controlsMismatch)
     if self.enabled and not self.active and any(self.events.contains(et) for et in
                                                 (ET.NO_ENTRY, ET.USER_DISABLE, ET.SOFT_DISABLE, ET.IMMEDIATE_DISABLE)):

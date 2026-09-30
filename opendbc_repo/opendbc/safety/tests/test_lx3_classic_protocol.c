@@ -12,7 +12,7 @@ int main(void) {
   CANPacket_t packet = {0};
   assert(sizeof(packet.data) == 8U);
   assert(HEALTH_PACKET_VERSION == 16 && sizeof(struct health_t) == 58U);
-  assert(sizeof(lx3_permission_t) == 12U);
+  assert(sizeof(lx3_permission_t) == 20U);
   assert(set_safety_hooks(SAFETY_NOOUTPUT, 0) == 0);
   assert(!safety_lx3_guarded());
   const lx3_permission_t state = safety_lx3_permission();

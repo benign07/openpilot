@@ -193,6 +193,11 @@ removal, EPS acceptance or vehicle control qualification.
 
 ## Late follow-up and remaining transport scope
 
+This section records the state before the subsequent
+[command identity / boot-incarnation transport v2](LX3_COMMAND_IDENTITY_20261001.md).
+The later implementation binds each owned payload to its originating accepted
+session; within-session semantic age and vehicle qualification remain separate.
+
 The buffered-delivery fix passes414 actual-C/production-host schedules, including
 54 physically requested/acknowledged sessions revoked on an excessive output
 step.5,184 later stale host goals are blocked; the host observes the revocation

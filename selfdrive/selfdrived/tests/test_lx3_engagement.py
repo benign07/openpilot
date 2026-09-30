@@ -103,7 +103,8 @@ class TestLx3Session(unittest.TestCase):
     ENV['time'] = NS(monotonic=lambda: self.now, monotonic_ns=lambda: int(self.now * 1e9))
     self.panda = NS(safetyModel='hyundaiCanfd', safetyParam=LX3_SAFETY_PARAM, alternativeExperience=0,
                     controlsAllowed=False, safetyRxChecksInvalid=False, faults=[],
-                    lx3PermissionVersion=1, lx3RequestedMode=0, lx3AcceptedMode=0, lx3PhysicalCounter=0,
+                    lx3PermissionVersion=2, lx3TransportEpoch=0x123456789ABCDEF0,
+                    lx3RequestedMode=0, lx3AcceptedMode=0, lx3PhysicalCounter=0,
                     lx3RequestGeneration=1, lx3RequestAgeMs=0, lx3ControlsAllowed=False, lx3PermissionPhase=0)
     self.ctx = NS(lx3_engagement=Lx3Engagement(), car_state_fresh=True,
                   CP=NS(openpilotLongitudinalControl=True, steerControlType='angle', alternativeExperience=0,

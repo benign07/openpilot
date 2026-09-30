@@ -2,6 +2,11 @@
 
 ## 최신 상태: 전체 빌드·과거 CAN·Claude 상호 검토
 
+10월1일 오전 후속은 [명령 식별자·부팅 경계](LX3_COMMAND_IDENTITY_20261001.md)를
+우선한다. companion v2와 accepted identity를 실제 CAN payload 전송 경로까지
+연결했다. 아래의 “generation이 payload에 없다”는 내용은 이 수정 이전 단계다.
+같은 세션 내 지연된 명령의 나이와 실제 EPS/OEM 전환은 여전히 별도 확인 대상이다.
+
 10월1일 후속 구조는 [물리 요청/host ACK 거래](LX3_PERMISSION_TRANSACTION_20261001.md),
 [버퍼 전달 각도 제한](LX3_BUFFERED_ANGLE_DELIVERY_20261001.md),
 [표시 소유권](LX3_CLUSTER_TRANSPORT_REVIEW_20261001.md),

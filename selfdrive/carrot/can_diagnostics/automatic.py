@@ -167,7 +167,8 @@ def host_disabled_panda_allowed(services, now):
   for panda in pandas:
     guarded = panda.get('safetyModel') == 'hyundaiCanfd' and type(panda.get('safetyParam')) is int and bool(panda['safetyParam'] & 1024)
     version = panda.get('lx3PermissionVersion')
-    if version == 1:
+    epoch = panda.get('lx3TransportEpoch')
+    if version == 1 or (version == 2 and type(epoch) is int and 1 <= epoch <= 2**64 - 1):
       permissions.append(panda.get('lx3ControlsAllowed'))
     elif guarded or version not in (None, 0):
       # Protocol0 on this policy includes a failed/short companion read. The
@@ -186,9 +187,11 @@ class AutoRecorder:
   PERMISSION_FIELDS = {
     'pandaStates': ('safetyModel', 'safetyParam', 'lx3PermissionVersion', 'lx3RequestedMode',
                     'lx3AcceptedMode', 'lx3PhysicalCounter', 'lx3RequestGeneration',
-                    'lx3ControlsAllowed', 'lx3PermissionPhase'),
+                    'lx3ControlsAllowed', 'lx3PermissionPhase', 'lx3TransportEpoch'),
     'selfdriveState': ('enabled', 'active', 'state', 'lx3EngagementMode', 'lx3AckMode',
-                       'lx3AckGeneration', 'lx3AckPhysicalCounter', 'lx3AckValid'),
+                       'lx3AckGeneration', 'lx3AckPhysicalCounter', 'lx3AckValid', 'lx3AckTransportEpoch',
+                       'lx3AcceptedGeneration', 'lx3AcceptedPhysicalCounter', 'lx3AcceptedTransportEpoch'),
+    'carControl': ('lx3IdentityValid', 'lx3Generation', 'lx3PhysicalCounter', 'lx3Mode', 'lx3TransportEpoch'),
   }
 
   def __init__(self, store, metadata):
@@ -224,8 +227,10 @@ class AutoRecorder:
       timestamp = service.get('mono_ns', 0)
       available = fresh(services, name, now, .25)
       data = service.get('data', [] if name == 'pandaStates' else {})
-      value = ([{key: panda.get(key) for key in fields} for panda in data] if name == 'pandaStates'
-               else {key: data.get(key) for key in fields})
+      if name == 'carControl' and data.get('lx3IdentityValid') is None:
+        continue  # Historical producers have no immutable identity to observe.
+      value = ([{key: panda[key] for key in fields if key in panda} for panda in data] if name == 'pandaStates'
+               else {key: data[key] for key in fields if key in data})
       current = {'fresh_valid': available, 'data': value}
       previous_time = self.permission_times.get(name)
       gap = timestamp - previous_time if previous_time is not None and timestamp > previous_time else None

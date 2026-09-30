@@ -14,6 +14,7 @@
 #include "panda/board/health.h"
 #include "panda/board/can.h"
 #include "opendbc_repo/opendbc/safety/lx3_permission.h"
+#include "opendbc_repo/opendbc/safety/lx3_transport.h"
 #include "selfdrive/pandad/panda_comms.h"
 
 #define USB_TX_SOFT_LIMIT   (0x100U)
@@ -79,7 +80,7 @@ public:
   void set_power_saving(bool power_saving);
   void enable_deepsleep();
   void send_heartbeat(bool engaged, bool lx3_guard=false, uint8_t ack_mode=0U,
-                      uint16_t ack_generation=0U, uint8_t ack_counter=0U);
+                      uint16_t ack_generation=0U, uint8_t ack_counter=0U, uint64_t ack_epoch=0U);
   void set_can_speed_kbps(uint16_t bus, uint16_t speed);
   void set_can_fd_auto(uint16_t bus, bool enabled);
   void set_data_speed_kbps(uint16_t bus, uint16_t speed);
@@ -94,6 +95,9 @@ protected:
   uint32_t receive_buffer_size = 0;
 
   Panda() {}
+  static void pack_heartbeat(bool engaged, bool lx3_guard, uint8_t ack_mode,
+                             uint16_t ack_generation, uint8_t ack_counter, uint64_t epoch,
+                             const std::function<void(uint8_t, uint16_t, uint16_t)> &write_func);
   void pack_can_buffer(const capnp::List<cereal::CanData>::Reader &can_data_list,
                          std::function<void(uint8_t *, size_t)> write_func);
   bool unpack_can_buffer(uint8_t *data, uint32_t &size, std::vector<can_frame> &out_vec);

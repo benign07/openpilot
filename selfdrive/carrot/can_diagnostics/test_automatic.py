@@ -56,6 +56,18 @@ class RuntimeTests(unittest.TestCase):
     self.assertIsNone(result[0]['lx3PhysicalCounter'])
     self.assertEqual(result[1]['lx3PhysicalCounter'], 254)
     self.assertTrue(result[1]['lx3PhysicalValid'])
+
+  def test_v2_epoch_observation_preserves_v1_history_and_unknown_future(self):
+    sample = services()
+    panda = {'safetyModel': 'hyundaiCanfd', 'safetyParam': 1214, 'lx3PermissionVersion': 2,
+             'lx3TransportEpoch': 0x123456789ABCDEF0, 'lx3ControlsAllowed': True, 'controlsAllowed': False}
+    sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': [panda]}
+    self.assertTrue(host_disabled_panda_allowed(sample, 100))
+    for epoch in (0, -1, True, None, 2**64):
+      panda['lx3TransportEpoch'] = epoch
+      self.assertIsNone(host_disabled_panda_allowed(sample, 100))
+    panda.update(lx3PermissionVersion=3, lx3TransportEpoch=1)
+    self.assertIsNone(host_disabled_panda_allowed(sample, 100))
   def test_permission_observation_is_not_engagement_authority(self):
     sample = services()
     sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': [{'controlsAllowed': True}]}
@@ -152,6 +164,25 @@ class RecorderTests(unittest.TestCase):
     changes = [r for r in self.rows() if r.get('name') == 'lx3_permission_observation' and r['service'] == 'selfdriveState']
     self.assertEqual([r['after']['fresh_valid'] for r in changes], [True, False, True])
     self.assertEqual(changes[-1]['publication_gap_ns'], 500_000_000)
+
+  def test_v2_producer_identity_changes_are_recorded_without_retagging(self):
+    self.store.chunk_bytes = 20_000
+    sample = services()
+    origin = sample['carControl']['data']
+    epoch = 2**63 + 12345
+    origin.update(lx3IdentityValid=True, lx3Generation=8, lx3PhysicalCounter=250,
+                  lx3Mode=1, lx3TransportEpoch=epoch)
+    self.recorder.update(sample, 100)
+    # New native identity never rewrites the old producer identity observation.
+    sample['pandaStates'] = {'mono_ns': 100_100_000_000, 'valid': True,
+                            'data': [{'lx3PermissionVersion': 2, 'lx3TransportEpoch': epoch + 1}]}
+    self.recorder.update(sample, 100.1)
+    origin.update(lx3IdentityValid=False, lx3Generation=0, lx3TransportEpoch=0)
+    sample['carControl']['mono_ns'] += 200_000_000
+    self.recorder.update(sample, 100.2)
+    changes = [r for r in self.rows() if r.get('name') == 'lx3_permission_observation' and r['service'] == 'carControl']
+    self.assertEqual([r['after']['data']['lx3Generation'] for r in changes], [8, 0])
+    self.assertEqual(changes[0]['after']['data']['lx3TransportEpoch'], epoch)
 
   def test_permission_burst_cannot_bypass_chunk_budget(self):
     sample = services()

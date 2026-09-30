@@ -4,6 +4,47 @@
 #include "can.h"
 #include "lx3_permission.h"
 
+// Host-generated random incarnation, sealed once per firmware boot. Retained
+// across safety-mode and comms resets; never grants actuator permission.
+static uint64_t lx3_transport_epoch = 0U;
+static uint32_t lx3_transport_epoch_high = 0U;
+static bool lx3_transport_epoch_staged = false;
+static uint64_t lx3_transport_ack_binding = 0U;
+static bool lx3_transport_ack_high = false;
+static bool lx3_transport_ack_ready = false;
+static inline void safety_lx3_reset_transport_ack(void) {
+  lx3_transport_ack_high = false;
+  lx3_transport_ack_ready = false;
+}
+static inline void safety_lx3_stage_transport_ack(bool high, uint16_t first, uint16_t second) {
+  const uint32_t part = ((uint32_t)first << 16U) | (uint32_t)second;
+  if (high) {
+    lx3_transport_ack_binding = (uint64_t)part << 32U;
+    lx3_transport_ack_high = true;
+    lx3_transport_ack_ready = false;
+  } else {
+    lx3_transport_ack_ready = lx3_transport_ack_high;
+    lx3_transport_ack_binding |= part;
+    lx3_transport_ack_high = false;
+  }
+}
+static inline uint64_t safety_lx3_transport_epoch(void) { return lx3_transport_epoch; }
+static inline bool safety_lx3_set_transport_epoch(bool high, uint16_t first, uint16_t second) {
+  if ((lx3_transport_epoch != 0U) || controls_allowed) return false;
+  const uint32_t part = ((uint32_t)first << 16U) | (uint32_t)second;
+  if (high) {
+    lx3_transport_epoch_high = part;
+    lx3_transport_epoch_staged = true;
+    return true;
+  }
+  if (!lx3_transport_epoch_staged) return false;
+  const uint64_t epoch = ((uint64_t)lx3_transport_epoch_high << 32U) | part;
+  lx3_transport_epoch_staged = false;
+  if (epoch == 0U) return false;
+  lx3_transport_epoch = epoch;
+  return true;
+}
+
 // include the safety policies.
 #include "safety/safety_defaults.h"
 #include "safety/safety_honda.h"
@@ -85,6 +126,18 @@ static inline void safety_host_heartbeat(uint16_t value, uint16_t generation) {
 #endif
   (void)generation;
   heartbeat_engaged = (value == 1U);
+}
+
+static inline void safety_transport_heartbeat(uint16_t value, uint16_t generation) {
+  const bool valid = lx3_transport_ack_ready && (lx3_transport_epoch != 0U) &&
+    (lx3_transport_ack_binding == lx3_heartbeat_binding(lx3_transport_epoch, value, generation));
+  safety_lx3_reset_transport_ack();
+  // Disabled/legacy heartbeat remains able to revoke. It cannot grant.
+  if (safety_lx3_guarded() && ((value & 1U) != 0U) && !valid) {
+    safety_host_heartbeat(0U, 0U);
+  } else {
+    safety_host_heartbeat(value, generation);
+  }
 }
 
 uint32_t GET_BYTES(const CANPacket_t *msg, int start, int len) {

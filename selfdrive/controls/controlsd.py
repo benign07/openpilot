@@ -31,6 +31,7 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.selfdrive.carrot.carrot_controls import CarrotControls
 from openpilot.selfdrive.selfdrived.lx3_engagement import lx3_control_permissions
+from openpilot.selfdrive.selfdrived.lx3_transport import stamp_control_identity
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -139,6 +140,7 @@ class Controls:
       CC.enabled = longitudinal
       CC.longActive = longitudinal and self.CP.openpilotLongitudinalControl and not any(
         e.overrideLongitudinal for e in self.sm['onroadEvents'])
+      stamp_control_identity(CC, ss, self.sm.all_checks(['selfdriveState', 'carState', 'modelV2', 'onroadEvents']))
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
