@@ -337,6 +337,14 @@ static void rejected_tx_regressions(void) {
 }
 
 static void physical_permission_regressions(void) {
+  reset(lx3_param());
+  CANPacket_t inactive_acc = accel_command();
+  inactive_acc.data[8] = 0U;
+  assert(safety_tx_hook(&inactive_acc));  // OFF/zero acceleration keepalive.
+  for (unsigned int stop = 1U; stop <= 3U; stop++) {
+    inactive_acc.data[23] = stop;
+    assert(!safety_tx_hook(&inactive_acc));  // OFF must not carry a stop/error request.
+  }
   for (int alternative = 0; alternative <= 1; alternative++) {
     reset(lx3_param());
     set_alternative_experience(alternative);

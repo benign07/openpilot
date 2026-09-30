@@ -865,7 +865,9 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
 
     if (hyundai_canfd_lx3_guard) {
       const int cruise_status = (GET_BYTE(to_send, 8) >> 4) & 0x7U;
-      const bool inactive = (cruise_status == 0) && (desired_accel_raw == 0) && (desired_accel_val == 0);
+      const int stop_request = GET_BYTE(to_send, 23) & 0x3U;
+      const bool inactive = (cruise_status == 0) && (desired_accel_raw == 0) && (desired_accel_val == 0) &&
+                            (stop_request == 0);
       const bool active_mode = (cruise_status == 1) || (cruise_status == 2) || (cruise_status == 4);
       // The common helper in this fork self-authorizes on nonzero accel.
       // Keep this opt-in policy independent of that legacy side effect.

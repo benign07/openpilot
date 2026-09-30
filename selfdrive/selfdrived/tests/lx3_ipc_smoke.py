@@ -29,11 +29,16 @@ def main():
     time.sleep(1 / SERVICE_LIST['pandaStates'].frequency)
   assert sm.all_checks(['pandaStates']), (sm.alive,sm.valid,sm.freq_ok)
   def step(button=None,gas_override=False):
+    # Keep the ACK stream at its real service cadence throughout the test.
+    # A burst of synthetic steps would make SubMaster correctly reject an
+    # over-frequency Panda stream, rather than test the requested transition.
+    time.sleep(1 / SERVICE_LIST['pandaStates'].frequency)
     publish_panda(True)
     msg=messaging.new_message('carState',valid=True)
     msg.carState.canValid=True
     msg.carState.buttonEvents=[] if button is None else [{'type':button,'pressed':False}]
     pm.send('carState',msg);sm.update(100)
+    assert sm.all_checks(['pandaStates']), (sm.alive,sm.valid,sm.freq_ok)
     context.events=Events()
     if gas_override:context.events.add(log.OnroadEvent.EventName.gasPressedOverride)
     SelfdriveD.update_lx3_state(context,sm['carState'])
