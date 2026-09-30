@@ -56,6 +56,7 @@ ENV = dict(Events=Events, ET=ET, State=State, DT_CTRL=.01, SOFT_DISABLE_TIME=3,
            ACTIVE_STATES=(State.enabled, State.softDisabling, State.overriding),
            ENABLED_STATES=(State.preEnabled, State.enabled, State.softDisabling, State.overriding),
            EventName=NS(**{name: name for name in EVENT_TYPES}), EngagementMode=Mode,
+           time=NS(monotonic=lambda: 0.0),
            lx3_pandas_ready=pandas_ready, car=NS(CarParams=NS(SteerControlType=NS(angle='angle'))))
 load_definitions(ROOT / 'selfdrive/selfdrived/state.py', ENV, {'StateMachine'})
 load_definitions(ROOT / 'selfdrive/selfdrived/selfdrived.py', ENV, {'update_lx3_state'})
@@ -74,6 +75,8 @@ class SubMaster(dict):
 
 class TestLx3Session(unittest.TestCase):
   def setUp(self):
+    self.now = 0.0
+    ENV['time'] = NS(monotonic=lambda: self.now)
     self.panda = NS(safetyModel='hyundaiCanfd', safetyParam=190, alternativeExperience=0,
                     controlsAllowed=True, safetyRxChecksInvalid=False, faults=[])
     self.ctx = NS(lx3_engagement=Lx3Engagement(), car_state_fresh=True,
@@ -197,6 +200,37 @@ class TestLx3Session(unittest.TestCase):
   def test_stale_panda_denies_entry(self):
     self.ctx.sm.valid_streams = False
     self.assertEqual(self.step(button('lfaButton')), (False, False))
+
+  def test_delayed_panda_ack_waits_without_actuation(self):
+    self.panda.controlsAllowed = False
+    self.assertEqual(self.step(button('lfaButton')), (False, False))
+    self.now = .1
+    self.assertEqual(self.step(), (False, False))
+    self.panda.controlsAllowed = True
+    self.now = .2
+    self.assertEqual(self.step(), (True, False))
+
+  def test_late_ack_cannot_resurrect_expired_request(self):
+    self.panda.controlsAllowed = False
+    self.step(button('lfaButton'))
+    self.now = .501
+    self.panda.controlsAllowed = True
+    self.assertEqual(self.step(), (False, False))
+    self.assertEqual(self.step(button('lfaButton')), (True, False))
+
+  def test_cancel_while_waiting_clears_request(self):
+    self.panda.controlsAllowed = False
+    self.step(button('lfaButton'))
+    self.step(button('cancel', True))
+    self.panda.controlsAllowed = True
+    self.assertEqual(self.step(), (False, False))
+
+  def test_fault_while_waiting_clears_request(self):
+    self.panda.controlsAllowed = False
+    self.step(button('lfaButton'))
+    self.step(events=('seatbeltNotLatched',))
+    self.panda.controlsAllowed = True
+    self.assertEqual(self.step(), (False, False))
 
   def test_unsupported_stock_long_denies_entry(self):
     self.ctx.CP.openpilotLongitudinalControl = False

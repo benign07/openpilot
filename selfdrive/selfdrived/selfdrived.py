@@ -570,7 +570,8 @@ class SelfdriveD:
     self.CS_prev = CS
 
   def update_lx3_state(self, CS):
-    candidate, requested = self.lx3_engagement.request(CS.buttonEvents if self.car_state_fresh else ())
+    candidate, requested = self.lx3_engagement.request(
+      CS.buttonEvents if self.car_state_fresh else (), time.monotonic())
     # LX3 main/RES/SET/LFA intent is owned here. In particular, a stock SCC
     # response or a cruise helper's automatic request cannot engage this path.
     excluded = (EventName.wrongCarMode, EventName.buttonEnable, EventName.buttonCancel, EventName.pcmEnable,
@@ -580,14 +581,25 @@ class SelfdriveD:
     # Do not use a stale button event or admit unsupported stock-long configs.
     # Exact Panda firmware/angle-limit qualification remains a release blocker;
     # no command is allowed to manufacture controlsAllowed to satisfy this gate.
-    ready = (self.car_state_fresh and CS.canValid and self.CP.openpilotLongitudinalControl and
+    healthy = (self.car_state_fresh and CS.canValid and self.CP.openpilotLongitudinalControl and
              self.CP.steerControlType == car.CarParams.SteerControlType.angle and
              self.sm.all_checks(['pandaStates']) and
-             lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience))
-    if not ready:
-      self.events.add(EventName.controlsMismatch)
+             lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience,
+                              require_controls=False))
+    ready = healthy and lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience)
     if CS.steerFaultTemporary or CS.steerFaultPermanent:
       self.events.add(EventName.steerUnavailable)
+
+    # A physical release and Panda's periodic status can arrive in either order.
+    # Wait only for that request's ACK, for at most 0.5 s, with the normal state
+    # machine still disabled. Faults cancel the request instead of being retried.
+    waiting = (healthy and not ready and not self.enabled and requested and candidate != EngagementMode.OFF and
+               not any(self.events.contains(et) for et in (ET.NO_ENTRY, ET.USER_DISABLE, ET.SOFT_DISABLE, ET.IMMEDIATE_DISABLE)))
+    if waiting:
+      self.enabled, self.active = self.state_machine.update(self.events)
+      return
+    if not ready:
+      self.events.add(EventName.controlsMismatch)
 
     if candidate == EngagementMode.OFF:
       if requested or self.enabled:

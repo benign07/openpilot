@@ -18,6 +18,8 @@
 
 새 `lx3EngagementMode` 값은 0=OFF, 1=LATERAL, 2=COMBINED다. 이 값만으로 토크를 허용하지 않는다. `selfdriveState.enabled`는 조향 단독을 포함한 전체 세션이므로 운전자 모니터링과 Panda heartbeat도 세션에 연결된다. 기존 Carrot/ACC 소비자 호환을 위해 LX3 `CarControl.enabled`는 종방향 허용으로 유지한다. 실제 조향은 `CarControl.latActive`로 판단한다.
 
+버튼 release보다 Panda 상태 보고가 늦을 수 있으므로, 다른 진입 조건이 정상일 때 해당 요청의 확인만 최대 0.5초 기다린다. 대기 중에는 StateMachine이 disabled이고 두 축 출력도 비활성이다. 시간 초과·취소·고장 시 요청을 버리며, 이후 늦게 온 확인으로 자동 활성화하지 않는다. 이미 활성인 상태에서 Panda 허용이 사라지면 대기 없이 해제한다.
+
 | 조작 | 수정안의 요청 |
 |---|---|
 | OFF에서 LFA release | 조향 단독 진입 |
@@ -45,7 +47,7 @@
 
 로컬 Windows Python 3.11에서 다음을 확인했다.
 
-- 신규 32개 테스트 통과: 정상 StateMachine 함수 본문과 실제 이벤트 종류 정의를 이용한 상태 전환, cancel 우선권, 진입 거절 후 재요청, 조향→복합 전환 검사, soft/immediate disable, CAN/Panda 이상, 가상 버튼 및 피드백 송신 제거, fault/CRC/오래된 값 차단.
+- 신규 36개 테스트 통과: 정상 StateMachine 함수 본문과 실제 이벤트 종류 정의를 이용한 상태 전환, cancel 우선권, 진입 거절 후 재요청, 조향→복합 전환 검사, soft/immediate disable, CAN/Panda 이상, 확인 지연/시간 초과/대기 중 취소·고장, 가상 버튼 및 피드백 송신 제거, fault/CRC/오래된 값 차단.
 - 기존 HUD/설정/시간 관련 66개 테스트 통과. Windows의 기본 CP949 대신 `python -X utf8`로 실행해야 DBC 파일을 읽을 수 있다.
 - 실제 pycapnp로 새 SelfdriveState의 세 모드 직렬화/역직렬화 통과. Windows에서는 Git 심볼릭 링크 대신 체크아웃된 경로 텍스트를 별도 스키마 검증 디렉터리에서 올바른 원본 파일로 해석했다. 원본 저장소 링크는 변경하지 않았다.
 - 9월 27일 경고 구간과 9월 29일 구간에서 원본 0x162 2,902개 모두 현재 Hyundai CRC와 일치. 0x10B 3,628개와 0x1AA 7,254개도 일치했다. 이는 checksum 후보 확인이며 버튼 counter/debounce와 safety 허용의 완전한 검증은 아니다.
