@@ -600,7 +600,7 @@ class SelfdriveD:
     if waiting:
       self.enabled, self.active = self.state_machine.update(self.events)
       return
-    if not ready:
+    if not ready and (self.enabled or (requested and candidate != EngagementMode.OFF)):
       self.events.add(EventName.controlsMismatch)
 
     if candidate == EngagementMode.OFF:

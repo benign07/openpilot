@@ -116,6 +116,22 @@ class TestLx3Session(unittest.TestCase):
     self.assertEqual(self.ctx.state_machine.state, State.enabled)
     self.assertTrue(self.ctx.enabled)
 
+  def test_idle_without_panda_permission_is_not_a_controls_mismatch(self):
+    self.panda.controlsAllowed = False
+    self.assertEqual(self.step(), (False, False))
+    self.assertNotIn('controlsMismatch', self.ctx.events.events)
+
+  def test_mismatched_panda_is_still_reported_on_requested_entry(self):
+    self.panda.safetyParam = 190
+    self.assertEqual(self.step(button('lfaButton')), (False, False))
+    self.assertIn('controlsMismatch', self.ctx.events.events)
+
+  def test_permission_revoked_in_active_session_is_still_reported(self):
+    self.step(button('lfaButton'))
+    self.panda.controlsAllowed = False
+    self.assertEqual(self.step(), (False, False))
+    self.assertIn('controlsMismatch', self.ctx.events.events)
+
   def test_scc_from_off_enables_both(self):
     self.assertEqual(self.step(button('mainCruise')), (True, True))
 

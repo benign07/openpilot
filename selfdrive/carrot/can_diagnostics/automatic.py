@@ -156,6 +156,18 @@ def control_mode(services, now):
   return 'stock_cruise' if cs.get('cruiseState', {}).get('enabled') else 'driver'
 
 
+def host_disabled_panda_allowed(services, now):
+  """Observation only: pending ACK and orphan grants need later time correlation."""
+  if not all(fresh(services, key, now, .25) for key in ('selfdriveState', 'pandaStates')):
+    return None
+  enabled = services['selfdriveState']['data'].get('enabled')
+  # Same ignored models as the control path; a passive Panda is not a grant.
+  pandas = [p for p in services['pandaStates']['data'] if p.get('safetyModel') not in ('silent', 'noOutput')]
+  if type(enabled) is not bool or not pandas or not all(type(p.get('controlsAllowed')) is bool for p in pandas):
+    return None
+  return not enabled and any(p['controlsAllowed'] for p in pandas)
+
+
 class AutoRecorder:
   ADDRESSES = {0x161, 0x162, 0x1EA, 0x2A4, 0x362, 0x1A0, 0x41B, 0x417, 0x367,
                0x10B, 0xCB, 0xEA, 0x12A, 0x1AA}
@@ -207,6 +219,8 @@ class AutoRecorder:
     sample = {'kind': 'sample', 'mono_ns': int(now * 1e9), 'mode': mode, 'services': services,
               'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
               'route': self.metadata.get('route')}
+    if self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
+      sample['host_disabled_panda_allowed'] = host_disabled_panda_allowed(services, now)
     self.store.append(sample, now)
     cs = services.get('carState', {}).get('data', {})
     cc = services.get('carControl', {}).get('data', {})

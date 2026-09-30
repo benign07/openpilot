@@ -9,7 +9,7 @@ import unittest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from .automatic import AutoRecorder, ChunkStore, control_mode
+from .automatic import AutoRecorder, ChunkStore, control_mode, host_disabled_panda_allowed
 from .automatic_routes import register
 from .automatic_runtime import read_param, selected_fields
 from tools.can_auto_sync import analyze, download
@@ -26,6 +26,32 @@ def services(now=100, started=True, lat=False, long=False):
 
 
 class RuntimeTests(unittest.TestCase):
+  def test_permission_observation_is_not_engagement_authority(self):
+    sample = services()
+    sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': [{'controlsAllowed': True}]}
+    self.assertTrue(host_disabled_panda_allowed(sample, 100))
+    sample['selfdriveState']['data']['enabled'] = True
+    self.assertFalse(host_disabled_panda_allowed(sample, 100))
+    sample['selfdriveState']['data']['enabled'] = False
+    sample['pandaStates']['data'][0]['controlsAllowed'] = False
+    self.assertFalse(host_disabled_panda_allowed(sample, 100))
+
+  def test_stale_or_missing_permission_observation_is_unknown(self):
+    sample = services()
+    self.assertIsNone(host_disabled_panda_allowed(sample, 100))
+    sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': [{'controlsAllowed': True}]}
+    self.assertIsNone(host_disabled_panda_allowed(sample, 100.251))
+    sample['pandaStates']['data'][0]['controlsAllowed'] = None
+    self.assertIsNone(host_disabled_panda_allowed(sample, 100))
+
+  def test_passive_panda_is_not_a_permission_observation(self):
+    sample = services()
+    passive = [{'safetyModel': 'silent', 'controlsAllowed': True}, {'safetyModel': 'noOutput', 'controlsAllowed': True}]
+    sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': passive}
+    self.assertIsNone(host_disabled_panda_allowed(sample, 100))
+    sample['pandaStates']['data'] = passive + [{'safetyModel': 'hyundaiCanfd', 'controlsAllowed': False}]
+    self.assertFalse(host_disabled_panda_allowed(sample, 100))
+
   def test_only_selected_fields_are_converted(self):
     class Nested:
       def to_dict(self): return {'enabled': False}
@@ -93,6 +119,14 @@ class RecorderTests(unittest.TestCase):
     sample['carControl']['data']['latActive'] = None
     self.assertEqual(control_mode(sample, 100), 'unknown')
     self.assertEqual(control_mode(services(), 102), 'unknown')
+
+  def test_inactive_host_permission_window_is_saved_in_existing_sample(self):
+    sample = services()
+    sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': [{'controlsAllowed': True}]}
+    self.recorder.update(sample, 100)
+    row = next(r for r in self.rows() if r['kind'] == 'sample')
+    self.assertIs(row['host_disabled_panda_allowed'], True)
+    self.assertIs(row['services']['selfdriveState']['data']['enabled'], False)
 
   def test_can_provenance_and_fault_edges_bypass_sampling(self):
     self.recorder.update(services(), 100)
