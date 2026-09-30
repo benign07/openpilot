@@ -8,6 +8,7 @@ Native IPC, Panda firmware and physical CAN timing need separate qualification.
 import ast
 import contextlib
 import copy
+from enum import IntFlag
 import io
 import math
 from pathlib import Path
@@ -27,6 +28,12 @@ def load_definitions(path, env, names):
   nodes = [n for n in ast.walk(ast.parse(path.read_text(encoding='utf-8')))
            if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
   exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), env)
+
+
+SAFETY_ENV = dict(IntFlag=IntFlag)
+load_definitions(ROOT / 'opendbc_repo/opendbc/car/hyundai/values.py', SAFETY_ENV, {'HyundaiSafetyFlags'})
+SafetyFlags = SAFETY_ENV['HyundaiSafetyFlags']
+LX3_SAFETY_PARAM = 190 | SafetyFlags.LX3_ENGAGEMENT_GUARD.value
 
 
 EVENT_TYPES = {}
@@ -77,11 +84,11 @@ class TestLx3Session(unittest.TestCase):
   def setUp(self):
     self.now = 0.0
     ENV['time'] = NS(monotonic=lambda: self.now)
-    self.panda = NS(safetyModel='hyundaiCanfd', safetyParam=190, alternativeExperience=0,
+    self.panda = NS(safetyModel='hyundaiCanfd', safetyParam=LX3_SAFETY_PARAM, alternativeExperience=0,
                     controlsAllowed=True, safetyRxChecksInvalid=False, faults=[])
     self.ctx = NS(lx3_engagement=Lx3Engagement(), car_state_fresh=True,
                   CP=NS(openpilotLongitudinalControl=True, steerControlType='angle', alternativeExperience=0,
-                        safetyConfigs=[NS(safetyModel='hyundaiCanfd', safetyParam=190)]),
+                        safetyConfigs=[NS(safetyModel='hyundaiCanfd', safetyParam=LX3_SAFETY_PARAM)]),
                   sm=SubMaster(pandaStates=[self.panda]), state_machine=ENV['StateMachine'](),
                   enabled=False, active=False)
     self.cs = NS(canValid=True, steerFaultTemporary=False, steerFaultPermanent=False, buttonEvents=[])
@@ -341,10 +348,17 @@ class TestLx3CanOwnership(unittest.TestCase):
     guard = next(n for n in ast.walk(tree) if isinstance(n, ast.If) and
                  any(isinstance(x, ast.Attribute) and x.attr == 'dashcamOnly' for x in ast.walk(n)))
     for name, expected in (('lx3', True), ('other', False)):
-      ret = NS(dashcamOnly=False)
+      ret = NS(dashcamOnly=False, safetyConfigs=[NS(safetyParam=190)])
       exec(compile(ast.Module(body=[guard], type_ignores=[]), str(path), 'exec'),
-           dict(candidate=name, CAR=NS(HYUNDAI_PALISADE_LX3_HEV='lx3'), ret=ret))
+           dict(candidate=name, CAR=NS(HYUNDAI_PALISADE_LX3_HEV='lx3'), ret=ret, HyundaiSafetyFlags=SafetyFlags))
       self.assertEqual(ret.dashcamOnly, expected)
+      self.assertEqual(ret.safetyConfigs[-1].safetyParam, LX3_SAFETY_PARAM if expected else 190)
+
+  def test_legacy_panda_cannot_acknowledge_guarded_candidate(self):
+    config = NS(safetyModel='hyundaiCanfd', safetyParam=LX3_SAFETY_PARAM)
+    panda = NS(safetyModel='hyundaiCanfd', safetyParam=190, alternativeExperience=0,
+               controlsAllowed=True, safetyRxChecksInvalid=False, faults=[])
+    self.assertFalse(pandas_ready([panda], [config], 0))
 
 
 class TestLx3CameraHealth(unittest.TestCase):

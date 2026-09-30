@@ -4,6 +4,12 @@
 
 이 변경은 **호스트 제어 상태와 CAN 송신 경로의 검증용 구현**이다. Panda 펌웨어와 순정 ADAS 제어 주체 전환까지 완성한 포팅이 아니다. LX3 `dashcamOnly=True` 인터록을 포함한다. 이 브랜치를 기기에 설치하면 주행 제어가 비활성화되므로 운행용 업데이트로 배포하지 않는다. 기존 HUD 배포 브랜치와 릴리스 목록을 갱신하지 않는다.
 
+### 9월 30일 후속 검증 상태
+
+새 **LX3 전용 safetyParam bit 1024**를 추가했다. 기존 190 조합만으로 LX3를 판별하지 않는다. 현재 LX3 후보는 190|1024=1214를 요청하며, 구형 Panda의 190 보고는 호스트 승인을 통과하지 못한다. `dashcamOnly`는 유지한다.
+
+아래의 기존 버퍼·권한 검사 8개는 새 전용 경로에서 모두 통과한다. 이번에 추가한 물리 버튼 허용 경로와 각도 변화율 검사는 2개 모두 실패한다. **검사 8개 통과가 운행 가능 판정은 아니다.** 기존 정책의 `--legacy-audit`는 여전히 5개 실패하며, 다른 차종의 기존 동작을 유지했음을 기존 정책의 안전성 해결로 표현하지 않는다.
+
 ## 바꾼 구조
 
 기존에는 `AlwaysLateral && CS.latEnabled`가 전체 engage와 무관하게 조향을 켤 수 있었다. 이번 LX3 경로는 물리 버튼의 요청을 저장하되 실제 활성은 기존 `StateMachine.update(events)`로 결정한다.
@@ -90,9 +96,32 @@
 
 Workflow의 release-audit는 실패를 숨기지 않고 job을 실패시킨다. 검사 로그는 `native-release-audit` artifact와 check annotations에 남는다. `f684ce7c`의 첫 실행은 파이프 종료코드가 전파되지 않아 성공 표시되었으므로 release 근거로 사용하지 않는다. `5e2befe7`에서 명시적인 bash pipefail 실행으로 수정했다. 호스트 테스트는 호환성 2개 추가 후 38개이며 기존 HUD/설정/시간 66개와 별개다. 실차 인터록과 OTA 미배포 방침은 그대로 유지한다.
 
+## 9월 30일 후속: LX3 전용 권한·버퍼 정리
+
+- `HyundaiSafetyFlags.LX3_ENGAGEMENT_GUARD=1024`를 Python 설정과 C 정책에 연결했다. 현재 전용 정책은 hybrid/HDA2/camera-SCC/longitudinal 구성을 요구하며, 다른 구성에서는 OP 송신을 거절한다. 기존 64개 설정 조합에는 이 비트를 추가하지 않는다.
+- ACC TX의 상태 비트와 가속값이 권한을 스스로 켜지 못하게 했다. 공유 `longitudinal_accel_checks`는 호출하지 않고, 운전자/Panda 권한과 기존 -4.0~2.5m/s² 경계를 독립적으로 검사한다. 권한이 없는 활성 ACC/0xCB는 전달 버퍼에도 들어가지 않는다.
+- MDPS/TCS/터치·가상 버튼 송신은 전용 정책에서 거절한다. 기존 0x1AA RES/SET으로 전용 정책을 켜지 못하게 했다. **물리 0x10B의 유효성·counter·debounce·LFA/SCC 정책이 완성될 때까지 실제 RX에서 제어 허용을 만들지 않는다.** 취소는 권한을 내릴 수 있다.
+- 해제나 RX 이상이 확인되면 OP actuator 큐와 재사용 캐시를 소거한다. gas override가 종방향 권한을 없앴을 때도 이전 ACC 명령을 재사용하지 않는다. 순정 fallback 프레임은 원본대로 전달한다.
+- 활성/비활성 명령을 받아들인 시각을 저장한다. 0xCB/LFA 30ms, ACC 40ms(기존 메시지 주기+20ms)의 전달 유효 기간을 적용한다. pop/reuse 시각으로 수명을 연장하지 않는다. 이 기간은 개발 정책의 소프트웨어 경계이며 OEM 타이밍 허용을 입증하지 않는다.
+- 중립 명령은 대기 중인 활성 명령과 마지막 활성 캐시를 즉시 대체한다. 활성 큐가 가득 차면 가장 오래된 것을 버리고 새 명령을 보관한다. 호스트가 쓰는 `active=1, torque=0`과 관측용 `active=0, torque=0`을 모두 검사했다. 비활성 토크와 예약된 active=3은 거절한다.
+- 0xCB의 기존 호스트 절대 경계인 ±175도, max-torque 250을 C에서도 검사한다. 급격한 각도 변화·운전자 토크·측정 각도 추종 경계는 아직 구현되지 않았으며, 별도 실패 검사로 남겼다.
+- 타이머 overflow 검사에서 추가로 발견한 초기 타임스탬프 0 오판을 고쳤다. 실제 송신 여부를 별도 기록하여, 송신하지 않은 프레임은 0 근처에서도 전달하고 실제 0시각 송신은 차단 시간에 반영한다. 이 변경도 LX3 전용 비트에 한정했다.
+- 순정 actuator 프레임의 DLC나 CRC가 잘못되면 OP 명령을 끼워 넣거나 큐를 소비하지 않는다. 원본을 보존하고, 유효 기간 안에 정상 순정 프레임이 들어올 때만 counter를 맞춰 전달한다. 지원되지 않는 전용 flag 조합에서도 중립 actuator 송신까지 거절되는지 검사했다.
+
+Windows에서 실제 C 소스를 Zig/Clang `-Wall -Werror` 및 undefined-behavior sanitizer로 빌드·실행했다. 기존 64개 조합의 구성·기본 전달·counter/CRC/초기화, 거절된 TX 부작용 검사와 새 권한/비활성 우선/timeout/overflow/RX 이상/gas override/절대 경계 회귀가 통과했다. 호스트 39개, 기존 HUD·설정·시간 66개도 통과했다. 테스트에서 직접 `set_controls_allowed(true)`를 사용하는 것은 버퍼/검사를 시험하기 위한 fixture이며 실제 물리 버튼 허용의 증거가 아니다.
+
+새 native release audit는 기존 8개 항목 통과, 물리 버튼 허용 및 각도 변화율 2개 미통과를 보고한다. Linux GCC sanitizer 결과와 보드 펌웨어 빌드/실행, 전체 IPC, 실제 제어 전환은 각각 별도 확인 대상이다. Workflow는 release 실패를 그대로 유지하며 기존 정책 결과도 별도 artifact에 보관한다.
+
+## 연결 후 먼저 할 정차 검증
+
+1. 현재 `/data/openpilot`의 실제 수정 파일과 실행 Panda signature를 백업·대조한다. Git HEAD만으로 설치 소스를 판단하지 않는다. 호스트 safetyParam과 펌웨어 정책 대응도 확인한다.
+2. 현재 시점의 신선한 P·속도 0·조향/가감속 비활성 상태에서 수신만 하는 기록으로 0x10B 물리 LFA/SCC/cancel의 press/release, counter, CRC, 누락·중복·main flicker를 수집한다. 기기에서 버튼·조향·가속 명령을 합성 송신하지 않는다.
+3. MDPS 실제 각도·운전자 토크·조향 fault, 순정 0xCB angle/active/max-torque, 0x162 fault/ACK의 시각과 값도 함께 확보한다. 이를 바탕으로 물리 RX 권한과 각도 변화율·운전자 개입 경계를 구현·벤치 재생한다.
+4. 아래 인터록 해제 조건과 firmware/host 대응이 완료된 뒤 제어 시험 범위를 정한다. 계기판 점선·커브·아이콘의 표시 확인은 새 조향 후보의 제어 검증과 별도로 기록한다.
+
 ## 남은 필수 작업 — 인터록 해제 조건
 
-1. 실행 중인 Panda signature/소스 대응 확인. 기존 `controls_allowed` TX 자기허용, 검사 위반 무시, 상수 `aol_allowed`에 기대지 않는 전용 안전 경로 구현·C 테스트.
+1. 실행 중인 Panda signature/소스 대응 확인. 새 전용 경로의 TX 자기허용·권한 없는 0xCB는 차단했지만, 각도 변화율·운전자 개입·실제 firmware 제어 전환을 추가 구현·검증해야 한다. 기존 공통 helper의 `aol_allowed`는 전용 경로의 권한 근거로 사용하지 않는다.
 2. 물리 0x10B의 checksum/counter/주기/중복·누락·main debounce를 검증하고 LFA/SCC/cancel의 운전자 의도와 Panda 허용을 연결. 현재 호스트가 요구하는 Panda 승인을 만들기 위해 TX에서 강제로 허용해서는 안 된다.
 3. 실제 0xCB 각도·변화율·토크 제한과 비활성 명령을 검증. Python 측 목표값 제한만으로 Panda 검사를 대체하지 않기.
 4. buffered forwarding의 대기열·재사용·타임아웃 중 과거 활성 명령이 취소 후 나가지 않는지, 순정 LFA와 OP의 제어 주체가 어떻게 전환되는지 벤치에서 확인.

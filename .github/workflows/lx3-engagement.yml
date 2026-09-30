@@ -19,7 +19,16 @@ jobs:
           opendbc_repo/opendbc/safety/tests/test_lx3_native.c -lm -o /tmp/lx3-safety
       - name: Configuration and forwarding compatibility
         run: /tmp/lx3-safety
-      - name: Release audit (must pass before OTA; known blockers remain)
+      - name: Record legacy policy separately from guarded LX3
+        shell: bash
+        run: |
+          set +e
+          /tmp/lx3-safety --legacy-audit > native-legacy-audit.txt
+          result=$?
+          set -e
+          test "$result" -eq 1
+          grep -q 'RELEASE_AUDIT blockers=5;' native-legacy-audit.txt
+      - name: Guarded LX3 release audit (physical RX and angle-rate blockers remain)
         id: release-audit
         shell: bash
         run: /tmp/lx3-safety --release-audit | tee native-release-audit.txt
@@ -27,7 +36,9 @@ jobs:
         if: always()
         run: |
           echo '## Native release audit: ${{ steps.release-audit.outcome }}' >> "$GITHUB_STEP_SUMMARY"
-          echo 'OTA remains blocked by the passive interlock and vehicle qualification requirements.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Guarded LX3 uses safetyParam bit 1024. It cannot obtain physical-button permission yet.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'OTA remains blocked by physical RX, angle-rate/driver enforcement, the passive interlock and vehicle qualification.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The legacy policy retains its five known blockers; it is not qualified by this change.' >> "$GITHUB_STEP_SUMMARY"
           if [ -f native-release-audit.txt ]; then
             while IFS= read -r line; do
               case "$line" in
@@ -39,7 +50,9 @@ jobs:
         if: always()
         with:
           name: native-release-audit
-          path: native-release-audit.txt
+          path: |
+            native-release-audit.txt
+            native-legacy-audit.txt
   offline-tests:
     runs-on: ubuntu-latest
     strategy:

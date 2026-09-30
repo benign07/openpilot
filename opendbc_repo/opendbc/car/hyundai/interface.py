@@ -232,6 +232,7 @@ class CarInterface(CarInterfaceBase):
     # have matching, tested Panda enforcement. Never ship this as an active port
     # merely by removing the interlock or setting controls_allowed from TX.
     if candidate == CAR.HYUNDAI_PALISADE_LX3_HEV:
+      ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LX3_ENGAGEMENT_GUARD.value
       ret.dashcamOnly = True
 
     return ret
