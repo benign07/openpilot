@@ -276,6 +276,34 @@ class TestLx3CanOwnership(unittest.TestCase):
               NS(leadVisible=False, leadDistance=0), 0, False, False, 0, False, 0)
     self.assertEqual(result[0][2]['LFA_BTN'], 1)
 
+  def test_other_models_keep_camera_scc_start_and_resume_requests(self):
+    self.cp.carFingerprint = 'OTHER_MODEL'
+    self.cc.enabled = True
+    for main, mode, field, expected in ((False, 0, 'ADAPTIVE_CRUISE_MAIN_BTN', 1),
+                                       (True, 0, 'CRUISE_BUTTONS', 2),
+                                       (True, 4, 'CRUISE_BUTTONS', 2)):
+      cs = NS(modelV2=None, lfahda_cluster=None, cruise_buttons_msg={'LFA_BTN': 0},
+              cruise_btns_msg_canfd='CRUISE_BUTTONS_ALT', MainMode_ACC=main,
+              ACCMode=mode, out=NS(vEgo=10))
+      result = self.env['create_ccnc_messages'](self.cp, Packer(), self.can, 14, self.cc, cs,
+                NS(leadVisible=False, leadDistance=0), 0, False, False, 0, False, 0)
+      self.assertEqual(result[0][1], self.can.CAM)
+      self.assertEqual(result[0][2][field], expected)
+
+  def test_other_models_keep_feedback_and_torque_steering_paths(self):
+    self.cp.carFingerprint = 'OTHER_MODEL'
+    cs = NS(adrv_0x161=None, mdps={'STEERING_COL_TORQUE': 10},
+            steer_touch_2af={'TOUCH_DETECT': 0}, lfa={'STEER_REQ': 1}, lfa_alt=None)
+    for active in (False, True):
+      result = self.env['create_steering_messages_camera_scc'](50, Packer(), self.cp, self.can, self.cc,
+                 active, 12, cs, 0, 0, False)
+      self.assertEqual([(x[0], x[1]) for x in result], [('MDPS', 2), ('STEER_TOUCH_2AF', 2), ('LFA', 0)])
+      self.assertEqual(result[0][2]['LKA_ACTIVE'], 1)
+      self.assertEqual(result[0][2]['STEERING_COL_TORQUE'], 10)
+      self.assertEqual(result[1][2]['TOUCH_DETECT'], 0)
+      self.assertEqual(result[2][2]['STEER_REQ'], int(active))
+      self.assertEqual(result[2][2]['TORQUE_REQUEST'], 12)
+
   def steering(self, active=False, alert=0):
     self.cc.latActive = active
     cs = NS(adrv_0x161={'ALERTS_1': alert}, mdps={'STEERING_COL_TORQUE': 10},
@@ -301,8 +329,11 @@ class TestLx3CanOwnership(unittest.TestCase):
 
   def test_oem_emergency_branch_not_silently_removed(self):
     # This inherited handoff is a documented bench/Panda release blocker.
-    value = self.steering(False, alert=21)[0][2]
-    self.assertEqual((value['LKAS_ANGLE_ACTIVE'], value['LKAS_ANGLE_MAX_TORQUE']), (2, 40))
+    for alert in (11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26):
+      for active in (False, True):
+        value = self.steering(active, alert=alert)[0][2]
+        self.assertEqual((value['LKAS_ANGLE_ACTIVE'], value['LKAS_ANGLE_MAX_TORQUE']), (2, 40))
+        self.assertEqual(value['LKAS_ANGLE_CMD'], 3)
 
   def test_lx3_candidate_cannot_become_an_active_port(self):
     path = ROOT / 'opendbc_repo/opendbc/car/hyundai/interface.py'

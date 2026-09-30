@@ -53,7 +53,42 @@
 - 9월 27일 경고 구간과 9월 29일 구간에서 원본 0x162 2,902개 모두 현재 Hyundai CRC와 일치. 0x10B 3,628개와 0x1AA 7,254개도 일치했다. 이는 checksum 후보 확인이며 버튼 counter/debounce와 safety 허용의 완전한 검증은 아니다.
 - Python 문법과 `git diff --check` 통과.
 
-테스트는 메시지 facade와 실제 함수 본문을 사용한다. 전체 프로세스 IPC 실행, Panda C 빌드/테스트, 완전한 closed-loop replay, 계기판 경고 해소, 실차 조향 응답을 통과했다는 뜻은 아니다. GitHub 전용 workflow는 배포 권한 없이 동일 테스트와 스키마 검증을 실행한다.
+호스트 테스트는 메시지 facade와 실제 함수 본문을 사용한다. 아래 추가 검증에서 Panda C 소스의 데스크톱 빌드까지 진행했다. 전체 프로세스 IPC 실행, Panda 보드용 펌웨어 빌드/실행, 완전한 closed-loop replay, 계기판 경고 해소, 실차 조향 응답을 통과했다는 뜻은 아니다. GitHub 전용 workflow는 배포 권한 없이 테스트와 스키마 검증을 실행한다.
+
+## 호환성 검토와 실제 C 추가 검증
+
+불필요해 보인다는 이유로 공통 코드를 삭제하지 않는다. 현재 safetyParam 190은 hybrid/longitudinal/camera-SCC/HDA2/alternate-button/alternate-steering 플래그 조합이지 LX3 전용 식별자가 아니다. 이를 LX3 판별자로 사용하여 다른 차량까지 제어 정책을 바꾸면 안 된다. 저장소에서 확인 가능한 해당 Panda 파일 변경 이력은 초기 스냅샷으로 이어지므로, 원 제작자의 모든 변경 의도를 확인했다고 주장하지 않는다.
+
+| 경로 | 확인된 용도·영향 | 이번 처리 |
+|---|---|---|
+| Camera-SCC buffered forwarding | 순정 수신 카운터에 맞춰 OP 명령의 counter/CRC를 다시 구성. Panda `can_send`도 해당 버퍼 플래그를 인식하여 직접 송신을 생략 | 구조 유지. 정상 counter/CRC·초기화 검사 추가 |
+| HDA1/HDA2, camera/radar SCC, alternate buttons/steering | RX/TX 목록·버스·조향 주소 선택 | 분기 유지. 관련 64개 플래그 조합에서 기본 전달과 거절 경계 검사 |
+| 비-LX3 가상 SCC/LFA 버튼, MDPS/touch, 토크 조향 | 다른 포팅의 기존 프로토콜 경로 | 기존 동작 보존을 호스트 테스트로 확인. 동작 보존이 안전성 인증을 뜻하지 않음 |
+| 순정 ALERTS_1 긴급조향 | 비활성 OP 상태에서도 순정 각도·토크를 보존하는 기존 경로 | 11개 alert 값과 두 활성 상태의 보존 검사. 실차 제어 주체 전환은 미검증 |
+| 공통 `longitudinal_accel_checks`, `aol_allowed` | 다른 safety 모델에도 영향을 주는 변경 | 일괄 수정하지 않음. LX3 전용 권한 경로와 별도 검증 필요 |
+| 거절된 Hyundai CAN-FD TX의 hook 호출 | 반환값은 실패여도 hook이 이미 버퍼와 controls_allowed를 바꿈 | 해당 safety 모델에 한해 hook 전에 거절. 다른 모델의 hook 호출 순서는 유지 |
+
+새 `opendbc_repo/opendbc/safety/tests/test_lx3_native.c`는 실제 `libsafety/safety.c`를 포함하고 Linux GCC `-Wall -Werror` 및 undefined-behavior sanitizer로 빌드한다. PC 테스트용 timer와 firmware 소유 심볼만 제공한다. 기존 Python CFFI 선언은 `safety_fwd_hook(int, int)`인데 현재 C 함수는 `safety_fwd_hook(CANPacket_t *)`이므로, 이번 검증은 잘못된 ABI를 사용하지 않고 C 패킷 포인터로 직접 호출한다. 기존 Python safety 전체 테스트를 통과했다고 보고하지 않는다.
+
+검증 전 `5e2befe7`에서는 8개 release-audit 항목 모두 실패했다. 수정 `a499830d`에서는 다음 3개가 통과했다. 이 3개는 하나의 거절 처리 순서 문제를 서로 다른 조건으로 재현한 것이며 독립적인 3개 실차 고장을 의미하지 않는다.
+
+- 잘못된 DLC의 0xCB가 forwarding 버퍼에 들어가지 않음.
+- relay malfunction에서 거절한 명령이 버퍼에 들어가지 않음.
+- 잘못된 버스로 보낸 ACC 명령이 controls_allowed를 켜지 않음.
+
+64개 설정 조합의 모든 TX 목록 항목에 대해 잘못된 길이·버스·relay fault의 버퍼/권한 부작용 부재를 확인했다. 정상 forwarding 기본 동작, LX3 비활성 0xCB의 순정 counter와 checksum 재생성, 모드 재초기화도 통과했다. 이는 구성 선택·거절 경계·일부 정상 경로 검사이며 64개 차량의 전체 호환성 인증이 아니다.
+
+남은 native release-audit 실패는 5개다.
+
+1. 허용 목록에 있는 ACC TX가 controls_allowed를 스스로 켬.
+2. controls_allowed 없이 활성 0xCB를 허용함.
+3. 허용 해제 뒤 큐에 남은 활성 0xCB를 재전송함.
+4. 마지막 활성 명령을 1초 뒤에도 재사용함.
+5. 큐가 가득 차면 뒤늦게 도착한 OFF 명령이 유실됨.
+
+관측용 C 테스트의 OFF 패킷은 active=0, torque=0이다. 호스트의 실제 비활성 송신은 active=1, torque=0이므로 이 값의 차이와 OEM 전환 프로토콜도 최종 검증해야 한다. native 테스트는 OP 활성 명령의 잔존을 확인하며 순정 fallback까지 무조건 무토크라고 가정하지 않는다.
+
+Workflow의 release-audit는 실패를 숨기지 않고 job을 실패시킨다. 검사 로그는 `native-release-audit` artifact와 check annotations에 남는다. `f684ce7c`의 첫 실행은 파이프 종료코드가 전파되지 않아 성공 표시되었으므로 release 근거로 사용하지 않는다. `5e2befe7`에서 명시적인 bash pipefail 실행으로 수정했다. 호스트 테스트는 호환성 2개 추가 후 38개이며 기존 HUD/설정/시간 66개와 별개다. 실차 인터록과 OTA 미배포 방침은 그대로 유지한다.
 
 ## 남은 필수 작업 — 인터록 해제 조건
 
