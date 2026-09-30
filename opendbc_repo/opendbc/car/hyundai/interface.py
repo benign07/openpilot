@@ -227,7 +227,12 @@ class CarInterface(CarInterfaceBase):
 
     # Dashcam cars are missing a test route, or otherwise need validation
     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
-    #ret.dashcamOnly = candidate in {CAR.KIA_OPTIMA_H, }
+    # Development interlock: the LX3 session rewrite is not a qualified vehicle
+    # port until the physical-button RX path, 0xCB limits and buffered forwarding
+    # have matching, tested Panda enforcement. Never ship this as an active port
+    # merely by removing the interlock or setting controls_allowed from TX.
+    if candidate == CAR.HYUNDAI_PALISADE_LX3_HEV:
+      ret.dashcamOnly = True
 
     return ret
 

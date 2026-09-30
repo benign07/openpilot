@@ -19,6 +19,7 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.state import StateMachine
+from openpilot.selfdrive.selfdrived.lx3_engagement import Lx3Engagement, EngagementMode, lx3_pandas_ready
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 from openpilot.selfdrive.controls.lib.latcontrol import MIN_LATERAL_CONTROL_SPEED
 
@@ -130,6 +131,8 @@ class SelfdriveD:
     self.dm_lockout_set = False
     self.dm_uncertain_alerted = False
     self.state_machine = StateMachine()
+    self.lx3_engagement = Lx3Engagement() if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' else None
+    self.car_state_fresh = False
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
     self.atc_type_last = ""
@@ -459,6 +462,7 @@ class SelfdriveD:
 
   def data_sample(self):
     car_state = messaging.recv_one(self.car_state_sock)
+    self.car_state_fresh = car_state is not None and car_state.valid
     CS = car_state.carState if car_state else self.CS_prev
 
     self.sm.update(0)
@@ -475,7 +479,7 @@ class SelfdriveD:
           self.sm.ignore_alive.append('wideRoadCameraState')
           self.sm.ignore_valid.append('wideRoadCameraState')
 
-        if REPLAY and any(ps.controlsAllowed for ps in self.sm['pandaStates']):
+        if REPLAY and self.lx3_engagement is None and any(ps.controlsAllowed for ps in self.sm['pandaStates']):
           self.state_machine.state = State.enabled
 
         self.initialized = True
@@ -525,6 +529,8 @@ class SelfdriveD:
     ss.enabled = self.enabled
     ss.active = self.active
     ss.state = self.state_machine.state
+    if self.lx3_engagement is not None:
+      ss.lx3EngagementMode = int(self.lx3_engagement.mode)
     ss.engageable = not self.events.contains(ET.NO_ENTRY)
     ss.experimentalMode = self.experimental_mode
     ss.personality = self.personality
@@ -553,12 +559,48 @@ class SelfdriveD:
     CS = self.data_sample()
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
-      self.enabled, self.active = self.state_machine.update(self.events)
+      if self.lx3_engagement is None:
+        self.enabled, self.active = self.state_machine.update(self.events)
+      else:
+        self.update_lx3_state(CS)
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)
 
     self.CS_prev = CS
+
+  def update_lx3_state(self, CS):
+    candidate, requested = self.lx3_engagement.request(CS.buttonEvents if self.car_state_fresh else ())
+    # LX3 main/RES/SET/LFA intent is owned here. In particular, a stock SCC
+    # response or a cruise helper's automatic request cannot engage this path.
+    excluded = (EventName.wrongCarMode, EventName.buttonEnable, EventName.buttonCancel, EventName.pcmEnable,
+                EventName.pcmDisable)
+    self.events.events = [e for e in self.events.events if e not in excluded]
+
+    # Do not use a stale button event or admit unsupported stock-long configs.
+    # Exact Panda firmware/angle-limit qualification remains a release blocker;
+    # no command is allowed to manufacture controlsAllowed to satisfy this gate.
+    ready = (self.car_state_fresh and CS.canValid and self.CP.openpilotLongitudinalControl and
+             self.CP.steerControlType == car.CarParams.SteerControlType.angle and
+             self.sm.all_checks(['pandaStates']) and
+             lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience))
+    if not ready:
+      self.events.add(EventName.controlsMismatch)
+    if CS.steerFaultTemporary or CS.steerFaultPermanent:
+      self.events.add(EventName.steerUnavailable)
+
+    if candidate == EngagementMode.OFF:
+      if requested or self.enabled:
+        self.events.add(EventName.buttonCancel)
+    elif requested:
+      if self.enabled and self.events.contains(ET.NO_ENTRY):
+        # An upgrade from lateral to combined must satisfy entry conditions too.
+        candidate = self.lx3_engagement.mode
+        self.events.add(EventName.buttonCancel)
+      else:
+        self.events.add(EventName.buttonEnable)
+    self.enabled, self.active = self.state_machine.update(self.events)
+    self.lx3_engagement.commit(candidate, self.enabled)
 
   def read_personality_param(self):
     try:

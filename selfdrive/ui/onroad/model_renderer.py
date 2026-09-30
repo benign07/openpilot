@@ -1355,7 +1355,8 @@ class ModelRenderer(Widget):
     max_distance -= 2.0
 
     max_idx = self._get_path_length_idx(model_position[:, 0], max_distance)
-    self._carrot_long_active = sm['selfdriveState'].enabled
+    self._carrot_long_active = (sm['carControl'].longActive if sm['selfdriveState'].lx3EngagementMode
+                               else sm['selfdriveState'].enabled)
 
     if self._carrot_active_lane_line:
       self._carrot_show_path_mode = self._carrot_show_path_mode_lane

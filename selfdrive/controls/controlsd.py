@@ -30,6 +30,7 @@ from selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.selfdrive.carrot.carrot_controls import CarrotControls
+from openpilot.selfdrive.selfdrived.lx3_engagement import lx3_control_permissions
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -123,8 +124,21 @@ class Controls:
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, MIN_LATERAL_CONTROL_SPEED) or CS.standstill
     CC.latActive = ((self.sm['selfdriveState'].active or lateral_enabled) and CS.latEnabled and
                     not CS.steerFaultTemporary and not CS.steerFaultPermanent and not standstill)
-    CC.latActive = self.carrot_controls.lat_suspend_control(CS, CC.latActive)
+    if self.CP.carFingerprint != 'HYUNDAI_PALISADE_LX3_HEV':
+      CC.latActive = self.carrot_controls.lat_suspend_control(CS, CC.latActive)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
+    if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
+      ss = self.sm['selfdriveState']
+      lateral, longitudinal = lx3_control_permissions(
+        ss.lx3EngagementMode, ss.enabled, ss.active,
+        self.sm.all_checks(['selfdriveState', 'carState', 'modelV2', 'onroadEvents']), driving_gear,
+        not CS.steerFaultTemporary and not CS.steerFaultPermanent)
+      CC.latActive = self.carrot_controls.lat_suspend_control(CS, lateral and not standstill)
+      # Existing CarController/Carrot consumers interpret CC.enabled as ACC
+      # permission. Keep that contract; selfdriveState.enabled is the session.
+      CC.enabled = longitudinal
+      CC.longActive = longitudinal and self.CP.openpilotLongitudinalControl and not any(
+        e.overrideLongitudinal for e in self.sm['onroadEvents'])
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state

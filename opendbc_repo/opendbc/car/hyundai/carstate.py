@@ -9,6 +9,7 @@ from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
 from opendbc.car.hyundai.lx3_time import Lx3Clock, MESSAGE as LX3_TIME_MESSAGE
+from opendbc.car.hyundai.lx3_state import lateral_fault as lx3_lateral_fault
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, CAMERA_SCC_CAR, HyundaiExtFlags
 from opendbc.car.interfaces import CarStateBase
 
@@ -586,6 +587,9 @@ class CarState(CarStateBase):
     ret.steeringTorqueEps = cp.vl["MDPS"]["STEERING_OUT_TORQUE"]
     ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > self.params.STEER_THRESHOLD, 5)
     ret.steerFaultTemporary = cp.vl["MDPS"]["LKA_FAULT"] != 0 or cp.vl["MDPS"]["LFA2_FAULT"] != 0
+    if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
+      fault_ns = cp_cam.ts_nanos.get('CCNC_0x162', {}).get('FAULT_LSS', 0)
+      ret.steerFaultTemporary |= lx3_lateral_fault(self.ccnc_0x162, fault_ns, cp_cam._last_update_nanos)
     #ret.steerFaultTemporary = False
 
     blinkers_info = self.blinkers if self.blinkers is not None else self.blinkers_alt if self.blinkers_alt is not None else None
@@ -627,7 +631,7 @@ class CarState(CarStateBase):
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       ret.cruiseState.enabled = cp.vl["TCS"]["ACC_REQ"] == 1
       ret.cruiseState.standstill = False
-      if self.MainMode_ACC or self.main_enabled:
+      if self.CP.carFingerprint != 'HYUNDAI_PALISADE_LX3_HEV' and (self.MainMode_ACC or self.main_enabled):
         self.main_enabled = True
     else:
       cp_cruise_info = cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp
@@ -807,14 +811,17 @@ class CarState(CarStateBase):
       ]
 
     pt_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN)
+    cam_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM)
     if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV:
       # The LX3 DBC filename does not opt into the generic checksum binding.
-      # Bind only this optional clock; do not change validation of control messages.
+      # Bind the optional clock and the camera health input used by LX3 engage.
+      # Neither checksum binding opts other LX3 messages into guessed CRC rules.
       pt_parser.dbc.name_to_msg[LX3_TIME_MESSAGE].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
+      cam_parser.dbc.name_to_msg['CCNC_0x162'].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
 
     return {
       Bus.pt: pt_parser,
-      Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
+      Bus.cam: cam_parser,
       Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).ACAN),
     }
 

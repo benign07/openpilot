@@ -1,0 +1,38 @@
+name: LX3 engagement candidate validation
+on:
+  push:
+    branches: [fix/lx3-engagement-state]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install aiohttp cryptography pycapnp
+      - run: python -m unittest discover -s selfdrive/selfdrived/tests -p test_lx3_engagement.py -v
+      - run: >-
+          python -m unittest selfdrive.carrot.tests.test_hud_updater
+          selfdrive.carrot.tests.test_live_driving_mode
+          selfdrive.carrot.tests.test_driving_setting_switches
+          selfdrive.carrot.tests.test_hud_settings_integrity
+          selfdrive.carrot.tests.test_lx3_can_time -v
+      - name: Check additive telemetry schema
+        run: |
+          python - <<'PY'
+          import capnp
+          capnp.remove_import_hook()
+          schema = capnp.load('cereal/log.capnp')
+          for mode in (0, 1, 2):
+            msg = schema.SelfdriveState.new_message(enabled=mode != 0, lx3EngagementMode=mode)
+            with schema.SelfdriveState.from_bytes(msg.to_bytes()) as parsed:
+              assert parsed.lx3EngagementMode == mode
+              assert parsed.enabled == (mode != 0)
+          PY

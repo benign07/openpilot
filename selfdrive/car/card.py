@@ -65,7 +65,7 @@ class Car:
 
   def __init__(self, CI=None, RI=None) -> None:
     self.can_sock = messaging.sub_sock('can', timeout=20)
-    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents', 'carrotMan', 'longitudinalPlan', 'radarState', 'modelV2', 'drivingModelData'])
+    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'selfdriveState', 'onroadEvents', 'carrotMan', 'longitudinalPlan', 'radarState', 'modelV2', 'drivingModelData'])
     self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'liveTracks'])
 
     self.can_rcv_cum_timeout_counter = 0
@@ -213,6 +213,10 @@ class Car:
     CS.softHoldActive = self.v_cruise_helper._soft_hold_active
     CS.activateCruise = self.v_cruise_helper._activate_cruise
     CS.latEnabled = self.v_cruise_helper._lat_enabled
+    if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
+      # Status only: the cruise helper must no longer own lateral permission.
+      ss = self.sm['selfdriveState']
+      CS.latEnabled = self.sm.all_checks(['selfdriveState']) and ss.enabled and ss.lx3EngagementMode in (1, 2)
     CS.useLaneLineSpeed = self.v_cruise_helper.useLaneLineSpeedApply
     CS.carrotCruise = 1 if self.v_cruise_helper.carrot_cruise_active else 0
 

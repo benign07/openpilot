@@ -810,6 +810,9 @@ struct SelfdriveState {
   experimentalMode @10 :Bool;
   personality @11 :LongitudinalPersonality;
   distanceTraveled @13 :Float32;
+  # LX3 explicit session intent. 0=off, 1=lateral, 2=lateral+longitudinal.
+  # enabled/active still come from the normal StateMachine, never from this enum.
+  lx3EngagementMode @14 :UInt8;
 
   enum OpenpilotState @0xdbe58b96d2d1ac61 {
     disabled @0;

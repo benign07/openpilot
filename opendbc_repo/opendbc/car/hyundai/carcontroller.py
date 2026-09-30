@@ -444,7 +444,7 @@ class CarController(CarControllerBase):
       if hda2 and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
         can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, self.frame, CC.leftBlinker, CC.rightBlinker))
 
-      if self.camera_scc_params in [2, 3]:
+      if self.camera_scc_params in [2, 3] and self.CP.carFingerprint != 'HYUNDAI_PALISADE_LX3_HEV':
         self.canfd_toggle_adas(CC, CS)
       if self.CP.openpilotLongitudinalControl:
         self.hyundai_jerk.make_jerk(self.CP, CS, accel, actuators, hud_control)
@@ -469,7 +469,7 @@ class CarController(CarControllerBase):
           self.accel_last = accel
       else:
         # button presses
-        if self.camera_scc_params == 3: # camera scc but stock long
+        if self.camera_scc_params == 3 and self.CP.carFingerprint != 'HYUNDAI_PALISADE_LX3_HEV': # camera scc but stock long
           send_button = self.make_spam_button(CC, CS)
           can_sends.extend(hyundaicanfd.forward_button_message(self.packer, self.CAN, self.frame, CS, send_button, self.MainMode_ACC_trigger, self.LFA_trigger))
         else:
@@ -759,4 +759,3 @@ class HyundaiJerk:
         self.jerk_l = min(max(1.0, -self.jerk * 2.0), jerk_max_l)
         self.cb_upper = np.clip(0.9 + accel * 0.2, 0, 1.2)
         self.cb_lower = np.clip(0.8 + accel * 0.2, 0, 1.2)
-

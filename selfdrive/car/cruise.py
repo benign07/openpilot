@@ -186,7 +186,7 @@ class VCruiseCarrot:
     self._cruise_cancel_state = False
     self._pause_auto_speed_up = False
     self._activate_cruise = 0
-    self._lat_enabled = self.params.get_int("AutoEngage") > 0
+    self._lat_enabled = self.CP.carFingerprint != 'HYUNDAI_PALISADE_LX3_HEV' and self.params.get_int("AutoEngage") > 0
     self._v_cruise_kph_at_brake = 0
     self.cruise_state_available_last = False
 
@@ -334,7 +334,8 @@ class VCruiseCarrot:
 
     if CS.cruiseState.available:
       if not self.cruise_state_available_last:
-        self._lat_enabled = True
+        if self.CP.carFingerprint != 'HYUNDAI_PALISADE_LX3_HEV':
+          self._lat_enabled = True
         v_cruise_kph = self.v_ego_kph_set
       if not self.CP.pcmCruise:
         # if stock cruise is completely disabled, then we can use our own set speed logic
@@ -553,7 +554,10 @@ class VCruiseCarrot:
         self.params.put_int_nonblocking('LongitudinalPersonality', personality)
         #self.events.append(EventName.personalityChanged)
       elif button_type == ButtonType.lfaButton:
-        if self._lfa_button_mode == 0:
+        if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
+          # selfdrived owns LX3 physical LFA intent and all entry/disable checks.
+          pass
+        elif self._lfa_button_mode == 0:
           self._lat_enabled = not self._lat_enabled
           self._add_log("Lateral " + "enabled" if self._lat_enabled else "disabled")
         elif self._lfa_button_mode == 2:

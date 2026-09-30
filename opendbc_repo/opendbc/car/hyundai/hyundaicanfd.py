@@ -88,7 +88,7 @@ class CanBus(CanBusBase):
 
 
 def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, apply_steer, CS, apply_angle, max_torque, angle_control):
-
+  lx3_hev = CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV'
   emergency_steering = False
   if CS.adrv_0x161 is not None:
     values = CS.adrv_0x161
@@ -96,7 +96,7 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
 
 
   ret = []
-  if CS.mdps is not None:
+  if CS.mdps is not None and not lx3_hev:
     values = copy.copy(CS.mdps)
     #rx_counter = values.pop("COUNTER", None)
     if angle_control:
@@ -111,7 +111,7 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
     #ret.append(packer.make_can_msg("MDPS", CAN.CAM, values, rx_counter = rx_counter))
     ret.append(packer.make_can_msg("MDPS", CAN.CAM, values))
 
-  if frame % 10 == 0:
+  if frame % 10 == 0 and not lx3_hev:
     if CS.steer_touch_2af is not None:
       values = copy.copy(CS.steer_touch_2af)
       if frame % 1000 < 40:
@@ -726,7 +726,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
       #  values = copy.copy(CS.adrv_0x160)
       #  ret.append(packer.make_can_msg("ADRV_0x160", CAN.ECAN, values))
 
-      if CS.cruise_buttons_msg is not None:
+      if CS.cruise_buttons_msg is not None and not lx3_hev:
         values = copy.copy(CS.cruise_buttons_msg)
 
         if  HDA_LFA_SymSta == 0 and 0 < frame % 200 < 12:
@@ -928,7 +928,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         if (left_lane_warning and not CS.out.leftBlinker) or (right_lane_warning and not CS.out.rightBlinker):
           values["VIBRATE"] = 1
 
-        if canfd_debug > 0:
+        if canfd_debug > 0 and not lx3_hev:
           values["FAULT_LSS"] = 0
           values["FAULT_DAS"] = 0
 
