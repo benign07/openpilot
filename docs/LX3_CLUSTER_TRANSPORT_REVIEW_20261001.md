@@ -143,3 +143,17 @@ Claude가 제안한110ms는 desktop fixture에서만 같은520개 조건으로 �
 PC 자료: `can_inventory_work/lx3-display-delay-timeout-sensitivity-20261001.json`,
 `lx3-display-before-gate-regression-20261001.log`. 긴 지연 직후
 `safety_tx_blocked` 증가를 해제 후 정상 거부와 지속 fault로 구분해야 한다.
+
+## SCC 대기 플래그와 설정 속도 표시
+
+표시 builder도 기존 `cruiseState.available`에 종속돼 있었다. LX3의 새
+RES/SET 요청은 이 순정 대기 플래그와 독립적으로 combined 권한을 얻을 수
+있지만, builder는 `CC.enabled=True`일 때도 SETSPEED/SETSPEED_HUD를0으로
+만들었다. 실제 parser/packer 회귀를 먼저 실패시켜 확인했다.
+
+LX3에서는 `stock available or CC.enabled`를 표시 대기 기준으로 사용한다.
+controlsd의 LX3 `CC.enabled`는 정상 거래로 승인된 실제 longitudinal 권한이다.
+LFA 단독일 때는 False이므로 이 변경으로 SCC 활성 표시를 만들지 않는다.
+다른 차종은 이전 순정 availability 계약을 유지한다. 별도2개 회귀와 전체
+PC Python204개 검사가 통과했다. 차량 아이콘 enum의 실제 의미와 최초
+경고 해소를 이 표시 수정으로 입증했다고 주장하지 않는다.

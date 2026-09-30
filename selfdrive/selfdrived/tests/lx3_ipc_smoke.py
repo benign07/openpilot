@@ -11,6 +11,7 @@ from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager
 from openpilot.selfdrive.selfdrived.lx3_engagement import Lx3Engagement, lx3_control_permissions
 from openpilot.common.params import Params
+from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.car_specific import CarSpecificEvents
 
 
@@ -27,8 +28,12 @@ def main():
                distance_traveled=0.0)
   panda = dict(version=1, requested=0, accepted=0, counter=0, generation=1, age=0, phase=0, allowed=False)
   directory = tempfile.TemporaryDirectory()
-  with patch('openpilot.selfdrive.car.car_specific.Params', return_value=Params(directory.name)):
+  isolated_params = Params(directory.name)
+  isolated_params.put_bool('MuteDoor', False)
+  isolated_params.put_bool('MuteSeatbelt', False)
+  with patch('openpilot.selfdrive.car.car_specific.Params', return_value=isolated_params):
     car_events = CarSpecificEvents(cp)
+  car_events.frame = 99  # First update reads the actual isolated Params values.
   previous_cs = car.CarState.new_message(gearShifter='drive', vEgo=15, vCruise=50)
   cc = car.CarControl.new_message()
   def publish_panda():
@@ -138,4 +143,5 @@ def main():
 
 
 if __name__ == '__main__':
-  main()
+  with OpenpilotPrefix():
+    main()

@@ -190,3 +190,27 @@ See [display transport review](LX3_CLUSTER_TRANSPORT_REVIEW_20261001.md) and
 [OEM ownership timing](LX3_OEM_OWNERSHIP_TIMING_20261001.md) for subsequent
 changes and the unresolved650ms correlation. These do not establish warning
 removal, EPS acceptance or vehicle control qualification.
+
+## Late follow-up and remaining transport scope
+
+The buffered-delivery fix passes414 actual-C/production-host schedules, including
+54 physically requested/acknowledged sessions revoked on an excessive output
+step.5,184 later stale host goals are blocked; the host observes the revocation
+40–90ms later in these synthetic10Hz schedules. These timings are not measured
+USB/vehicle bounds. The display-permission fix and fixed/variable-delay plus
+producer-stall comparison are recorded in the linked display report.
+
+The real Linux IPC smoke now generates Hyundai CarSpecificEvents from actual
+Capnp carState with stock cruise availability false. LAT/COMB still use the
+LX3 request/ACK transaction, while a real doorOpen entry barrier is retained.
+This extends the previous event-injection smoke; it is not the whole running
+SelfdriveD loop or a vehicle test.
+
+Generation binds the permission request/ACK, not each USB CAN payload. After a
+new grant an extremely delayed old actuator payload still undergoes measured
+angle, output-rate, driver and mode bounds, but those bounds do not establish
+its semantic freshness. A delayed old display packet is likewise not isolated
+by generation. Production pandad samples SelfdriveState before publishing the
+companion in the same10Hz cycle, so a new host ACK normally travels in a later
+cycle. This ordering is not a qualified maximum transport delay or a global
+proof that stale payloads cannot cross session boundaries. Do not claim it is.

@@ -152,6 +152,30 @@ class TestLx3ClusterTransport(unittest.TestCase):
     self.cs.out.latEnabled = False
     self.assertEqual(self.ccnc(), [])
 
+  def test_combined_set_speed_display_follows_permission_without_stock_scc_latch(self):
+    self.cs.out.cruiseState.available = False
+    self.cc.enabled = self.cc.longActive = True
+    values = self.decode(self.ccnc())['ADRV_0x161']
+    self.assertEqual(values['SETSPEED'], 3)
+    self.assertEqual(values['SETSPEED_HUD'], 3)
+    self.assertEqual(values['HDA_ICON'], 2)
+    self.assertEqual(values['LFA_ICON'], 2)
+    self.assertEqual(values['ALERTS_3'], 7)
+    self.new_publication()
+    self.cc.enabled = self.cc.longActive = False
+    values = self.decode(self.ccnc())['ADRV_0x161']
+    self.assertEqual(values['SETSPEED'], 0)
+    self.assertEqual(values['SETSPEED_HUD'], 0)
+    self.assertEqual(values['LFA_ICON'], 2)
+
+  def test_other_platform_set_speed_keeps_stock_availability_contract(self):
+    self.cp.carFingerprint = 'OTHER_PLATFORM'
+    self.cs.out.cruiseState.available = False
+    self.cc.enabled = self.cc.longActive = True
+    values = self.decode(self.ccnc())['ADRV_0x161']
+    self.assertEqual(values['SETSPEED'], 0)
+    self.assertEqual(values['SETSPEED_HUD'], 0)
+
   def test_one_publication_is_not_repeated_and_new_counter_wrap_is_allowed(self):
     self.cs.adrv_0x161['COUNTER'] = 254
     self.assertEqual(len(self.ccnc()), 2)

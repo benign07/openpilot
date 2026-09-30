@@ -765,8 +765,11 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
       lat_active = CC.latActive
 
       if CS.adrv_0x161 is not None and (not lx3_hev or lx3_cluster.claim('ADRV_0x161')):
-        main_enabled = CS.out.cruiseState.available
         cruise_enabled = CC.enabled
+        # LX3's accepted combined mode is independent of the legacy stock SCC
+        # latch. RES/SET can engage it with that latch off; keep its set speed
+        # display consistent with actual longitudinal permission.
+        main_enabled = CS.out.cruiseState.available or (lx3_hev and cruise_enabled)
         lat_enabled = CS.out.latEnabled
         nav_active = hud_control.activeCarrot > 1
 
