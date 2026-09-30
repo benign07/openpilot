@@ -833,6 +833,10 @@ class CarState(CarStateBase):
       pt_parser.dbc.name_to_msg[LX3_TIME_MESSAGE].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
       cam_parser.dbc.name_to_msg['CCNC_0x162'].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
       cam_parser.dbc.name_to_msg['ADRV_0x161'].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
+      for name in ('LFAHDA_CLUSTER', 'ADRV_0x1ea', 'ADRV_0x200'):
+        # All originals in the seven onset/baseline segments pass this CRC.
+        # Only a valid received publication may refresh the display source.
+        cam_parser.dbc.name_to_msg[name].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
 
     return {
       Bus.pt: pt_parser,

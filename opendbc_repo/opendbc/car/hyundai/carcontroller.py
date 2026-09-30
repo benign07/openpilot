@@ -4,6 +4,7 @@ from opendbc.car import Bus, DT_CTRL, apply_driver_steer_torque_limits, common_f
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.carstate import CarState
+from opendbc.car.hyundai.lx3_cluster import Lx3ClusterTransport
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS, HyundaiExtFlags
 from opendbc.car.interfaces import CarControllerBase
@@ -123,6 +124,7 @@ class CarController(CarControllerBase):
     self.CAN = CanBus(CP)
     self.params = CarControllerParams(CP)
     self.packer = CANPacker(dbc_names[Bus.pt])
+    self.lx3_cluster = Lx3ClusterTransport() if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV else None
     self.angle_limit_counter = 0
 
     self.accel_last = 0
@@ -174,7 +176,10 @@ class CarController(CarControllerBase):
     self.steerDeltaDownOrg = self.steerDeltaDown = self.steerDeltaDownLC = self.params.STEER_DELTA_DOWN
 
   def update(self, CC, CS, now_nanos):
-
+    if self.lx3_cluster is not None:
+      # latEnabled comes from accepted, active SelfdriveState, not PRE_ENABLE.
+      # Lateral-only has CC.enabled=False; suspended lateral shows ready, not green active.
+      self.lx3_cluster.begin(CS, now_nanos, CC.latActive or CC.longActive or CS.out.latEnabled)
     if self.frame % 50 == 0:
       params = Params()
       self.max_angle_frames = params.get_int("MaxAngleFrames")
@@ -434,8 +439,8 @@ class CarController(CarControllerBase):
         can_sends.extend(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS))
 
       # LFA and HDA icons
-      if self.frame % 5 == 0 and camera_scc:
-        can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
+      if camera_scc and (self.frame % 5 == 0 or self.lx3_cluster is not None):
+        can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive, self.lx3_cluster))
         if self.camera_scc_params == 3 and self.CP.carFingerprint != 'HYUNDAI_PALISADE_LX3_HEV':
           # LX3's complete CCNC display below owns0x161; avoid a second frame
           # with different fields, warning masking and an unrefreshed CRC.
@@ -452,7 +457,7 @@ class CarController(CarControllerBase):
         self.hyundai_jerk.check_carrot_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
 
         if True: #not camera_scc:
-          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar, stopping, self.canfd_debug))
+          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar, stopping, self.canfd_debug, self.lx3_cluster))
           if hda2:
             can_sends.extend(hyundaicanfd.create_adrv_messages(self.CP, self.packer, self.CAN, self.frame))
           else:

@@ -58,3 +58,47 @@ emergency 조향 목록이 실행됐다는 근거는 없다. 원본 MDPS의 acti
 `주행데이터/engagement_audit_20260930/all_raw/oem-ownership-context-20261001.json`,
 재현 코드는 `can_inventory_work/audit_lx3_oem_ownership_context_20261001.py`에
 보관한다. 개인정보가 포함될 수 있는 원본 기록은 Git에 포함하지 않는다.
+
+## 12차 상호검토 후 표시 소유권 보완
+
+실제 Claude와 같은 코드를 다시 검토했다. COUNTER 헤더 추가가 자동으로
++1 검증을 켠다는 11차 우려는 실제 signal type과 parser 재현으로 철회했다.
+전용 DBC 이름에는 checksum-state가 없으므로 COUNTER는 정보 필드다.
+checksum callback 연결과 counter 검증은 서로 다른 조건이며 테스트로 고정했다.
+
+수용한 문제는 오래된 표시 원본의 반복 송신과 비활성 중 표시 덮어쓰기다.
+LX3 전용 `Lx3ClusterTransport`를 각 CarController에 두었다. 실제로 active인
+SelfdriveState에서 온 latEnabled, CC.latActive 또는 CC.longActive일 때만 표시를
+소유한다. lateral-only의 CC.enabled=False는 정상이고 PRE_ENABLE은 소유권이 없다.
+일시적인 깜빡이 양보는 준비 아이콘을 표시할 수 있으나 조향 활성 아이콘으로
+꾸미지 않는다. 이 표시는 조향 권한을 부여하지 않는다.
+
+5개 원본 표시 메시지(0x161/162/1E0/1EA/200)는 CRC가 맞는 parser 원본과 같은
+캐시에서만 가져온다. 수신 timestamp/counter 쌍마다 한 번, age0..100ms 이내에
+생성한다. 비활성 기간의 이미 전달된 원본은 기준으로 소비하며 parser 교체나
+clock 역행 후에는 새 원본이 필요하다. 다른 차종의 기존 builder는 유지한다.
+
+50ms마다 claim하면 원본과 OP 주기의 위상 차이로 간격이100ms까지 늘어나
+Panda의70ms 표시 차단 창이 끝날 수 있다는 Claude의 반례를 실제 C forwarding
+hook으로 재현했다. 그래서 LX3는10ms tick마다 새 원본이 있으면 생성한다.
+송신 주파수를100Hz로 만드는 것이 아니라 원본 publication에 맞춘다.
+40개 합성 위상·47~53ms jitter 조건에서 기존50ms claim은 활성 안정 구간에
+순정 원본이74회 섞였다. 개선안은0회였고 다른 payload의 동일 counter는
+인게이지 시작 시각의 원본 이미 전달1회/조건만 남았다. 이 최초 중복과 실제
+계기판의 처리 방식은 실차 검증 항목이며 완전한 ECU 교체라고 주장하지 않는다.
+
+CRC를 바로잡기 전에도 순정 비트 보존이 필요하다. 5개 메시지에는 총255bit의
+정의되지 않은 영역이 있었다. LX3 DBC에 `RAW_UNMAPPED_*` 정보 필드를 추가해
+의미를 추측하지 않고 원본 비트를 보존한다. 원본 값을 바꿔 사용하는 신호
+정의가 아니다. 실제 DBC parser/packer로500개 전체 바이트 round-trip이 일치했다.
+
+과거7개 segment의 r15b에서 OP가 요청한0x161 및1E0/1EA/200은 각각1450개 모두
+CRC가 틀렸다. 다른4개 LSS onset은 다른 dirty 소스에서0x161 sendcan이 없었고
+정상 원본이 전달됐다. 따라서 표시 CRC 결함만으로5건 경고를 설명할 수 없다.
+역사적 bus1 CAM362 OP 송신8127개/echo8117개는 모두 CRC가 맞았다. 현재 후보의
+카메라 억제와 당시 코드가 같은 동작이라는 전제 없이 별도로 검토한다.
+
+직전96e82f00의5개 CI job은 성공했으며 full-runtime 로그에서 실제
+msgq/Capnp/production publisher+AlertManager와 실제 깜빡이9tests를 확인했다.
+이번 소유권 보완은14개 display 테스트, 전체200개 PC Python 회귀 및 실제
+Panda C schedule 검증을 추가한다. 정확한 새 커밋의 CI 결과는 별도 기록한다.

@@ -283,9 +283,9 @@ def create_acc_cancel(packer, CP, CAN, cruise_info_copy):
   })
   return packer.make_can_msg("SCC_CONTROL", CAN.ECAN, values)
 
-def create_lfahda_cluster(packer, CS, CAN, long_active, lat_active):
-
-
+def create_lfahda_cluster(packer, CS, CAN, long_active, lat_active, lx3_cluster=None):
+  if lx3_cluster is not None and not lx3_cluster.claim('LFAHDA_CLUSTER'):
+    return []
   if CS.lfahda_cluster is not None:
     values = copy.copy(CS.lfahda_cluster)
     rx_counter = values.pop("COUNTER", None)
@@ -297,7 +297,7 @@ def create_lfahda_cluster(packer, CS, CAN, long_active, lat_active):
     values["HDA_OptUsmSta"] = 2
   values["HDA_CntrlModSta"] = 2 if long_active else 0
   values["HDA_LFA_SymSta"] = 2 if lat_active else 0
-  return [packer.make_can_msg("LFAHDA_CLUSTER", CAN.ECAN, values, rx_counter=rx_counter)]
+  return [_make_ccnc_cluster_msg(packer, 'LFAHDA_CLUSTER', CAN.ECAN, values, lx3_cluster is not None, rx_counter)]
 
 def create_lfa_icon_non_camera_scc(packer, CS, CAN, CC):
   ret = []
@@ -691,15 +691,15 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control,
       _apply_radar_blink(values, blink_pairs, frame, t=blink_t)
 
 def _make_ccnc_cluster_msg(packer, name, bus, values, lx3_hev, rx_counter=None):
-  if lx3_hev and name in ('ADRV_0x161', 'CCNC_0x162') and rx_counter is not None:
+  if lx3_hev and rx_counter is not None:
     # Direct cluster TX replaces this camera publication, rather than adding a
     # new ECU counter stream. Do not let CANPacker invent another increment.
     values = {**values, 'COUNTER': rx_counter}
   msg = packer.make_can_msg(name, bus, values, rx_counter=rx_counter)
   address, data, bus = msg
-  if lx3_hev and address in (0x161, 0x162) and len(data) == 32:
+  if lx3_hev and (address, len(data)) in ((0x161, 32), (0x162, 32), (0x1E0, 16), (0x1EA, 32), (0x200, 8)):
     # The dedicated LX3 DBC has no native checksum callback. Unlike the
-    # buffered steering/SCC messages, these cluster frames leave Panda as-is.
+    # buffered steering/SCC messages, these five display frames leave Panda as-is.
     # Recompute only their checksum after editing the display payload.
     checksum = hkg_can_fd_checksum(address, None, data)
     return address, checksum.to_bytes(2, 'little') + data[2:], bus
@@ -708,9 +708,11 @@ def _make_ccnc_cluster_msg(packer, name, bus, values, lx3_hev, rx_counter=None):
 
 def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
                          disp_angle, left_lane_warning, right_lane_warning,
-                         enable_corner_radar, stopping, canfd_debug):
+                         enable_corner_radar, stopping, canfd_debug, lx3_cluster=None):
   ret = []
   lx3_hev = CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV"
+  if lx3_hev and (lx3_cluster is None or not lx3_cluster.active):
+    return ret
   lead_visible = hud_control.leadVisible
   lead_distance = hud_control.leadDistance
   if lx3_hev:
@@ -759,10 +761,10 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         ret.append(packer.make_can_msg(CS.cruise_btns_msg_canfd, CAN.CAM, values))
 
     # --- 0x161/0x200/0x1ea/0x162 (frame%5) ---
-    if frame % 5 == 0:
+    if frame % 5 == 0 or lx3_hev:
       lat_active = CC.latActive
 
-      if CS.adrv_0x161 is not None:
+      if CS.adrv_0x161 is not None and (not lx3_hev or lx3_cluster.claim('ADRV_0x161')):
         main_enabled = CS.out.cruiseState.available
         cruise_enabled = CC.enabled
         lat_enabled = CS.out.latEnabled
@@ -869,13 +871,13 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
 
         ret.append(_make_ccnc_cluster_msg(packer, "ADRV_0x161", CAN.ECAN, values, lx3_hev, rx_counter))
 
-      if CS.adrv_0x200 is not None:
+      if CS.adrv_0x200 is not None and (not lx3_hev or lx3_cluster.claim('ADRV_0x200')):
         values = copy.copy(CS.adrv_0x200)
         rx_counter = values.pop("COUNTER", None)
         values["TauGapSet"] = hud_control.leadDistanceBars
-        ret.append(packer.make_can_msg("ADRV_0x200", CAN.ECAN, values, rx_counter = rx_counter))
+        ret.append(_make_ccnc_cluster_msg(packer, 'ADRV_0x200', CAN.ECAN, values, lx3_hev, rx_counter))
 
-      if CS.adrv_0x1ea is not None:
+      if CS.adrv_0x1ea is not None and (not lx3_hev or lx3_cluster.claim('ADRV_0x1ea')):
         values = copy.copy(CS.adrv_0x1ea)
         rx_counter = values.pop("COUNTER", None)
         # blinker hold
@@ -893,9 +895,9 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           blink_t=1.0
         )
 
-        ret.append(packer.make_can_msg("ADRV_0x1ea", CAN.ECAN, values, rx_counter = rx_counter))
+        ret.append(_make_ccnc_cluster_msg(packer, 'ADRV_0x1ea', CAN.ECAN, values, lx3_hev, rx_counter))
 
-      if CS.ccnc_0x162 is not None:
+      if CS.ccnc_0x162 is not None and (not lx3_hev or lx3_cluster.claim('CCNC_0x162')):
         values = copy.copy(CS.ccnc_0x162)
 
         if lx3_hev:

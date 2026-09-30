@@ -99,3 +99,19 @@ LX3_EXPORT bool lx3_test_active_tx(uint8_t mode) {
   }
   return safety_tx_hook(&p);
 }
+
+LX3_EXPORT bool lx3_test_packet_tx(int address, int bus, int length, const uint8_t *data) {
+  assert(length >= 0 && length <= 64);
+  CANPacket_t p = fixture_packet(address, bus, length);
+  memcpy(p.data, data, (size_t)length);
+  return safety_tx_hook(&p);
+}
+
+LX3_EXPORT int lx3_test_packet_fwd(int address, int bus, int length, const uint8_t *data, uint8_t *output) {
+  assert(length >= 0 && length <= 64);
+  CANPacket_t p = fixture_packet(address, bus, length);
+  memcpy(p.data, data, (size_t)length);
+  const int destination = safety_fwd_hook(&p);
+  memcpy(output, p.data, (size_t)length);
+  return destination;
+}

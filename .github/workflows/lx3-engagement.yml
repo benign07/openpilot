@@ -146,6 +146,8 @@ jobs:
             opendbc_repo/opendbc/safety/tests/lx3_host_bridge.c -lm -o /tmp/lx3-host-bridge.so
           python -m selfdrive.selfdrived.tests.lx3_host_panda_joint \
             --library /tmp/lx3-host-bridge.so --report lx3-host-panda-joint.json
+          python -m selfdrive.selfdrived.tests.lx3_cluster_panda_schedule \
+            --library /tmp/lx3-host-bridge.so --report lx3-cluster-panda-schedule.json
       - name: Record OTA qualification separately from test infrastructure
         if: always()
         run: |
@@ -168,6 +170,7 @@ jobs:
             native-release-audit.txt
             native-legacy-audit.txt
             lx3-host-panda-joint.json
+            lx3-cluster-panda-schedule.json
   offline-tests:
     runs-on: ubuntu-latest
     strategy:
