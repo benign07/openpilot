@@ -19,11 +19,24 @@ static CANPacket_t packet(unsigned int addr, unsigned int bus, unsigned int dlc)
   return p;
 }
 
+static void fresh_mdps(int angle, int torque) {
+  CANPacket_t p = packet(0xEA, 0, 12);
+  const unsigned int encoded_torque = (unsigned int)(torque + 4095);
+  p.data[10] = encoded_torque & 0xFFU;
+  p.data[11] = (encoded_torque >> 8U) & 0x1FU;
+  p.data[16] = (unsigned int)angle & 0xFFU;
+  p.data[17] = ((unsigned int)angle >> 8U) & 0xFFU;
+  hyundai_canfd_update_checksum(&p);
+  // Isolated RX function fixture; full RX configuration is tested separately.
+  hyundai_canfd_rx_hook(&p);
+}
+
 static void reset(uint16_t param) {
   assert(set_safety_hooks(SAFETY_HYUNDAI_CANFD, param) == 0);
   init_tests();
   set_timer(1000000U);
   safety_tx_buffered_for_fwd = false;
+  if ((param & HYUNDAI_PARAM_LX3_ENGAGEMENT_GUARD) != 0U) fresh_mdps(0, 0);
 }
 
 static CANPacket_t angle_command(bool active) {
@@ -140,6 +153,7 @@ static void guarded_regressions(void) {
   for (uint32_t start = 1000000U; ; start = UINT32_MAX - 10000U) {
     reset(lx3_param());
     set_timer(start);
+    fresh_mdps(0, 0);
     set_controls_allowed(true);
     p = angle_command(true);
     assert(safety_tx_hook(&p));
@@ -243,7 +257,7 @@ static void guarded_regressions(void) {
   for (int sign = -1; sign <= 1; sign += 2) {
     reset(lx3_param());
     set_controls_allowed(true);
-    p = angle_command(true);
+    p = angle_command(false);
     set_angle(&p, sign * 1750);
     assert(safety_tx_hook(&p));
     set_angle(&p, sign * 1751);
@@ -337,6 +351,57 @@ static void check(const char *name, bool safe) {
   blockers += safe ? 0U : 1U;
 }
 
+static void angle_envelope_regressions(void) {
+  for (int sign = -1; sign <= 1; sign += 2) {
+    reset(lx3_param());
+    set_controls_allowed(true);
+    CANPacket_t p = angle_command(true);
+    set_angle(&p, sign * 22);
+    assert(!safety_tx_hook(&p));
+    assert(!lx3_angle_active_prev);  // Rejected goals never become the reference.
+    set_angle(&p, sign * 21);
+    assert(safety_tx_hook(&p));
+    set_angle(&p, sign * 25);  // No elapsed time: cannot spend another rate budget.
+    assert(!safety_tx_hook(&p));
+    set_timer(1010000U);
+    set_angle(&p, sign * 42);
+    assert(safety_tx_hook(&p));
+  }
+  reset(lx3_param());
+  fresh_mdps(300, 0);
+  set_controls_allowed(true);
+  CANPacket_t p = angle_command(true);
+  set_angle(&p, 300);
+  assert(safety_tx_hook(&p));  // First active frame starts from measured angle.
+  reset(lx3_param());
+  set_controls_allowed(true);
+  set_timer(1050001U);
+  p = angle_command(true);
+  assert(!safety_tx_hook(&p));
+  reset(lx3_param());
+  set_controls_allowed(true);
+  fresh_mdps(0, 500);
+  p = angle_command(true);
+  p.data[6] = 26U;
+  assert(!safety_tx_hook(&p));
+  p.data[6] = 25U;
+  assert(safety_tx_hook(&p));  // Matches the host's minimum override authority.
+  reset(lx3_param());
+  set_controls_allowed(true);
+  p = angle_command(true);
+  p.data[6] = 200U;
+  assert(safety_tx_hook(&p));
+  fresh_mdps(0, 500);
+  CANPacket_t output = forward(angle_command(false), 2);
+  assert(!hyundai_canfd_actuator_active(&output));  // Recheck before buffering handoff.
+  reset(lx3_param());
+  set_controls_allowed(true);
+  lx3_mdps_fault = true;
+  p = angle_command(true);
+  assert(!safety_tx_hook(&p));
+  puts("PASS: LX3 angle rate, measured initial target, stale EPS, driver override and forwarding rechecks");
+}
+
 static void release_audit(uint16_t param) {
   reset(param);
   CANPacket_t p = angle_command(true);
@@ -410,7 +475,7 @@ static void release_audit(uint16_t param) {
     p.data[10] = 8U;
     hyundai_canfd_update_checksum(&p);
     (void)safety_rx_hook(&p);
-    p.data[2]++;
+    p.data[2] += 2U;  // Vehicle 0x10B counter advances by two at 25 Hz.
     p.data[10] = 0U;
     hyundai_canfd_update_checksum(&p);
     (void)safety_rx_hook(&p);
@@ -439,5 +504,6 @@ int main(int argc, char **argv) {
   compatibility_checks();
   rejected_tx_regressions();
   guarded_regressions();
+  angle_envelope_regressions();
   return 0;
 }

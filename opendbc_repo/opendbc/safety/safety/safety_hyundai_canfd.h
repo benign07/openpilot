@@ -9,6 +9,32 @@ const uint16_t HYUNDAI_PARAM_LX3_ENGAGEMENT_GUARD = 1024U;
 const int HYUNDAI_LX3_MAX_ANGLE = 1750;
 const int HYUNDAI_LX3_MAX_TORQUE = 250;
 static bool hyundai_canfd_lx3_guard = false;
+static bool lx3_mdps_seen = false;
+static bool lx3_mdps_fault = false;
+static uint32_t lx3_mdps_us = 0U;
+static int lx3_measured_angle = 0;
+static bool lx3_angle_active_prev = false;
+static int lx3_angle_accepted = 0;
+static uint32_t lx3_angle_accepted_us = 0U;
+
+// Software envelope derived from this port's host maximum of 2 deg/10ms.
+// EPS/OEM qualification and speed-dependent lateral acceleration remain separate.
+static bool lx3_angle_context_valid(int torque) {
+  const uint32_t now = microsecond_timer_get();
+  const bool driver_override = (torque_driver.min < -250) || (torque_driver.max > 250);
+  return lx3_mdps_seen && !lx3_mdps_fault && (now - lx3_mdps_us <= 50000U) &&
+         (!driver_override || (torque <= 25));
+}
+
+static bool lx3_angle_violation(int angle, int active, int torque) {
+  if (active != 2) return false;
+  if (!lx3_angle_context_valid(torque)) return true;
+  const uint32_t now = microsecond_timer_get();
+  const int reference = lx3_angle_active_prev ? lx3_angle_accepted : lx3_measured_angle;
+  const uint32_t elapsed = lx3_angle_active_prev ? MIN(now - lx3_angle_accepted_us, 10000U) : 10000U;
+  const int max_delta = (int)((elapsed * 20U) / 10000U) + 1;
+  return ABS(angle - reference) > max_delta;
+}
 
 static bool hyundai_canfd_actuator_addr(int addr) {
   return (addr == 0xCB) || (addr == 0x12A) || (addr == 0x1A0);
@@ -441,7 +467,12 @@ static bool canfd_bfwd_authorized(const CanfdBufferedFwd* st) {
          ((st->addr != 0x1A0) || get_longitudinal_allowed());
 }
 
+static bool canfd_bfwd_packet_authorized(const CanfdBufferedFwd* st, const CANPacket_t* pkt) {
+  return canfd_bfwd_authorized(st) && ((st->addr != 0xCB) || lx3_angle_context_valid(GET_BYTE(pkt, 6)));
+}
+
 static void canfd_bfwd_revoke_actuators(void) {
+  lx3_angle_active_prev = false;
   for (int i = 0; canfd_bfwd[i].addr > 0; i++) {
     if (canfd_bfwd_guarded(&canfd_bfwd[i])) {
       canfd_bfwd_reset(&canfd_bfwd[i]);
@@ -483,7 +514,7 @@ static bool canfd_bfwd_pop(CanfdBufferedFwd* st, CANPacket_t* pkt) {
   }
 
   if (canfd_bfwd_guarded(st) && (canfd_bfwd_expired(st, st->q_us[st->head]) ||
-      (hyundai_canfd_actuator_active(&st->q[st->head]) && !canfd_bfwd_authorized(st)))) {
+      (hyundai_canfd_actuator_active(&st->q[st->head]) && !canfd_bfwd_packet_authorized(st, &st->q[st->head])))) {
     canfd_bfwd_reset(st);
     return false;
   }
@@ -514,7 +545,7 @@ static bool canfd_bfwd_reuse_last(CanfdBufferedFwd* st, CANPacket_t* pkt) {
   }
 
   if (canfd_bfwd_guarded(st) && (canfd_bfwd_expired(st, st->last_pkt_us) ||
-      (hyundai_canfd_actuator_active(&st->last_pkt) && !canfd_bfwd_authorized(st)))) {
+      (hyundai_canfd_actuator_active(&st->last_pkt) && !canfd_bfwd_packet_authorized(st, &st->last_pkt)))) {
     canfd_bfwd_reset(st);
     return false;
   }
@@ -543,6 +574,14 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
       int torque_driver_new = ((GET_BYTE(to_push, 11) & 0x1fU) << 8U) | GET_BYTE(to_push, 10);
       torque_driver_new -= 4095;
       update_sample(&torque_driver, torque_driver_new);
+      if (hyundai_canfd_lx3_guard && (GET_LEN(to_push) == 24U) &&
+          (hyundai_canfd_get_checksum(to_push) == hyundai_common_canfd_compute_checksum(to_push))) {
+        // Host uses STEERING_ANGLE_2 with its DBC sign inverted: raw * +0.1 deg.
+        lx3_measured_angle = to_signed(GET_BYTES(to_push, 16, 2), 16);
+        lx3_mdps_fault = GET_BIT(to_push, 54U) || GET_BIT(to_push, 149U);
+        lx3_mdps_us = microsecond_timer_get();
+        lx3_mdps_seen = true;
+      }
     }
 
     // cruise buttons
@@ -662,11 +701,13 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
       const int desired_angle = to_signed(GET_BYTES(to_send, 4, 2) & 0x3FFFU, 14);
       // Match existing host encoding: 0.1 degree per raw unit, 175-degree
       // absolute limit, 250 max-torque ceiling. These are software bounds,
-      // not measured EPS qualification. Rate/driver limits still need work.
+      // not measured EPS qualification. The rate/driver envelope below is
+      // independently checked; OEM timing/response still needs qualification.
       violation |= (active == 3) || ((active == 2) && !controls_allowed);
       violation |= (active != 2) && (torque_limit != 0);
       violation |= (desired_angle > HYUNDAI_LX3_MAX_ANGLE) || (desired_angle < -HYUNDAI_LX3_MAX_ANGLE) ||
                    (torque_limit > HYUNDAI_LX3_MAX_TORQUE);
+      violation |= lx3_angle_violation(desired_angle, active, torque_limit);
     }
     if ((addr == 0x12A) && GET_BIT(to_send, 52U) && !controls_allowed) {
       violation = true;
@@ -744,6 +785,13 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
     }
   }
 
+  if (hyundai_canfd_lx3_guard && (addr == 0xCB) && tx && !violation) {
+    lx3_angle_active_prev = ((GET_BYTE(to_send, 3) >> 4) & 0x3U) == 2U;
+    if (lx3_angle_active_prev) {
+      lx3_angle_accepted = to_signed(GET_BYTES(to_send, 4, 2) & 0x3FFFU, 14);
+      lx3_angle_accepted_us = microsecond_timer_get();
+    }
+  }
   if (violation) {
     tx = false;
   }
@@ -846,6 +894,13 @@ static safety_config hyundai_canfd_init(uint16_t param) {
 
   hyundai_common_init(param);
   hyundai_canfd_lx3_guard = GET_FLAG(param, HYUNDAI_PARAM_LX3_ENGAGEMENT_GUARD);
+  lx3_mdps_seen = false;
+  lx3_mdps_fault = false;
+  lx3_mdps_us = 0U;
+  lx3_measured_angle = 0;
+  lx3_angle_active_prev = false;
+  lx3_angle_accepted = 0;
+  lx3_angle_accepted_us = 0U;
 
   gen_crc_lookup_table_16(0x1021, hyundai_canfd_crc_lut);
   hyundai_canfd_alt_buttons = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ALT_BUTTONS);
