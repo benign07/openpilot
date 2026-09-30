@@ -8,7 +8,7 @@
 
 새 **LX3 전용 safetyParam bit 1024**를 추가했다. 기존 190 조합만으로 LX3를 판별하지 않는다. 현재 LX3 후보는 190|1024=1214를 요청하며, 구형 Panda의 190 보고는 호스트 승인을 통과하지 못한다. `dashcamOnly`는 유지한다.
 
-아래의 기존 버퍼·권한 검사 8개는 새 전용 경로에서 모두 통과한다. 이번에 추가한 물리 버튼 허용 경로와 각도 변화율 검사는 2개 모두 실패한다. **검사 8개 통과가 운행 가능 판정은 아니다.** 기존 정책의 `--legacy-audit`는 여전히 5개 실패하며, 다른 차종의 기존 동작을 유지했음을 기존 정책의 안전성 해결로 표현하지 않는다.
+최신 후보 `LX3-engagement-candidate-20260930.2`는 물리 버튼의 소프트웨어 허용 경로를 연결했고, 호스트/진단 144개 및 guarded C audit 10개가 통과한다. 아래에는 이전 검증과 이후 수정이 시점별로 남아 있다. **소프트웨어 검사 통과가 운행 가능 판정은 아니다.** 기존 정책의 `--legacy-audit`는 여전히 5개 실패하며, 다른 차종의 기존 동작을 유지했음을 기존 정책의 안전성 해결로 표현하지 않는다. 최신 후보의 보드 빌드·실행과 실차 검증 상태는 후속 절과 GitHub workflow 결과로 확인한다.
 
 ## 바꾼 구조
 
@@ -137,10 +137,26 @@ Windows Zig/Clang strict warning·undefined-behavior sanitizer 빌드와 native 
 
 HUD 1.0.22의 폰 기록 보관 증가를 확인했고, PC 수신 예약 작업을 실행한 뒤 실제 폰→PC 전달이 재개됐다. 폰과 PC 연결 식별자·인증키 일치 여부만 확인했고 비밀값은 보고서에 넣지 않았다. 실제 자동 전송 확인 수량과 해시 검증은 PC 로컬 검증 기록에 남긴다. 전체 rlog·영상은 이 경량 진단 기록과 별개다.
 
+## 9월 30일 후속 후보: 물리 버튼과 Panda 허용 연결
+
+사용자는 기존 우회가 정상 인게이지를 대체하기 위한 것이었고, 조향 메시지를 유지하면서 힘을 0으로 제한했다고 설명했다. 이 설명을 호환성 검토의 기준으로 보존한다. 메시지의 존재, active 비트, raw torque, DBC 변환값, 각도 제어 max-torque는 별개다. 특히 LFA `0x12A`의 `TORQUE_REQUEST=-1024`는 현재 DBC에서 raw 0이며, 물리적인 무토크를 단독으로 입증하지 않는다. 실제 각도 제어 `0xCB`와 구분한다.
+
+- 기존 실사용 매핑(0x10B byte10, LFA bit7, SCC main raw8, RES1/SET2/CANCEL4)을 재사용한다. main의 300ms 흔들림 처리를 호스트 프레임 수 대신 실제 수신 시각으로 통일했다. 이 값은 기존 포팅 정책이며 OEM 승인값을 입증한 것은 아니다.
+- CANParser는 기본으로 raw 보관을 하지 않는다. LX3만 물리 0x10B를 64개 제한 큐에 수신 순서대로 보관하고, CarState는 CRC/+2 counter/시간/중립 복구를 확인한 입력에서만 buttonEvents를 만든다. 큐 overflow와 같은 batch의 뒤늦은 오류는 이전 enable 이벤트도 폐기한다. 중립 초기 확인을 호스트 호출마다 초기화하는 결함을 파서 통합 검사에서 찾아 수정했다.
+- LX3 전용 Panda 정책은 같은 물리 입력의 눌림·해제로 허용을 만든다. LFA는 lateral-only, SCC main/RES/SET은 combined다. lateral-only에서 활성 ACC 명령을 금지한다. 취소, 중복/누락/잘못된 CRC·길이, 200ms 정체, 일반 RX/heartbeat에 의한 허용 철회는 세션과 actuator 큐·재사용을 지운다. 눌린 상태의 부팅/복구는 새 enable로 해석하지 않는다. 전달 echo와 기존 0x1AA RES/SET은 허용 근거가 아니다.
+- 활성 `0xCB`는 max-torque가 0이어도 Panda 허용이 필요하다. 비활성 `active=1, torque=0`의 기존 유지 프레임은 보존한다. 순정 emergency fallback의 원본 보존도 유지하며 별도 검증 대상이다.
+- 자동 기록에 물리 0x10B(25Hz 스트림 보존), 0xCB/MDPS/0x12A/0x1AA와 상태 변화, Panda 허용·RX 이상·TX 차단 누계, 버튼 이벤트·세션 모드를 추가했다. 0x162의 LFA fault도 LSS/DAS와 함께 기록한다. 요청·수신·송신 echo는 구분하며 EPS 도착을 입증한 것으로 표시하지 않는다. 배경 조향 기록은 10Hz 표본이고 전수 CAN은 rlog와 대조해야 한다.
+
+호스트/파서/자동 진단/기존 HUD·시간 검사는 144개 통과했다. Windows Zig/Clang strict warning·UB sanitizer의 기존 호환성·각도·새 물리 권한 회귀가 통과했고, guarded software audit 10개가 모두 통과한다. 신규 physical audit는 CRC가 맞는 합성 fixture와 정상 MDPS fixture를 사용하는 **소프트웨어 검증**이며 오늘 실제 버튼을 누른 증거가 아니다. 오늘 두 중립 실캡처 12,005개도 재생 통과했다.
+
+GitHub에는 Python 3.11/3.12와 C 검증 외에 H7 보드 firmware 컴파일 검사를 추가했다. 보드 빌드 결과는 해당 workflow 결과로 확인한다. 빌드용 debug 서명 artifact는 검토용이며 자동 설치/OTA 경로에는 연결하지 않는다.
+
+현재 후보의 dashcamOnly 인터록과 OTA 미배포 상태는 유지한다. 내일 운행용 완성본이라고 판정하지 않는다. 보드 firmware 실행·전체 IPC, 속도별 각도/가속도 및 움직임 단위·부호, OEM 소유권/긴급 기능 전환, 물리 LFA/SCC/cancel과 실제 계기판 경고·MDPS 응답의 검증이 남는다. 버튼 무결성과 권한에 대한 기존 차단 사유를 해결했어도 이 남은 조건을 자동으로 충족시키지는 않는다.
+
 ## 남은 필수 작업 — 인터록 해제 조건
 
-1. 실행 중인 Panda signature/소스 대응 확인. 새 전용 경로의 TX 자기허용·권한 없는 0xCB는 차단했지만, 각도 변화율·운전자 개입·실제 firmware 제어 전환을 추가 구현·검증해야 한다. 기존 공통 helper의 `aol_allowed`는 전용 경로의 권한 근거로 사용하지 않는다.
-2. 물리 0x10B의 checksum/counter/주기/중복·누락·main debounce를 검증하고 LFA/SCC/cancel의 운전자 의도와 Panda 허용을 연결. 현재 호스트가 요구하는 Panda 승인을 만들기 위해 TX에서 강제로 허용해서는 안 된다.
+1. 새로 빌드한 Panda signature/소스 대응, 보드 실행과 전체 IPC 제어 전환 검증. 각도 변화율·운전자 개입은 소프트웨어 경계를 구현했고, 속도별 경계와 실차 대응이 남는다. 기존 공통 helper의 `aol_allowed`는 전용 경로의 권한 근거로 사용하지 않는다.
+2. 물리 0x10B의 checksum/counter/주기는 중립 실캡처로 확인했고 debounce와 LFA/SCC/cancel의 Panda 허용은 기존 매핑 기반으로 구현했다. 실제 버튼 조작과 순정 응답이 이 정책과 일치하는지 정차 검증한다. TX에서 강제로 허용하지 않는다.
 3. 실제 0xCB 각도·변화율·토크 제한과 비활성 명령을 검증. Python 측 목표값 제한만으로 Panda 검사를 대체하지 않기.
 4. buffered forwarding의 대기열·재사용·타임아웃 중 과거 활성 명령이 취소 후 나가지 않는지, 순정 LFA와 OP의 제어 주체가 어떻게 전환되는지 벤치에서 확인.
 5. 순정 긴급조향/제동 ALERTS_1에서 원본 명령을 보존하는 기존 분기는 임의로 삭제하지 않았다. 이 분기의 소유권/허용과 순정 AEB 기능 보존을 함께 검증해야 한다.

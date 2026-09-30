@@ -1,7 +1,7 @@
-"""Physical LX3 button stream qualification, without engagement permission.
+"""Physical LX3 button integrity and driver gestures; no actuator commands.
 
 2026-09-30 vehicle captures: 0x10B, bus 0, 16 bytes, 25 Hz, counter += 2.
-Button identity and release debounce require operator-labelled captures.
+Button identities reuse the installed port. OEM validation remains separate.
 Never feed a rejected or recovered held gesture to an engagement state machine.
 """
 
@@ -62,6 +62,79 @@ class Lx3ButtonInput:
     return self.ready
 
   def fresh(self, now_ns):
-    if not self.ready or not 0 <= now_ns - self.received_ns <= self.TIMEOUT_NS:
+    if not self.ready:
+      return False  # Preserve neutral warmup progress between host update ticks.
+    if not 0 <= now_ns - self.received_ns <= self.TIMEOUT_NS:
       return self.reject('stale')
     return True
+
+
+class Lx3ButtonIntent:
+  # Installed LX3 main-button policy, expressed in CAN time rather than host ticks.
+  MAIN_RELEASE_NS = 300_000_000
+  NAMES = {1: 'accelCruise', 2: 'decelCruise', 3: 'gapAdjustCruise', 4: 'cancel'}
+
+  def __init__(self):
+    self.input = Lx3ButtonInput()
+    self.reset_gesture()
+
+  def reset_gesture(self):
+    self.main = False
+    self.main_last_ns = 0
+    self.button = None
+
+  def update(self, addr, bus, data, received_ns, now_ns, checksum):
+    if addr != 0x10B or bus != 0:
+      return []
+    if not self.input.update(addr, bus, data, received_ns, now_ns, checksum):
+      self.reset_gesture()
+      return []  # Invalid/stale input never fabricates an enable release.
+    raw, lfa = self.input.cruise, self.input.lfa
+    if raw not in (0, 1, 2, 3, 4, 8) or (lfa and raw not in (0, 4)):
+      self.input.reject('ambiguous_button')
+      self.reset_gesture()
+      return []
+    if raw == 4:
+      self.reset_gesture()
+      self.button = 'cancel'
+      return [('cancel', True)]  # Cancel wins over every simultaneous enable.
+    events = []
+    if raw == 8:
+      if not self.main:
+        events.append(('mainCruise', True))
+      self.main, self.main_last_ns = True, received_ns
+    elif self.main and raw == 0 and received_ns - self.main_last_ns >= self.MAIN_RELEASE_NS:
+      self.main = False
+      events.append(('mainCruise', False))
+    button = 'lfaButton' if lfa else self.NAMES.get(raw)
+    if self.main and button is not None:
+      self.input.reject('ambiguous_gesture')
+      self.reset_gesture()
+      return []
+    if button != self.button:
+      if self.button is not None:
+        events.append((self.button, False))
+      if button is not None:
+        events.append((button, True))
+      self.button = button
+    return events
+
+  def fresh(self, now_ns):
+    ready = self.input.fresh(now_ns)
+    if not ready:
+      self.reset_gesture()
+    return ready
+
+  def from_parser(self, parser, checksum):
+    if parser.raw_overflow:
+      self.input.reject('capture_overflow')
+      self.reset_gesture()
+      parser.raw_frames.clear()
+      parser.raw_overflow = False
+    events = []
+    while parser.raw_frames:
+      address, bus, data, received_ns = parser.raw_frames.popleft()
+      events.extend(self.update(address, bus, data, received_ns, parser._last_update_nanos, checksum))
+      if not self.input.ready:
+        events.clear()  # A later bad frame invalidates earlier enables in this batch.
+    return events, self.fresh(parser._last_update_nanos)

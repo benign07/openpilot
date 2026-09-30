@@ -113,6 +113,28 @@ class RecorderTests(unittest.TestCase):
     self.assertEqual(self.recorder.sampled_out, 1)
     self.assertEqual(self.recorder.stale_packets, 1)
 
+  def test_physical_button_frames_and_zero_force_active_edges_are_retained(self):
+    self.recorder.update(services(), 100)
+    for index in range(3):
+      now = 100 + index * .04
+      data = bytearray(16); data[2] = index * 2
+      self.recorder.can_frame(0, 0x10B, bytes(data), int(now * 1e9), now)
+    inactive = bytearray(24); inactive[3] = 0x10
+    active = bytearray(inactive); active[3] = 0x20
+    for now, data in ((100.1, inactive), (100.11, active)):
+      self.recorder.can_frame(0, 0xCB, bytes(data), int(now * 1e9), now, 'tx_requested')
+    rows = self.rows()
+    self.assertEqual(len([r for r in rows if r.get('address') == 0x10B and r['kind'] == 'can_sample']), 3)
+    edges = [r for r in rows if r.get('name') == 'actuation_state_observation' and r['address'] == 0xCB]
+    self.assertEqual([r['after'] for r in edges], [[1, 0], [2, 0]])
+
+  def test_lfa_camera_fault_is_recorded_separately(self):
+    self.recorder.update(services(), 100)
+    self.recorder.can_frame(2, 0x162, bytes(32), 100_000_000_000, 100)
+    self.recorder.can_frame(2, 0x162, (1 << 234).to_bytes(32, 'little'), 100_010_000_000, 100.01)
+    edges = [r for r in self.rows() if r.get('name') == 'oem_fault_observation']
+    self.assertEqual(edges[-1]['after'], [0, 0, 1])
+
   def test_fault_burst_cannot_grow_chunk_without_bound(self):
     self.recorder.update(services(), 100)
     for index in range(1000):

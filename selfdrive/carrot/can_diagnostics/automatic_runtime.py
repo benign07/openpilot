@@ -11,9 +11,11 @@ FIELDS = {
   'carState': ('vEgo', 'aEgo', 'standstill', 'gearShifter', 'canValid', 'canTimeout', 'brakePressed',
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'seatbeltUnlatched',
-               'steerFaultTemporary', 'steerFaultPermanent', 'datetime'),
+               'steerFaultTemporary', 'steerFaultPermanent', 'latEnabled', 'buttonEvents', 'datetime'),
   'carControl': ('enabled', 'latActive', 'longActive', 'actuators'),
-  'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType'),
+  'selfdriveState': ('enabled', 'active', 'state', 'lx3EngagementMode', 'alertText1', 'alertText2', 'alertType'),
+  'pandaStates': ('controlsAllowed', 'safetyModel', 'safetyParam', 'safetyRxChecksInvalid', 'safetyRxInvalid',
+                  'safetyTxBlocked', 'faults', 'alternativeExperience'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
   'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels',
                        'myDrivingMode', 'tFollow'),
@@ -34,12 +36,14 @@ def selected_fields(reader, fields):
   result = {}
   for key in fields:
     value = getattr(reader, key, None)
-    if key in ('gearShifter', 'state', 'longitudinalPlanSource') and value is not None:
+    if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'safetyModel') and value is not None:
       value = str(value)
     elif key in ('speeds', 'accels') and value is not None:
       value = list(value)
-    elif key == 'errors' and value is not None:
+    elif key in ('errors', 'faults') and value is not None:
       value = [str(error) for error in value]
+    elif key == 'buttonEvents' and value is not None:
+      value = [{'type': str(button.type), 'pressed': bool(button.pressed)} for button in value]
     elif hasattr(value, 'to_dict'):
       value = value.to_dict()
     result[key] = value
@@ -106,7 +110,8 @@ class AutomaticController:
     repo = Path(__file__).resolve().parents[3]
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
                'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
-               'opendbc_repo/opendbc/car/hyundai/radar_interface.py')
+               'opendbc_repo/opendbc/car/hyundai/radar_interface.py', 'opendbc_repo/opendbc/car/hyundai/lx3_inputs.py',
+               'selfdrive/selfdrived/lx3_engagement.py', 'opendbc_repo/opendbc/safety/safety/safety_hyundai_canfd.h')
     metadata['source_hashes'] = {rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest()
                                for rel in sources if (repo / rel).is_file()}
     dbc = repo / 'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc'
@@ -132,8 +137,9 @@ class AutomaticController:
         # Read only required fields at the recorded rate. Full carState/deviceState
         # conversion on every CAN drain needlessly copies unrelated payloads.
         for name, fields in FIELDS.items():
-          services[name] = {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]),
-                            'data': selected_fields(sm[name], fields)}
+          data = ([selected_fields(panda, fields) for panda in sm[name]] if name == 'pandaStates'
+                  else selected_fields(sm[name], fields))
+          services[name] = {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]), 'data': data}
         last_context = now
       with self.lock:
         self.recorder.update(services, now)

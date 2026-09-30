@@ -39,6 +39,32 @@ static void reset(uint16_t param) {
   if ((param & HYUNDAI_PARAM_LX3_ENGAGEMENT_GUARD) != 0U) fresh_mdps(0, 0);
 }
 
+// Explicit fixture permission for isolated actuator tests, not physical evidence.
+static void grant_controls(void) {
+  if (hyundai_canfd_lx3_guard) {
+    lx3_mode = 2;
+    lx3_button_seen = true;
+    lx3_button_ready = true;
+    lx3_button_us = microsecond_timer_get();
+  }
+  set_controls_allowed(true);
+}
+
+static void physical_button(unsigned int raw) {
+  set_timer(microsecond_timer_get() + 40000U);
+  fresh_mdps(0, 0);
+  CANPacket_t p = packet(0x10B, 0, 10);
+  p.data[2] = lx3_button_seen ? (uint8_t)(lx3_button_counter + 2U) : 250U;
+  p.data[10] = raw;
+  hyundai_canfd_update_checksum(&p);
+  assert(safety_rx_hook(&p));
+}
+
+static void physical_baseline(void) {
+  for (unsigned int i = 0; i < 3U; i++) physical_button(0);
+  assert(lx3_button_ready && !controls_allowed);
+}
+
 static CANPacket_t angle_command(bool active) {
   CANPacket_t p = packet(0xCB, 0, 12);  // 24 bytes; LX3 DBC bit 29, Motorola 2-bit.
   p.data[3] = active ? 0x20U : 0U;
@@ -114,7 +140,7 @@ static void guarded_regressions(void) {
   }
 
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   CANPacket_t p = accel_command();
   assert(safety_tx_hook(&p));
   set_controls_allowed(false);
@@ -125,7 +151,7 @@ static void guarded_regressions(void) {
   assert(canfd_bfwd_find(0x1A0, 0)->count == 0U);
 
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   p = accel_command();
   assert(safety_tx_hook(&p));
   gas_pressed_prev = true;  // Alternative experience may leave controls enabled.
@@ -136,7 +162,7 @@ static void guarded_regressions(void) {
 
   for (int state = 0; state <= 1; state++) {
     reset(lx3_param());
-    set_controls_allowed(true);
+    grant_controls();
     p = angle_command(true);
     assert(safety_tx_hook(&p));
     assert(safety_tx_hook(&p));
@@ -154,7 +180,7 @@ static void guarded_regressions(void) {
     reset(lx3_param());
     set_timer(start);
     fresh_mdps(0, 0);
-    set_controls_allowed(true);
+    grant_controls();
     p = angle_command(true);
     assert(safety_tx_hook(&p));
     set_timer(start + 29000U);
@@ -168,18 +194,18 @@ static void guarded_regressions(void) {
 
   // Revocation clears every queue/cache before permission can rise again.
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   p = angle_command(true);
   assert(safety_tx_hook(&p));
   set_controls_allowed(false);
   CANPacket_t harmless = packet(0x555, 0, 12);
   (void)forward(harmless, 0);
-  set_controls_allowed(true);
+  grant_controls();
   out = forward(angle_command(false), 2);
   assert(!hyundai_canfd_actuator_active(&out));
 
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   p = angle_command(true);
   assert(safety_tx_hook(&p));
   CANPacket_t invalid_stock = stock_angle(false);
@@ -208,7 +234,7 @@ static void guarded_regressions(void) {
 
   // Invalid RX cannot consume or accept buffered OP control.
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   p = angle_command(true);
   assert(safety_tx_hook(&p));
   safety_rx_checks_invalid = true;
@@ -218,7 +244,7 @@ static void guarded_regressions(void) {
 
   // A full active queue keeps the newest command; an OFF clears cached active.
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   p = angle_command(true);
   for (unsigned int marker = 1; marker <= 3; marker++) {
     p.data[10] = marker;
@@ -256,7 +282,7 @@ static void guarded_regressions(void) {
 
   for (int sign = -1; sign <= 1; sign += 2) {
     reset(lx3_param());
-    set_controls_allowed(true);
+    grant_controls();
     p = angle_command(false);
     set_angle(&p, sign * 1750);
     assert(safety_tx_hook(&p));
@@ -310,6 +336,117 @@ static void rejected_tx_regressions(void) {
   puts("PASS: rejected CAN-FD TX has no buffer or authorization side effects across 64 configurations");
 }
 
+static void physical_permission_regressions(void) {
+  reset(lx3_param());
+  // A held button at boot, including its release, cannot obtain permission.
+  physical_button(128);
+  physical_button(0);
+  assert(!controls_allowed);
+  physical_button(0);
+  physical_button(0);
+  assert(lx3_button_ready);
+  physical_button(128);
+  assert(!controls_allowed);
+  physical_button(0);
+  assert(controls_allowed && lx3_mode == 1);
+  CANPacket_t angle = angle_command(true);
+  assert(safety_tx_hook(&angle));
+  CANPacket_t acc = accel_command();
+  assert(!safety_tx_hook(&acc));  // LFA-only never permits active longitudinal.
+  physical_button(128);
+  physical_button(0);
+  assert(!controls_allowed && lx3_mode == 0);
+
+  reset(lx3_param());
+  physical_baseline();
+  physical_button(8);
+  for (unsigned int i = 0; i < 5U; i++) {
+    physical_button(0);
+    assert(!controls_allowed);
+    physical_button(8);
+  }
+  for (unsigned int i = 0; i < 7U; i++) { physical_button(0); assert(!controls_allowed); }
+  physical_button(0);
+  assert(controls_allowed && lx3_mode == 2);
+  assert(safety_tx_hook(&acc));
+  physical_button(132);  // Physical CANCEL and LFA together: cancel wins.
+  assert(!controls_allowed && lx3_mode == 0);
+  assert(canfd_bfwd_find(0x1A0, 0)->count == 0U);
+
+  for (unsigned int raw = 1; raw <= 2U; raw++) {
+    reset(lx3_param());
+    physical_baseline();
+    physical_button(raw);
+    assert(!controls_allowed);
+    physical_button(0);
+    assert(controls_allowed && lx3_mode == 2);
+  }
+
+  for (unsigned int damage = 0; damage < 5U; damage++) {
+    reset(lx3_param());
+    physical_baseline();
+    physical_button(128);
+    physical_button(0);
+    assert(controls_allowed);
+    set_timer(microsecond_timer_get() + 40000U);
+    CANPacket_t p = packet(0x10B, 0, 10);
+    p.data[2] = (uint8_t)(lx3_button_counter + 2U);
+    if (damage == 1U) p.data[2] = lx3_button_counter;  // duplicate
+    if (damage == 2U) p.data[2] += 2U;  // missing frame
+    if (damage == 3U) set_timer(microsecond_timer_get() + 200001U);
+    if (damage == 4U) p.data_len_code = 9;
+    hyundai_canfd_update_checksum(&p);
+    if (damage == 0U) p.data[0] ^= 1U;
+    (void)safety_rx_hook(&p);
+    assert(!controls_allowed && !lx3_button_ready);
+    physical_button(128);  // A recovery held press must not recreate permission.
+    physical_button(0);
+    assert(!controls_allowed);
+  }
+
+  reset(lx3_param());
+  physical_baseline();
+  physical_button(128);
+  physical_button(0);
+  assert(safety_tx_hook(&angle));
+  set_timer(microsecond_timer_get() + 200001U);
+  CANPacket_t inactive = stock_angle(false);
+  (void)safety_fwd_hook(&inactive);  // Missing buttons expire queued control too.
+  assert(!controls_allowed && !hyundai_canfd_actuator_active(&inactive));
+
+  reset(lx3_param());
+  physical_baseline();
+  physical_button(128);
+  brake_pressed = true;
+  physical_button(0);
+  assert(!controls_allowed);
+
+  reset(lx3_param());
+  physical_baseline();
+  physical_button(129);  // Ambiguous simultaneous LFA/RES cannot enable.
+  physical_button(0);
+  assert(!controls_allowed);
+
+  reset(lx3_param());
+  physical_baseline();
+  CANPacket_t echo = packet(0x10B, 130, 10);
+  echo.data[10] = 128;
+  hyundai_canfd_update_checksum(&echo);
+  (void)safety_rx_hook(&echo);
+  echo.data[10] = 0;
+  hyundai_canfd_update_checksum(&echo);
+  (void)safety_rx_hook(&echo);
+  assert(!controls_allowed);
+
+  reset(lx3_param());
+  physical_baseline();
+  angle.data[6] = 0;  // Active-but-zero-force is still an active request.
+  assert_rejected_without_side_effects(&angle);
+  angle.data[3] = 0x10U;
+  assert(safety_tx_hook(&angle));  // Host's inactive keepalive remains allowed.
+  puts("PASS: physical CRC/counter/gestures, LFA-only authority, cancel, held recovery, stale and zero-force active rejection");
+}
+
 static void compatibility_checks(void) {
   // HDA1/HDA2, stock/OP longitudinal, camera/radar, alternate buttons/steering.
   // Validates configuration selection and transparent unknown-frame forwarding,
@@ -328,7 +465,7 @@ static void compatibility_checks(void) {
     assert(safety_fwd_hook(&p) == -1);
   }
   reset(190);
-  set_controls_allowed(true);
+  grant_controls();
   CANPacket_t command = angle_command(false);
   command.data[10] = 0xA5U;
   assert(safety_tx_hook(&command));
@@ -354,7 +491,7 @@ static void check(const char *name, bool safe) {
 static void angle_envelope_regressions(void) {
   for (int sign = -1; sign <= 1; sign += 2) {
     reset(lx3_param());
-    set_controls_allowed(true);
+    grant_controls();
     CANPacket_t p = angle_command(true);
     set_angle(&p, sign * 22);
     assert(!safety_tx_hook(&p));
@@ -369,17 +506,17 @@ static void angle_envelope_regressions(void) {
   }
   reset(lx3_param());
   fresh_mdps(300, 0);
-  set_controls_allowed(true);
+  grant_controls();
   CANPacket_t p = angle_command(true);
   set_angle(&p, 300);
   assert(safety_tx_hook(&p));  // First active frame starts from measured angle.
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   set_timer(1050001U);
   p = angle_command(true);
   assert(!safety_tx_hook(&p));
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   fresh_mdps(0, 500);
   p = angle_command(true);
   p.data[6] = 26U;
@@ -387,7 +524,7 @@ static void angle_envelope_regressions(void) {
   p.data[6] = 25U;
   assert(safety_tx_hook(&p));  // Matches the host's minimum override authority.
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   p = angle_command(true);
   p.data[6] = 200U;
   assert(safety_tx_hook(&p));
@@ -395,7 +532,7 @@ static void angle_envelope_regressions(void) {
   CANPacket_t output = forward(angle_command(false), 2);
   assert(!hyundai_canfd_actuator_active(&output));  // Recheck before buffering handoff.
   reset(lx3_param());
-  set_controls_allowed(true);
+  grant_controls();
   lx3_mdps_fault = true;
   p = angle_command(true);
   assert(!safety_tx_hook(&p));
@@ -432,7 +569,7 @@ static void release_audit(uint16_t param) {
   check("active_angle_requires_controls", !accepted && canfd_bfwd_find(0xCB, 0)->count == 0U);
 
   reset(param);
-  set_controls_allowed(true);
+  grant_controls();
   p = angle_command(true);
   assert(safety_tx_hook(&p));
   set_controls_allowed(false);
@@ -441,7 +578,7 @@ static void release_audit(uint16_t param) {
   check("cancel_does_not_replay_active_angle", destination != 0 || (stock.data[3] & 0x30U) != 0x20U);
 
   reset(param);
-  set_controls_allowed(true);
+  grant_controls();
   p = angle_command(true);
   assert(safety_tx_hook(&p));
   stock = stock_angle(false);
@@ -452,7 +589,7 @@ static void release_audit(uint16_t param) {
   check("expired_active_angle_not_reused", destination != 0 || (stock.data[3] & 0x30U) != 0x20U);
 
   reset(param);
-  set_controls_allowed(true);
+  grant_controls();
   p = angle_command(true);
   assert(safety_tx_hook(&p));
   assert(safety_tx_hook(&p));
@@ -471,18 +608,13 @@ static void release_audit(uint16_t param) {
     // A controlled test may set permission; actual firmware must obtain it
     // from a qualified physical-button RX path, without legacy TX shortcuts.
     reset(param);
-    p = packet(0x10B, 0, 10);
-    p.data[10] = 8U;
-    hyundai_canfd_update_checksum(&p);
-    (void)safety_rx_hook(&p);
-    p.data[2] += 2U;  // Vehicle 0x10B counter advances by two at 25 Hz.
-    p.data[10] = 0U;
-    hyundai_canfd_update_checksum(&p);
-    (void)safety_rx_hook(&p);
+    physical_baseline();
+    physical_button(8);
+    for (unsigned int i = 0; i < 8U; i++) physical_button(0);
     check("physical_main_release_has_qualified_permission_path", controls_allowed);
 
     reset(param);
-    set_controls_allowed(true);
+    grant_controls();
     p = angle_command(true);
     assert(safety_tx_hook(&p));
     set_angle(&p, 1000);  // Instant 100-degree step, inside absolute range.
@@ -505,5 +637,6 @@ int main(int argc, char **argv) {
   rejected_tx_regressions();
   guarded_regressions();
   angle_envelope_regressions();
+  physical_permission_regressions();
   return 0;
 }

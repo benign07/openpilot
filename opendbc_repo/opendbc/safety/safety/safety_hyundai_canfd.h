@@ -16,6 +16,15 @@ static int lx3_measured_angle = 0;
 static bool lx3_angle_active_prev = false;
 static int lx3_angle_accepted = 0;
 static uint32_t lx3_angle_accepted_us = 0U;
+static int lx3_mode = 0;  // 0 OFF, 1 lateral only, 2 combined; same as host.
+static bool lx3_button_seen = false;
+static bool lx3_button_ready = false;
+static uint8_t lx3_button_counter = 0U;
+static uint32_t lx3_button_us = 0U;
+static unsigned int lx3_neutral_samples = 0U;
+static bool lx3_main_held = false;
+static uint32_t lx3_main_us = 0U;
+static int lx3_button_prev = 0;
 
 // Software envelope derived from this port's host maximum of 2 deg/10ms.
 // EPS/OEM qualification and speed-dependent lateral acceleration remain separate.
@@ -464,7 +473,7 @@ static bool canfd_bfwd_expired(const CanfdBufferedFwd* st, uint32_t accepted_us)
 
 static bool canfd_bfwd_authorized(const CanfdBufferedFwd* st) {
   return controls_allowed && !safety_rx_checks_invalid && !relay_malfunction &&
-         ((st->addr != 0x1A0) || get_longitudinal_allowed());
+         ((st->addr != 0x1A0) || ((lx3_mode == 2) && get_longitudinal_allowed()));
 }
 
 static bool canfd_bfwd_packet_authorized(const CanfdBufferedFwd* st, const CANPacket_t* pkt) {
@@ -479,6 +488,94 @@ static void canfd_bfwd_revoke_actuators(void) {
       canfd_record_tx_time(canfd_bfwd[i].dst_bus, canfd_bfwd[i].addr, false);
     }
   }
+}
+
+static void lx3_revoke_permission(void) {
+  controls_allowed = false;
+  lx3_mode = 0;
+  lx3_button_ready = false;
+  lx3_neutral_samples = 0U;
+  lx3_main_held = false;
+  lx3_button_prev = 0;
+  canfd_bfwd_revoke_actuators();
+}
+
+static void lx3_permission_maintenance(void) {
+  if ((controls_allowed && (!lx3_button_ready || !lx3_button_seen)) ||
+      (lx3_button_ready && (microsecond_timer_get() - lx3_button_us > 200000U)) ||
+      safety_rx_checks_invalid || relay_malfunction || (!controls_allowed && (lx3_mode != 0))) {
+    lx3_revoke_permission();
+  }
+}
+
+static void lx3_request_mode(int mode) {
+  if (mode == 0) {
+    lx3_revoke_permission();
+  } else if (hyundai_camera_scc && hyundai_canfd_hda2 && hyundai_hybrid_gas_signal && hyundai_longitudinal &&
+             lx3_angle_context_valid(0) && !safety_rx_checks_invalid && !relay_malfunction &&
+             !brake_pressed && !regen_braking &&
+             (!gas_pressed || (alternative_experience & ALT_EXP_DISABLE_DISENGAGE_ON_GAS))) {
+    // Physical RX is the only producer of guarded permission. Host still
+    // performs its independent StateMachine/CAN/camera/driver checks.
+    lx3_mode = mode;
+    controls_allowed = true;
+  } else {
+    lx3_revoke_permission();
+  }
+}
+
+static void lx3_physical_buttons_rx(const CANPacket_t *pkt) {
+  const uint32_t now = microsecond_timer_get();
+  if ((GET_LEN(pkt) != 16U) || (hyundai_canfd_get_checksum(pkt) != hyundai_common_canfd_compute_checksum(pkt))) {
+    lx3_revoke_permission();
+    return;
+  }
+  const uint8_t counter = GET_BYTE(pkt, 2);
+  if (lx3_button_seen) {
+    const uint8_t delta = counter - lx3_button_counter;
+    const uint32_t elapsed = now - lx3_button_us;
+    if ((delta != 2U) || (elapsed < 10000U) || (elapsed > 200000U)) {
+      if (delta != 0U) { lx3_button_counter = counter; lx3_button_us = now; }
+      lx3_revoke_permission();
+      return;  // Duplicate does not refresh freshness or synthesize release.
+    }
+  }
+  lx3_button_seen = true;
+  lx3_button_counter = counter;
+  lx3_button_us = now;
+  const int raw = GET_BYTE(pkt, 10) & 0xFU;
+  const bool lfa = GET_BIT(pkt, 87U);
+  if (((raw > 4) && (raw != 8)) || (lfa && (raw != 0) && (raw != 4))) {
+    lx3_revoke_permission();
+    return;
+  }
+  if (raw == HYUNDAI_BTN_CANCEL) {
+    lx3_revoke_permission();
+    return;
+  }
+  if (!lx3_button_ready) {
+    if ((raw != 0) || lfa) lx3_neutral_samples = 0U;
+    else lx3_neutral_samples++;
+    lx3_button_ready = lx3_neutral_samples >= 3U;
+    return;  // A held startup/recovery press cannot become an enable edge.
+  }
+  const int button = lfa ? 16 : raw;
+  if (raw == 8) {
+    lx3_main_held = true;
+    lx3_main_us = now;
+  } else if (lx3_main_held && (button != 0)) {
+    lx3_revoke_permission();
+    return;
+  } else if (lx3_main_held && (now - lx3_main_us >= 300000U)) {
+    lx3_main_held = false;
+    lx3_request_mode((controls_allowed && (lx3_mode == 2)) ? 0 : 2);
+  }
+  if ((button == 0) && (lx3_button_prev == 16)) {
+    lx3_request_mode(controls_allowed ? 0 : 1);
+  } else if ((button == 0) && ((lx3_button_prev == HYUNDAI_BTN_RESUME) || (lx3_button_prev == HYUNDAI_BTN_SET))) {
+    lx3_request_mode(2);
+  }
+  lx3_button_prev = (raw == 8) ? 0 : button;
 }
 
 static void canfd_bfwd_push(CanfdBufferedFwd* st, const CANPacket_t* pkt) {
@@ -568,6 +665,10 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
 
   if (hyundai_camera_scc) pt_bus = 0;
 
+  if (hyundai_canfd_lx3_guard && (addr == 0x10B) && (bus == 0)) {
+    lx3_physical_buttons_rx(to_push);
+  }
+
   if (bus == pt_bus) {
     // driver torque
     if (addr == 0xea) {
@@ -601,9 +702,7 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
       } else if (cruise_button == HYUNDAI_BTN_CANCEL) {
         controls_allowed = false;
       }
-      // LX3 permission must come from a qualified physical 0x10B RX path.
-      // Until its CRC/counter/debounce policy is completed, fail closed;
-      // legacy 0x1AA RES/SET must not authorize this development policy.
+      // Legacy 0x1AA RES/SET never authorizes the guarded physical path.
     }
 
     // gas press, different for EV, hybrid, and ICE models
@@ -655,8 +754,9 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
   }
   generic_rx_checks(stock_ecu_detected);
 
-  if (hyundai_canfd_lx3_guard && !controls_allowed) {
-    canfd_bfwd_revoke_actuators();
+  if (hyundai_canfd_lx3_guard) {
+    lx3_permission_maintenance();
+    if (!controls_allowed) canfd_bfwd_revoke_actuators();
   }
 
 }
@@ -687,6 +787,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
   bool violation = false;
 
   if (hyundai_canfd_lx3_guard) {
+    lx3_permission_maintenance();
     if (!controls_allowed || safety_rx_checks_invalid) canfd_bfwd_revoke_actuators();
     if (safety_rx_checks_invalid && hyundai_canfd_actuator_addr(addr)) return false;
     if (!hyundai_camera_scc || !hyundai_canfd_hda2 || !hyundai_hybrid_gas_signal || !hyundai_longitudinal) {
@@ -759,7 +860,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
       const bool active_mode = (cruise_status == 1) || (cruise_status == 2) || (cruise_status == 4);
       // The common helper in this fork self-authorizes on nonzero accel.
       // Keep this opt-in policy independent of that legacy side effect.
-      violation |= !inactive && (!get_longitudinal_allowed() || !active_mode);
+      violation |= !inactive && ((lx3_mode != 2) || !get_longitudinal_allowed() || !active_mode);
       violation |= (desired_accel_raw > HYUNDAI_LONG_LIMITS.max_accel) || (desired_accel_raw < HYUNDAI_LONG_LIMITS.min_accel);
       violation |= (desired_accel_val > HYUNDAI_LONG_LIMITS.max_accel) || (desired_accel_val < HYUNDAI_LONG_LIMITS.min_accel);
     } else if (hyundai_longitudinal) {
@@ -817,6 +918,7 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
 
   int bus_fwd = -1;
   uint32_t now = microsecond_timer_get();
+  if (hyundai_canfd_lx3_guard) lx3_permission_maintenance();
   if (hyundai_canfd_lx3_guard && (!controls_allowed || safety_rx_checks_invalid || relay_malfunction)) {
     canfd_bfwd_revoke_actuators();
   }
@@ -901,6 +1003,15 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   lx3_angle_active_prev = false;
   lx3_angle_accepted = 0;
   lx3_angle_accepted_us = 0U;
+  lx3_mode = 0;
+  lx3_button_seen = false;
+  lx3_button_ready = false;
+  lx3_button_counter = 0U;
+  lx3_button_us = 0U;
+  lx3_neutral_samples = 0U;
+  lx3_main_held = false;
+  lx3_main_us = 0U;
+  lx3_button_prev = 0;
 
   gen_crc_lookup_table_16(0x1021, hyundai_canfd_crc_lut);
   hyundai_canfd_alt_buttons = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ALT_BUTTONS);

@@ -159,6 +159,10 @@ class CANParser:
     self.can_invalid_cnt: int = CAN_INVALID_CNT
     self.last_nonempty_nanos: int = 0
     self._last_update_nanos: int = 0
+    # Opt-in raw physical inputs. Default empty preserves all existing parsers.
+    self.raw_capture: set[int] = set()
+    self.raw_frames: deque = deque(maxlen=64)
+    self.raw_overflow = False
 
   def _add_message(self, name_or_addr: str | int, freq: int | None = None, ignore_counter: bool = False) -> None:
     if isinstance(name_or_addr, numbers.Number):
@@ -238,6 +242,10 @@ class CANParser:
       for address, dat, src in frames:
         if src != self.bus:
           continue
+        if address in self.raw_capture:
+          if len(self.raw_frames) == self.raw_frames.maxlen:
+            self.raw_overflow = True
+          self.raw_frames.append((address, src, bytes(dat), t))
         if self.controls_ready:
           self.seen_addresses.add(address)
         bus_empty = False

@@ -6,6 +6,31 @@ on:
 permissions:
   contents: read
 jobs:
+  board-firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install board build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi
+          python -m pip install scons pycryptodome
+      - name: Compile H7 board firmware (build validation only)
+        working-directory: panda
+        run: |
+          mkdir -p board/obj
+          scons --minimal -j2 board/obj/panda_h7.bin.signed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lx3-h7-development-build-not-qualified-for-vehicle
+          path: |
+            panda/board/obj/panda_h7.bin.signed
+            panda/board/obj/version
+      - name: State deployment qualification
+        run: echo 'Build success is not bench or vehicle qualification. No installation or OTA publication occurs in this workflow.' >> "$GITHUB_STEP_SUMMARY"
   native-safety:
     runs-on: ubuntu-latest
     steps:
@@ -28,7 +53,7 @@ jobs:
           set -e
           test "$result" -eq 1
           grep -q 'RELEASE_AUDIT blockers=5;' native-legacy-audit.txt
-      - name: Guarded LX3 release audit (physical RX and angle-rate blockers remain)
+      - name: Guarded LX3 software permission and forwarding audit
         id: release-audit
         shell: bash
         run: /tmp/lx3-safety --release-audit | tee native-release-audit.txt
@@ -36,8 +61,8 @@ jobs:
         if: always()
         run: |
           echo '## Native release audit: ${{ steps.release-audit.outcome }}' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Guarded LX3 uses safetyParam bit 1024. It cannot obtain physical-button permission yet.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'OTA remains blocked by physical RX, angle-rate/driver enforcement, the passive interlock and vehicle qualification.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Guarded LX3 uses safetyParam bit 1024 with qualified physical 0x10B gesture processing.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Passing this software audit does not qualify OTA. The passive interlock, board firmware/bench, full IPC, speed limits and OEM ownership validation remain.' >> "$GITHUB_STEP_SUMMARY"
           echo 'The legacy policy retains its five known blockers; it is not qualified by this change.' >> "$GITHUB_STEP_SUMMARY"
           if [ -f native-release-audit.txt ]; then
             while IFS= read -r line; do
@@ -71,7 +96,8 @@ jobs:
           selfdrive.carrot.tests.test_live_driving_mode
           selfdrive.carrot.tests.test_driving_setting_switches
           selfdrive.carrot.tests.test_hud_settings_integrity
-          selfdrive.carrot.tests.test_lx3_can_time -v
+          selfdrive.carrot.tests.test_lx3_can_time
+          selfdrive.carrot.can_diagnostics.test_automatic -v
       - name: Check additive telemetry schema
         run: |
           python - <<'PY'

@@ -10,6 +10,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
 from opendbc.car.hyundai.lx3_time import Lx3Clock, MESSAGE as LX3_TIME_MESSAGE
 from opendbc.car.hyundai.lx3_state import lateral_fault as lx3_lateral_fault
+from opendbc.car.hyundai.lx3_inputs import Lx3ButtonIntent
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, CAMERA_SCC_CAR, HyundaiExtFlags
 from opendbc.car.interfaces import CarStateBase
 
@@ -173,6 +174,7 @@ class CarState(CarStateBase):
     self.cp_cam = None
     self.cp_alt = None
     self.controls_ready_count = 0
+    self.lx3_button_intent = Lx3ButtonIntent() if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV else None
 
     # trailer detection
     self.trailer_connected = False
@@ -794,6 +796,15 @@ class CarState(CarStateBase):
                         *create_button_events(paddle_button, self.paddle_button_prev, {1: ButtonType.paddleLeft, 2: ButtonType.paddleRight}),
                         *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise})]
 
+    if self.lx3_button_intent is not None:
+      # Only validated physical frames can request the LX3 session. Cached
+      # parsed values and alternate/forwarded button messages have no authority.
+      intent = self.lx3_button_intent
+      events, ready = intent.from_parser(cp, hkg_can_fd_checksum)
+      ret.buttonEvents = [structs.CarState.ButtonEvent(type=getattr(ButtonType, name), pressed=pressed)
+                          for name, pressed in events]
+      ret.steerFaultTemporary |= not ready
+
     self.paddle_button_prev = paddle_button
 
     return ret
@@ -813,6 +824,7 @@ class CarState(CarStateBase):
     pt_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN)
     cam_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM)
     if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV:
+      pt_parser.raw_capture = {0x10B}
       # The LX3 DBC filename does not opt into the generic checksum binding.
       # Bind the optional clock and the camera health input used by LX3 engage.
       # Neither checksum binding opts other LX3 messages into guessed CRC rules.

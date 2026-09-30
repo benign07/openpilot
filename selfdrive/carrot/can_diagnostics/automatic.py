@@ -157,7 +157,8 @@ def control_mode(services, now):
 
 
 class AutoRecorder:
-  ADDRESSES = {0x161, 0x162, 0x1EA, 0x2A4, 0x362, 0x1A0, 0x41B, 0x417, 0x367}
+  ADDRESSES = {0x161, 0x162, 0x1EA, 0x2A4, 0x362, 0x1A0, 0x41B, 0x417, 0x367,
+               0x10B, 0xCB, 0xEA, 0x12A, 0x1AA}
 
   def __init__(self, store, metadata):
     self.store, self.metadata = store, metadata
@@ -167,6 +168,7 @@ class AutoRecorder:
     self.lead_changes = deque(maxlen=20)
     self.last_event = {}
     self.can_last, self.faults = {}, {}
+    self.actuation_states = {}
     self.sampled_out = self.stale_packets = 0
     self.state = 'waiting_for_ignition'
 
@@ -188,6 +190,7 @@ class AutoRecorder:
     if self.trip is None:
       self.trip = uuid.uuid4().hex
       self.previous, self.can_last, self.faults, self.last_event = {}, {}, {}, {}
+      self.actuation_states = {}
       self.lead_changes.clear()
       self.last_sample = -math.inf
     if self.store.full(now):
@@ -244,7 +247,7 @@ class AutoRecorder:
     fault_changed = False
     if address == 0x162 and len(data) == 32 and self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
       bits = int.from_bytes(data, 'little')
-      value = ((bits >> 219) & 7, (bits >> 246) & 7)
+      value = ((bits >> 219) & 7, (bits >> 246) & 7, (bits >> 234) & 7)
       before = self.faults.get(key)
       fault_changed = value != before
       if fault_changed:
@@ -252,7 +255,28 @@ class AutoRecorder:
                            'direction': direction, 'bus': bus, 'before': before, 'after': value,
                            'semantic_status': 'dbc_definition_not_causal_diagnosis'}, now)
       self.faults[key] = value
-    if now - self.can_last.get(key, -math.inf) < .1 and not fault_changed:
+    state_changed = False
+    if self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
+      state = None
+      if address == 0x10B and len(data) == 16:
+        state = (data[10] & 143,)
+      elif address == 0xCB and len(data) == 24:
+        state = ((data[3] >> 4) & 3, data[6])
+      elif address == 0xEA and len(data) == 24:
+        state = (data[6] & 1, data[18] & 3, bool(data[6] & 64), bool(data[18] & 32))
+      if state is not None:
+        before = self.actuation_states.get(key)
+        state_changed = state != before
+        if state_changed:
+          self.store.append({'kind': 'event', 'name': 'actuation_state_observation', 'mono_ns': mono_ns,
+                             'direction': direction, 'bus': bus, 'address': address,
+                             'before': before, 'after': state,
+                             'semantic_status': 'raw_dbc_state_not_verified_EPS_delivery'}, now)
+        self.actuation_states[key] = state
+    # Physical 25Hz input is retained for CRC/counter/debounce replay. State
+    # edges bypass the 10Hz background limit; this remains sampled evidence.
+    period = .02 if address == 0x10B and bus == 0 and direction == 'rx' else .1
+    if now - self.can_last.get(key, -math.inf) < period and not fault_changed and not state_changed:
       self.sampled_out += 1
       return
     self.can_last[key] = now
