@@ -2,6 +2,7 @@
 import time
 from types import SimpleNamespace
 from cereal import car, log, messaging
+from cereal.services import SERVICE_LIST
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.events import Events
@@ -23,8 +24,9 @@ def main():
     p.safetyModel='hyundaiCanfd';p.safetyParam=1214;p.alternativeExperience=1;p.controlsAllowed=allowed
     p.safetyRxChecksInvalid=False;p.faults=[]
     pm.send('pandaStates',msg)
-  for _ in range(4):
-    publish_panda(True);sm.update(100);time.sleep(.2)
+  for _ in range(8):
+    publish_panda(True);sm.update(100)
+    time.sleep(1 / SERVICE_LIST['pandaStates'].frequency)
   assert sm.all_checks(['pandaStates']), (sm.alive,sm.valid,sm.freq_ok)
   def step(button=None,gas_override=False):
     publish_panda(True)
