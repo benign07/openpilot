@@ -109,10 +109,15 @@ def _process_font(font_path: Path, codepoints: tuple[int, ...]):
   cp_buffer = rl.ffi.new("int[]", codepoints)
   cp_ptr = rl.ffi.cast("int *", cp_buffer)
   glyph_count = rl.ffi.new("int *", len(codepoints))
-  glyphs = rl.load_font_data(
-    rl.ffi.cast("unsigned char *", file_buf), len(data), font_size, cp_ptr, len(codepoints),
-    rl.FontType.FONT_DEFAULT, glyph_count
-  )
+  # The locked raylib 5.5 binding has six arguments. Newer bindings add an
+  # output glyph-count pointer; retain both for existing device environments.
+  args = (rl.ffi.cast("unsigned char *", file_buf), len(data), font_size, cp_ptr, len(codepoints), rl.FontType.FONT_DEFAULT)
+  arity = len(rl.ffi.typeof(rl.rl.LoadFontData).args)
+  if arity == 7:
+    args += (glyph_count,)
+  elif arity != 6:
+    raise RuntimeError(f"Unsupported raylib LoadFontData signature: {arity} arguments")
+  glyphs = rl.load_font_data(*args)
   if glyphs == rl.ffi.NULL:
     raise RuntimeError("raylib failed to load font data")
 
