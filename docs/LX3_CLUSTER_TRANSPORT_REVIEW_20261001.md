@@ -102,3 +102,44 @@ CRC가 틀렸다. 다른4개 LSS onset은 다른 dirty 소스에서0x161 sendcan
 msgq/Capnp/production publisher+AlertManager와 실제 깜빡이9tests를 확인했다.
 이번 소유권 보완은14개 display 테스트, 전체200개 PC Python 회귀 및 실제
 Panda C schedule 검증을 추가한다. 정확한 새 커밋의 CI 결과는 별도 기록한다.
+
+## 16·17차 상호검토와 지연 표시 권한 보완
+
+추가 스케줄은 실제 sensor RX와 물리 LFA 버튼 CRC/counter/ACK로 Panda 권한을
+얻는다. 처음 만든 표시 지연 모델에는 native grant가 없었으므로 이를 보완한
+뒤 같은 문제를 다시 확인했다. 해제 후 USB로 늦게 도착한 표시108개가 이전
+C에서 수락됐다. 새 accepted-permission 회귀는 이전 DLL에서 실제로 실패했다.
+
+LX3 guard의5개 표시 ID는 accepted native 권한이 있을 때만 TX를 허용한다.
+권한 해제 때 이5개의 `tx_active/last_tx_us`도 정리해, 다음 USB 메시지 없이도
+순정 원본으로 복귀한다. 새 grant 전에 남은 표시 차단 창도 재사용하지 않는다.
+거절된 패킷 자체는 활성 세션의 차단 marker를 변경하지 않는다. 실제 OFF/fault
+처리에서만 소유권을 끝낸다. 다른 차종의190 정책은 유지한다.
+
+actual C native 검사는5개 ID 각각 OFF/pending/accepted/OFF 직후 원본 복귀,
+새 grant 전의 소유권 초기화, RX 이상, hook 밖에서 `controls_allowed`만
+해제한 뒤 첫 지연 TX, 기존190 허용을 포함한다. 새 지연 표시108개는 모두
+거부됐으며 actuator/host414개 일정도 통과했다.
+
+표시 스케줄은 이상적인40개 일정 외에 CAN/USB0·10·30ms 고정/가변 지연,
+일부 host tick 누락480개와300ms 표시 producer 정지40개를 포함한다.
+기존70ms 표시 차단 창에서 가변 지연 때문에 활성 안정 구간에 순정이 섞인
+경우60개는 남는다. producer 정지 중 순정 통과는 liveness 동작으로 구분한다.
+정지40개 일정에서 순정200개가 통과했고, 재개 때 동일 counter의 원본과 OP
+표시가 함께 보이는 경우도 있다. 완전한 표시 대체나 경고 해결로 주장하지 않는다.
+
+Claude가 제안한110ms는 desktop fixture에서만 같은520개 조건으로 비교했다.
+가변 지연의60개 혼입은0으로 줄었으나 producer 정지 중 원본 통과도200개에서
+160개로 늦어졌다. 원본 위상이 이전 publication에 묶인 점을 빠뜨린 Claude의
+110ms 반례는17차에 철회했다. 실제 차량의 최대 지연·계기판 timeout 근거는
+없으므로 production70ms는 바꾸지 않았다. 권한이 유지되는 동안 순정을
+무기한 차단하는 제안도 새 순정 경고/FAULT/곡률이 늦어질 수 있어 채택하지 않았다.
+
+원본을 복사한 host 메시지는 이전 시점의 정보다. 현재 시각의 긴급 경고까지
+보존한다는 보장은 아니다. USB CAN 패킷 자체에 세션 generation이 없으므로,
+아주 늦은 이전 세션 패킷이 새 accepted 세션에 도착하는 문제도 이 gate만으로
+해결한 것으로 표시하지 않는다. 실측 지연과 세션 경계 검증이 필요하다.
+
+PC 자료: `can_inventory_work/lx3-display-delay-timeout-sensitivity-20261001.json`,
+`lx3-display-before-gate-regression-20261001.log`. 긴 지연 직후
+`safety_tx_blocked` 증가를 해제 후 정상 거부와 지속 fault로 구분해야 한다.

@@ -2,7 +2,14 @@
 
 ## 최신 상태: 전체 빌드·과거 CAN·Claude 상호 검토
 
-최신 범위·수정·미해결 사항은 [전체 재검토 보고서](LX3_ARCHIVE_BUILD_REVIEW_20260930.md)를 기준으로 본다. 현재 카메라 fault gate가 과거 활성화 해제 119회 중 113회를 차단한다. 가속페달 CP/Panda 정책 충돌과 잔여 ACC/StopReq 권한 경로를 수정했고, `549214ca`의 전체 런타임/H7/C/실제 IPC CI가 통과했다. 정상 실차 인게이지와 최초 계기판 경고 해결은 아직 입증하지 못했다. 아래 기록은 이전 단계의 결과이며 당시 테스트 수량·미완성 경계를 최신 상태로 해석하지 않는다. 차량 설치·재부팅·OTA 배포는 하지 않았다.
+10월1일 후속 구조는 [물리 요청/host ACK 거래](LX3_PERMISSION_TRANSACTION_20261001.md),
+[버퍼 전달 각도 제한](LX3_BUFFERED_ANGLE_DELIVERY_20261001.md),
+[표시 소유권](LX3_CLUSTER_TRANSPORT_REVIEW_20261001.md),
+[전체78개 기록의 순정 경고 대조](LX3_OEM_OWNERSHIP_TIMING_20261001.md)를 기준으로 본다.
+호스트와 Panda의 software 거래·전체 runtime/IPC/H7 빌드는 검증했으나,
+정상 실차 인게이지와 최초 계기판 경고 해결은 아직 입증하지 못했다.
+아래는 이전 단계의 기록이며 당시 테스트 수량·미완성 경계를 최신 상태로
+해석하지 않는다. 차량 설치·재부팅·OTA 배포는 하지 않았다.
 
 2026-09-30, 개발 브랜치 `fix/lx3-engagement-state`.
 

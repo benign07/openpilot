@@ -115,3 +115,10 @@ LX3_EXPORT int lx3_test_packet_fwd(int address, int bus, int length, const uint8
   memcpy(output, p.data, (size_t)length);
   return destination;
 }
+
+// Desktop sensitivity experiment only. Production timeout is never changed.
+LX3_EXPORT void lx3_test_display_timeout(uint32_t us) {
+  for (int i = 0; canfd_tx_states[i].addr > 0; i++) {
+    if (hyundai_canfd_lx3_display_addr(canfd_tx_states[i].addr)) canfd_tx_states[i].timeout_us = us;
+  }
+}

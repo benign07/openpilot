@@ -62,6 +62,10 @@ static bool hyundai_canfd_actuator_addr(int addr) {
   return (addr == 0xCB) || (addr == 0x12A) || (addr == 0x1A0);
 }
 
+static bool hyundai_canfd_lx3_display_addr(int addr) {
+  return (addr == 0x161) || (addr == 0x162) || (addr == 0x1E0) || (addr == 0x1EA) || (addr == 0x200);
+}
+
 static bool hyundai_canfd_actuator_active(const CANPacket_t *pkt) {
   const int addr = GET_ADDR(pkt);
   if (addr == 0xCB) {
@@ -533,6 +537,14 @@ static void canfd_bfwd_revoke_actuators(void) {
       canfd_record_tx_time(canfd_bfwd[i].dst_bus, canfd_bfwd[i].addr, false);
     }
   }
+  // Display ownership must end with the accepted session, including when no
+  // later USB packet arrives to update its previous forwarding-block timer.
+  for (int i = 0; canfd_tx_states[i].addr > 0; i++) {
+    if (hyundai_canfd_lx3_guard && hyundai_canfd_lx3_display_addr(canfd_tx_states[i].addr)) {
+      canfd_tx_states[i].tx_active = false;
+      canfd_tx_states[i].last_tx_us = 0U;
+    }
+  }
 }
 
 static void lx3_clear_session(void) {
@@ -924,10 +936,12 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
     if ((addr == 0xEA) || (addr == 0x175) || (addr == 0x2AF) || (addr == 0x1AA) || (addr == 0x1CF)) {
       return false;  // Do not synthesize driver/EPS feedback or enable buttons.
     }
-    if (((addr == 0x362) || (addr == 0x2A4)) &&
+    if (((addr == 0x362) || (addr == 0x2A4) || hyundai_canfd_lx3_display_addr(addr)) &&
         (!controls_allowed || (lx3_mode == 0) || safety_rx_checks_invalid || relay_malfunction)) {
       // Lane suppression is camera input interference, even with zero torque.
       // A pending/refused/off host may not inject it into the stock CAN path.
+      // Delayed display packets must not restore green icons or ownership
+      // after native permission has already been revoked.
       return false;
     }
     if (addr == 0xCB) {

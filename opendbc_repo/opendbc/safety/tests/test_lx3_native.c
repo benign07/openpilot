@@ -225,6 +225,8 @@ static void guarded_regressions(void) {
 
   reset(lx3_param());
   set_timer(0U);
+  fresh_mdps(0, 0);
+  grant_controls();
   CANPacket_t unsent = packet(0x161, 2, 13);
   (void)forward(unsent, 2);  // No TX must be transparent even at timestamp zero.
   canfd_record_tx_time(0, 0x161, true);
@@ -963,6 +965,61 @@ static void angle_buffer_delivery_rate_regressions(void) {
   puts("PASS: buffered angle rate budget follows emitted commands, not unsent USB goals");
 }
 
+static void display_session_permission_regressions(void) {
+  const unsigned int addresses[] = {0x161U, 0x162U, 0x1E0U, 0x1EAU, 0x200U};
+  const unsigned int dlcs[] = {13U, 13U, 10U, 13U, 8U};
+  for (unsigned int i = 0U; i < sizeof(addresses) / sizeof(addresses[0]); i++) {
+    CANPacket_t p = packet(addresses[i], 0, dlcs[i]);
+    p.data[3] = 0xA5U;
+    reset(190);
+    assert(!controls_allowed && safety_tx_hook(&p));
+    reset(lx3_param());
+    assert(!safety_tx_hook(&p));
+    physical_baseline();
+    physical_button(128);
+    physical_button(0);
+    assert(lx3_pending && !safety_tx_hook(&p));
+    acknowledge_request();
+    assert(lx3_mode == 1 && safety_tx_hook(&p));
+    CANPacket_t original = p;
+    original.bus = 2U;
+    original.data[3] = 0x5AU;
+    assert(safety_fwd_hook(&original) == -1);
+    safety_host_heartbeat(lx3_heartbeat_value(false, 0, 0, 0), 0);
+    // OFF releases original ownership immediately, without another USB TX.
+    assert(!controls_allowed && safety_fwd_hook(&original) == 0);
+    assert(original.data[3] == 0x5AU);
+    const CanfdTxState* tx = find_canfd_tx_state(0, (int)addresses[i]);
+    assert(tx != NULL && !tx->tx_active);
+    assert(!safety_tx_hook(&p));
+    assert(!tx->tx_active);
+    // Old display ownership must not reappear on the next grant before TX.
+    physical_button(128);
+    physical_button(0);
+    acknowledge_request();
+    assert(controls_allowed && safety_fwd_hook(&original) == 0);
+    assert(safety_tx_hook(&p));
+    safety_rx_checks_invalid = true;
+    assert(!safety_tx_hook(&p));
+    assert(safety_fwd_hook(&original) == 0);
+    assert(!tx->tx_active);
+    // main.c can clear controls_allowed outside these hooks (e.g. heartbeat
+    // mismatch). The next delayed USB TX must itself release old ownership.
+    reset(lx3_param());
+    physical_baseline();
+    physical_button(128);
+    physical_button(0);
+    acknowledge_request();
+    assert(safety_tx_hook(&p));
+    assert(find_canfd_tx_state(0, (int)addresses[i])->tx_active);
+    set_controls_allowed(false);
+    assert(!safety_tx_hook(&p));
+    assert(!find_canfd_tx_state(0, (int)addresses[i])->tx_active);
+    assert(safety_fwd_hook(&original) == 0);
+  }
+  puts("PASS: five LX3 display IDs require accepted permission; OFF/fault releases ownership and legacy preserved");
+}
+
 static void angle_delivery_continuity_regressions(void) {
   for (int sign = -1; sign <= 1; sign += 2) {
     // Two queued, still-fresh goals can be delivered one tick apart. The EPS
@@ -1112,6 +1169,7 @@ int main(int argc, char **argv) {
   transaction_regressions();
   snapshot_state_regressions();
   camera_suppression_permission_regressions();
+  display_session_permission_regressions();
   angle_buffer_delivery_rate_regressions();
   angle_delivery_continuity_regressions();
   return 0;
