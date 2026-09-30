@@ -1,4 +1,4 @@
-# LX3 정상 engage 전환 수정안 — 실차 배포 금지
+# LX3 정상 engage 전환 수정안 — 검증과 설치 기록
 
 ## 최신 상태: 전체 빌드·과거 CAN·Claude 상호 검토
 
@@ -6,6 +6,10 @@
 우선한다. companion v2와 accepted identity를 실제 CAN payload 전송 경로까지
 연결했다. 아래의 “generation이 payload에 없다”는 내용은 이 수정 이전 단계다.
 같은 세션 내 지연된 명령의 나이와 실제 EPS/OEM 전환은 여전히 별도 확인 대상이다.
+사용자가 이후 주차 상태에서 주행 활성화와 기기 설치를 명시적으로 요청했다.
+최신 후보는 정확한1214/angle/long profile만 활성화하며, 아래 passive/배포금지
+문구는 이전 검토 단계의 기록이다. 실제 설치·최종 CI와 실차 미확인 범위는
+최신 보고서와 PC manifest를 따른다. 정상 계기판/EPS 동작이 입증됐다는 뜻은 아니다.
 
 10월1일 후속 구조는 [물리 요청/host ACK 거래](LX3_PERMISSION_TRANSACTION_20261001.md),
 [버퍼 전달 각도 제한](LX3_BUFFERED_ANGLE_DELIVERY_20261001.md),

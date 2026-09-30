@@ -1,9 +1,12 @@
 # LX3 명령 식별자와 부팅 경계 — PC 검증 후보
 
 2026-10-01 오전 후속 작업. 기존 정상 상태 머신·물리 요청/ACK 구조에
-명령 자체의 식별자를 연결했다. 차량 설치·재부팅·OTA 배포는 하지 않는다.
-LX3 후보의 `dashcamOnly=True`와 safetyParam1214 인터록은 유지한다.
-운행 중 관측한 설치 버전은 기존 production e0747fca/safetyParam190이다.
+명령 자체의 식별자를 연결했다. 이후 사용자가 주차 상태에서 **주행 제어 활성화와
+기기 설치**를 명시적으로 요청했다. 정확한1214/angle/long profile만 dashcamOnly를
+해제하며 다른 조합은 passive를 유지한다. physical request/ACK·epoch·native
+제한은 그대로 필수다. 설치는 최종 빌드 통과·새 P/속도0/비활성 확인 후 진행한다.
+공개 production OTA는 별도이며 이 요청으로 자동 갱신하지 않는다.
+아래 운행 중 관측 버전은 설치 전 production e0747fca/safetyParam190이다.
 
 ## 확인한 결함과 변경
 
@@ -80,7 +83,7 @@ commit한 accepted epoch를 보낸다. 최신 Panda epoch로 대체하지 않는
   Linux/H7의6바이트 ABI를 Windows 기본 struct 결과로 대신 입증하지 않는다.
 
 GitHub의 최신 커밋별 전체 runtime·실제 C++/IPC·H7·native·Python3.11/3.12
-결과를 모두 확인한 뒤 PC 작업 완료를 보고한다. 정확한 SHA/run/job/artifact와
+결과를 모두 확인한 뒤 설치 대상으로 삼는다. 정확한 SHA/run/job/artifact와
 Claude 원본 검토 및 로컬 검사 경로는 PC의 candidate_validation.json에 남긴다.
 과거 커밋의 녹색 결과를 이 변경의 성공으로 사용하지 않는다.
 
@@ -88,6 +91,10 @@ Claude22차는 immutable producer chain, marker 소모/CRC, epoch와 호환성 �
 읽고 추가 권한 결함을 찾지 못했다. 실행 검증은 하지 않았고 C transport 테스트,
 packer flush 끝부분과 can_reject는 그 라운드에서 읽지 않았다. 제안한 pending
 epoch 잔류는 실제 reject가0으로 지우므로 그대로 남는 반례가 아니었다.
+23차에서 flush·can_reject·실제 C decoder 테스트도 읽고 그 지적을 철회했다.
+동 라운드의 extras 빌드 위험은 실제 CI에서 SCons mutation 옵션 오류로 나타났다.
+이 테스트 target만 명시적으로 minimal 모드에서 정의·빌드하도록 고쳤으며
+테스트 실행과 C++→native 연결 검사는 생략하지 않는다.
 
 ## 오전 운행 중 수신만 한 대조
 

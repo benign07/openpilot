@@ -227,13 +227,13 @@ class CarInterface(CarInterfaceBase):
 
     # Dashcam cars are missing a test route, or otherwise need validation
     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
-    # Development interlock: the LX3 session rewrite is not a qualified vehicle
-    # port until the physical-button RX path, 0xCB limits and buffered forwarding
-    # have matching, tested Panda enforcement. Never ship this as an active port
-    # merely by removing the interlock or setting controls_allowed from TX.
+    # Active LX3 validation is limited to the matching guarded angle/long profile.
+    # Unsupported profiles stay passive; native v2 permission, physical request
+    # and actuator/output limits remain mandatory and cannot be granted by TX.
     if candidate == CAR.HYUNDAI_PALISADE_LX3_HEV:
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LX3_ENGAGEMENT_GUARD.value
-      ret.dashcamOnly = True
+      ret.dashcamOnly = (ret.safetyConfigs[-1].safetyParam != (190 | HyundaiSafetyFlags.LX3_ENGAGEMENT_GUARD.value)
+                         or ret.steerControlType != SteerControlType.angle or not ret.openpilotLongitudinalControl)
 
     return ret
 

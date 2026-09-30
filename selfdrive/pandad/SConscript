@@ -1,4 +1,5 @@
 Import('env', 'arch', 'common', 'messaging')
+from SCons.Script import COMMAND_LINE_TARGETS
 
 if arch != "Darwin":
   libs = [common, messaging, 'pthread']
@@ -6,5 +7,5 @@ if arch != "Darwin":
 
   env.Program('pandad', ['main.cc', 'pandad.cc', 'panda_safety.cc'], LIBS=[panda] + libs)
 
-  if GetOption('extras'):
+  if GetOption('extras') or 'selfdrive/pandad/tests/test_pandad_canprotocol' in COMMAND_LINE_TARGETS:
     env.Program('tests/test_pandad_canprotocol', ['tests/test_pandad_canprotocol.cc'], LIBS=[panda] + libs)

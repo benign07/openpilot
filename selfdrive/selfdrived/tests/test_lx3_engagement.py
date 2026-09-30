@@ -637,17 +637,24 @@ class TestLx3CanOwnership(unittest.TestCase):
         self.assertEqual((value['LKAS_ANGLE_ACTIVE'], value['LKAS_ANGLE_MAX_TORQUE']), (2, 40))
         self.assertEqual(value['LKAS_ANGLE_CMD'], 3)
 
-  def test_lx3_candidate_cannot_become_an_active_port(self):
+  def test_active_lx3_requires_exact_guarded_angle_long_profile(self):
     path = ROOT / 'opendbc_repo/opendbc/car/hyundai/interface.py'
     tree = ast.parse(path.read_text(encoding='utf-8'))
     guard = next(n for n in ast.walk(tree) if isinstance(n, ast.If) and
                  any(isinstance(x, ast.Attribute) and x.attr == 'dashcamOnly' for x in ast.walk(n)))
-    for name, expected in (('lx3', True), ('other', False)):
-      ret = NS(dashcamOnly=False, safetyConfigs=[NS(safetyParam=190)])
-      exec(compile(ast.Module(body=[guard], type_ignores=[]), str(path), 'exec'),
-           dict(candidate=name, CAR=NS(HYUNDAI_PALISADE_LX3_HEV='lx3'), ret=ret, HyundaiSafetyFlags=SafetyFlags))
-      self.assertEqual(ret.dashcamOnly, expected)
-      self.assertEqual(ret.safetyConfigs[-1].safetyParam, LX3_SAFETY_PARAM if expected else 190)
+    for name, param, angle, longitudinal, expected in (
+        ('lx3', 190, True, True, False), ('other', 190, True, True, False),
+        ('lx3', 186, True, False, True), ('lx3', 190, False, True, True),
+        ('lx3', 190, True, False, True), ('lx3', 158, True, True, True)):
+      with self.subTest(name=name, param=param, angle=angle, longitudinal=longitudinal):
+        ret = NS(dashcamOnly=False, safetyConfigs=[NS(safetyParam=param)],
+                 steerControlType='angle' if angle else 'torque', openpilotLongitudinalControl=longitudinal)
+        exec(compile(ast.Module(body=[guard], type_ignores=[]), str(path), 'exec'),
+             dict(candidate=name, CAR=NS(HYUNDAI_PALISADE_LX3_HEV='lx3'), ret=ret,
+                  HyundaiSafetyFlags=SafetyFlags, SteerControlType=NS(angle='angle')))
+        self.assertEqual(ret.dashcamOnly, expected)
+        self.assertEqual(ret.safetyConfigs[-1].safetyParam,
+                         (param | SafetyFlags.LX3_ENGAGEMENT_GUARD.value) if name == 'lx3' else param)
 
   def test_legacy_panda_cannot_acknowledge_guarded_candidate(self):
     config = NS(safetyModel='hyundaiCanfd', safetyParam=LX3_SAFETY_PARAM)

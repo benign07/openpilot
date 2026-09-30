@@ -1,6 +1,6 @@
 """Actual Linux Params, CarInterface and generated DBC configuration.
 
-Synthetic fingerprint addresses, no vehicle I/O and no interlock removal.
+Synthetic fingerprint addresses, no vehicle I/O. Only the exact guarded profile is active.
 """
 import tempfile
 import unittest
@@ -34,7 +34,7 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
 
   def test_last_verified_device_profile_selects_guarded_angle_configuration(self):
     cp = self.configuration()
-    self.assertTrue(cp.dashcamOnly)
+    self.assertFalse(cp.dashcamOnly)
     self.assertTrue(cp.openpilotLongitudinalControl)
     self.assertEqual(str(cp.steerControlType), 'angle')
     self.assertEqual(cp.safetyConfigs[-1].safetyParam, 1214)

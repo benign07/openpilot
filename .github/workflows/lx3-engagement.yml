@@ -74,7 +74,7 @@ jobs:
           LX3_HEARTBEAT_STREAM_OUT: /tmp/lx3-cpp-heartbeat.bin
           LX3_WRONG_EPOCH_STREAM_OUT: /tmp/lx3-cpp-wrong-epoch.bin
         run: |
-          uv run --no-sync scons -j2 selfdrive/pandad/tests/test_pandad_canprotocol
+          uv run --no-sync scons --minimal -j2 selfdrive/pandad/tests/test_pandad_canprotocol
           selfdrive/pandad/tests/test_pandad_canprotocol
           gcc -std=gnu11 -Wall -Wextra -Wstrict-prototypes -Werror -Wno-pointer-to-int-cast \
             -fsanitize=undefined -fno-sanitize-recover=undefined -g \
