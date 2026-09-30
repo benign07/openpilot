@@ -6,6 +6,7 @@ from cereal.services import SERVICE_LIST
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.events import Events, ET
+from openpilot.selfdrive.selfdrived.alertmanager import AlertManager
 from openpilot.selfdrive.selfdrived.lx3_engagement import Lx3Engagement, lx3_control_permissions
 
 
@@ -16,11 +17,9 @@ def main():
   pm = messaging.PubMaster(['pandaStates', 'carState', 'selfdriveState', 'onroadEvents'])
   sm = messaging.SubMaster(['pandaStates', 'carState'])
   output = messaging.sub_sock('selfdriveState', timeout=1000)
-  alert = NS(alert_text_1='', alert_text_2='', alert_size='none', alert_status='normal',
-             alert_type='', audible_alert='none', visual_alert='none')
   context = NS(CP=cp, sm=sm, pm=pm, lx3_engagement=Lx3Engagement(), state_machine=StateMachine(),
                car_state_fresh=True, enabled=False, active=False, events=Events(), events_prev=[],
-               AM=NS(current_alert=alert), experimental_mode=False, personality=log.LongitudinalPersonality.standard,
+               AM=AlertManager(), is_metric=True, experimental_mode=False, personality=log.LongitudinalPersonality.standard,
                distance_traveled=0.0)
   panda = dict(version=1, requested=0, accepted=0, counter=0, generation=1, age=0, phase=0, allowed=False)
   def publish_panda():
@@ -46,9 +45,10 @@ def main():
                                       lx3PhysicalCounter=counter, lx3PhysicalValid=physical_valid)]
     pm.send('carState', msg); sm.update(100)
     assert sm.all_checks(['pandaStates']), (sm.alive, sm.valid, sm.freq_ok)
-    context.events = Events()
+    context.events.clear()
     if event is not None: context.events.add(event)
     SelfdriveD.update_lx3_state(context, sm['carState'])
+    SelfdriveD.update_alerts(context, sm['carState'])
     # Execute the actual production publisher, including ACK fields and events.
     SelfdriveD.publish_selfdriveState(context, sm['carState'])
     received = messaging.recv_one(output)
@@ -82,8 +82,8 @@ def main():
   panda.update(version=0)
   ss, permission = step('lfaButton', 44)
   assert permission == (False, False) and not ss.enabled and not ss.lx3AckValid
-  panda.update(version=1, requested=1, accepted=0, counter=44, generation=4, phase=1, allowed=False)
-  ss, permission = step('lfaButton', 44)
+  panda.update(version=1, requested=1, accepted=0, counter=46, generation=4, phase=1, allowed=False)
+  ss, permission = step('lfaButton', 46)
   assert ss.enabled and not ss.active and ss.lx3AckGeneration == 4
   ss, permission = step(event=log.OnroadEvent.EventName.tooDistracted)
   assert not ss.enabled and permission == (False, False)
@@ -91,11 +91,23 @@ def main():
   panda.update(accepted=1, phase=2, allowed=True)
   ss, permission = step()
   assert not ss.enabled and permission == (False, False)
-  panda.update(requested=1, accepted=0, counter=46, generation=5, phase=1, allowed=False)
-  ss, permission = step('lfaButton', 46, physical_valid=False)
+  panda.update(requested=1, accepted=0, counter=48, generation=5, phase=1, allowed=False)
+  ss, permission = step('lfaButton', 48, physical_valid=False)
   assert not ss.enabled and permission == (False, False)
   assert not (ss.lx3AckValid and ss.lx3AckMode == 1 and ss.lx3AckGeneration == 5)
-  print('PASS real msgq/Capnp/production host publisher: request ACK, PRE_ENABLE, LAT/COMB, upgrade alert, denial, cancel, old firmware/default producer')
+  # Exercise the real pending Alert creation delay in30 normal10ms frames,
+  # separately from this smoke's deliberately10Hz transport sample steps.
+  alert_events, manager = Events(), AlertManager()
+  for frame in range(30):
+    alert_events.clear()
+    alert_events.add(log.OnroadEvent.EventName.lx3PermissionPending)
+    alerts = alert_events.create_alerts([ET.PRE_ENABLE])
+    if frame < 29: assert not alerts
+    manager.add_many(frame, alerts)
+    manager.process_alerts(frame, set())
+  assert manager.current_alert.alert_text_1 == '주행보조 준비 중'
+  assert manager.current_alert.alert_type == 'lx3PermissionPending/preEnable'
+  print('PASS real msgq/Capnp/production host publisher and AlertManager: request ACK, PRE_ENABLE, LAT/COMB, upgrade alert, denial, cancel, old firmware/default producer')
 
 
 if __name__ == '__main__':

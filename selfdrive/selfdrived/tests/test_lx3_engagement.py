@@ -264,6 +264,17 @@ class TestLx3Session(unittest.TestCase):
     self.assertEqual(self.ctx.lx3_engagement.ack_generation, self.panda.lx3RequestGeneration)
     self.assertFalse(self.ctx.enabled)
 
+  def test_duplicate_denied_gesture_cannot_overwrite_off_ack(self):
+    self.step(button('lfaButton'), events=('tooDistracted',))
+    self.now += .1
+    self.pending()
+    self.assertEqual(self.step(button('lfaButton')), (False, False))
+    self.assertIsNone(self.ctx.lx3_engagement.pending)
+    self.assertTrue(self.ctx.lx3_engagement.ack_valid)
+    self.assertEqual(self.ctx.lx3_engagement.ack_mode, Mode.OFF)
+    self.accept()
+    self.assertEqual(self.step(), (False, False))
+
   def test_unbound_rejection_does_not_match_other_or_expired_physical_request(self):
     for delay, counter in ((.1, 42), (.501, 40)):
       self.setUp()

@@ -17,7 +17,8 @@ int main(int argc, char **argv) {
   uint32_t last_us = 0U, tick_us = 0U;
   unsigned int rx_invalid = 0U, tx_accepted = 0U, tx_rejected = 0U;
   unsigned int out_of_order = 0U, active_without_permission = 0U;
-  fprintf(output, "us,raw,mode,allowed,ready,rx_invalid,mdps_fault,brake,gas,mdps_age_us\n");
+  unsigned int pending_rows = 0U, accepted_rows = 0U, active_requested = 0U;
+  fprintf(output, "us,raw,mode,allowed,ready,rx_invalid,mdps_fault,brake,gas,mdps_age_us,phase,requested,generation,physical_counter,request_age_ms\n");
   while (fread(record, sizeof(record), 1U, input) == 1U) {
     uint32_t us = (uint32_t)record[0] | ((uint32_t)record[1] << 8U) | ((uint32_t)record[2] << 16U) | ((uint32_t)record[3] << 24U);
     if (us < last_us) { out_of_order++; continue; }
@@ -36,12 +37,18 @@ int main(int argc, char **argv) {
     if (record[4] == 0U) {
       if (!safety_rx_hook(&p)) rx_invalid++;
       if ((addr == 0x10BU) && (p.bus == 0U)) {
-        fprintf(output, "%u,%u,%d,%u,%u,%u,%u,%u,%u,%u\n", us, p.data[10] & 143U, lx3_mode,
+        const lx3_permission_t permission = lx3_permission_snapshot();
+        if (permission.phase == 1U) pending_rows++;
+        if (permission.phase == 2U) accepted_rows++;
+        fprintf(output, "%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n", us, p.data[10] & 143U, lx3_mode,
                 controls_allowed, lx3_button_ready, safety_rx_checks_invalid, lx3_mdps_fault,
-                brake_pressed, gas_pressed, lx3_mdps_seen ? us-lx3_mdps_us : UINT32_MAX);
+                brake_pressed, gas_pressed, lx3_mdps_seen ? us-lx3_mdps_us : UINT32_MAX,
+                permission.phase, permission.requested_mode, permission.generation,
+                permission.physical_counter, permission.age_ms);
       }
     } else {
       bool allowed = controls_allowed;
+      if ((addr == 0xCBU) && (p.bus == 0U) && ((p.data[3] & 0x30U) == 0x20U)) active_requested++;
       bool accepted = safety_tx_hook(&p);
       if (accepted) tx_accepted++; else tx_rejected++;
       if ((addr == 0xCBU) && (p.bus == 0U) && ((p.data[3] & 0x30U) == 0x20U) && accepted && !allowed) active_without_permission++;
@@ -49,7 +56,9 @@ int main(int argc, char **argv) {
   }
   bool bad = ferror(input) || ferror(output);
   fclose(input); fclose(output);
-  printf("ARCHIVE rx_rejected=%u tx_accepted=%u tx_rejected=%u reordered=%u active_without_permission=%u\n",
-         rx_invalid, tx_accepted, tx_rejected, out_of_order, active_without_permission);
-  return (bad || (active_without_permission != 0U)) ? 1 : 0;
+  printf("ARCHIVE rx_rejected=%u tx_accepted=%u tx_rejected=%u reordered=%u active_without_permission=%u pending_rows=%u accepted_rows=%u active_requested=%u\n",
+         rx_invalid, tx_accepted, tx_rejected, out_of_order, active_without_permission, pending_rows, accepted_rows, active_requested);
+  // These historical logs contain no version1 host ACK. Even real physical
+  // releases must not become accepted permission in this specific replay.
+  return (bad || (active_without_permission != 0U) || (accepted_rows != 0U)) ? 1 : 0;
 }

@@ -163,6 +163,33 @@ class RecorderTests(unittest.TestCase):
     self.assertEqual(self.store.size, before)
     self.assertGreater(self.recorder.sampled_out, 0)
 
+  def test_omitted_transition_preserves_gap_and_service_omission_marker(self):
+    sample = services()
+    self.recorder.update(sample, 100)
+    self.store.chunk_bytes = self.store.size
+    sample['selfdriveState']['data']['enabled'] = True
+    sample['selfdriveState']['mono_ns'] += 400_000_000
+    self.recorder.permission_observations(sample, 100.4)
+    self.assertEqual(self.recorder.permission_times['selfdriveState'], 100_000_000_000)
+    self.store.chunk_bytes = 65536
+    self.recorder.permission_observations(sample, 100.45)
+    changes = [r for r in self.rows() if r.get('name') == 'lx3_permission_observation' and r['service'] == 'selfdriveState']
+    self.assertEqual(changes[-1]['publication_gap_ns'], 400_000_000)
+    self.assertEqual(changes[-1]['omitted_observation_attempts_since_last'], 1)
+
+  def test_rotated_chunk_contains_permission_baseline(self):
+    self.recorder.update(services(), 100)
+    self.recorder.update(services(101.1), 101.1)
+    self.recorder.close()
+    chunks = list(self.root.glob('*.jsonl.gz'))
+    self.assertEqual(len(chunks), 2)
+    for path in chunks:
+      with gzip.open(path, 'rt', encoding='utf-8') as stream:
+        rows = [json.loads(line) for line in stream]
+      changes = [r for r in rows if r.get('name') == 'lx3_permission_observation' and r['service'] == 'selfdriveState']
+      self.assertEqual(len(changes), 1)
+      self.assertIsNone(changes[0]['before'])
+
   def test_permission_transition_recording_is_lx3_only(self):
     self.recorder.metadata['car_fingerprint'] = 'OTHER_CAR'
     self.recorder.update(services(), 100)

@@ -200,7 +200,7 @@ class AutoRecorder:
     self.last_event = {}
     self.can_last, self.faults = {}, {}
     self.actuation_states = {}
-    self.permission_states, self.permission_times = {}, {}
+    self.permission_states, self.permission_times, self.permission_omitted = {}, {}, {}
     self.permission_sequence = 0
     self.sampled_out = self.stale_packets = 0
     self.state = 'waiting_for_ignition'
@@ -230,12 +230,13 @@ class AutoRecorder:
       previous_time = self.permission_times.get(name)
       gap = timestamp - previous_time if previous_time is not None and timestamp > previous_time else None
       changed = current != self.permission_states.get(name)
-      if timestamp > self.permission_times.get(name, 0):
-        self.permission_times[name] = timestamp
       if not changed and (gap is None or gap <= 250_000_000):
+        if timestamp > self.permission_times.get(name, 0):
+          self.permission_times[name] = timestamp
         continue
       if self.store.full(now):
         self.sampled_out += 1
+        self.permission_omitted[name] = self.permission_omitted.get(name, 0) + 1
         continue  # Do not advance the baseline when storage omitted the change.
       self.permission_sequence += 1
       self.store.append({'kind': 'event', 'name': 'lx3_permission_observation',
@@ -243,9 +244,13 @@ class AutoRecorder:
                          'service': name, 'sequence': self.permission_sequence,
                          'before': self.permission_states.get(name), 'after': current,
                          'publication_gap_ns': gap,
+                         'omitted_observation_attempts_since_last': self.permission_omitted.get(name, 0),
                          'coverage': 'conflated_publications_not_all_firmware_transitions',
                          'classification': 'observation_only_not_engagement_authority'}, now)
       self.permission_states[name] = current
+      self.permission_omitted[name] = 0
+      if timestamp > self.permission_times.get(name, 0):
+        self.permission_times[name] = timestamp
 
   def update(self, services, now):
     ignition_fresh = fresh(services, 'deviceState', now, 3)
@@ -260,12 +265,13 @@ class AutoRecorder:
       self.trip = uuid.uuid4().hex
       self.previous, self.can_last, self.faults, self.last_event = {}, {}, {}, {}
       self.actuation_states = {}
-      self.permission_states, self.permission_times = {}, {}
+      self.permission_states, self.permission_times, self.permission_omitted = {}, {}, {}
       self.permission_sequence = 0
       self.lead_changes.clear()
       self.last_sample = -math.inf
     if self.store.full(now):
       self.store.seal('rotation')
+      self.permission_states = {}  # Baselines make each rotated chunk interpretable.
     if not self.store.begin({**self.metadata, 'trip_id': self.trip, 'mono_ns': int(now * 1e9),
                              'utc_ns': time.time_ns(), 'capture': 'sampled_evidence',
                              'full_can_source': 'rlog_not_copied_by_this_recorder'}, now):
@@ -273,6 +279,9 @@ class AutoRecorder:
       return
     self.state = 'recording'
     self.permission_observations(services, now)
+    if self.store.full(now):
+      self.sampled_out += 1
+      return
     if now - self.last_sample < .2:
       return
     mode = control_mode(services, now)

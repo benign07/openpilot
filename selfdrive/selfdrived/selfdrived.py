@@ -599,7 +599,8 @@ class SelfdriveD:
              lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience,
                               require_controls=False))
     panda = lx3_permission_sample(self.sm['pandaStates']) if healthy else None
-    intent.observe_rejection(panda, now)
+    if intent.observe_rejection(panda, now):
+      candidate, requested = EngagementMode.OFF, True
     if CS.steerFaultTemporary or CS.steerFaultPermanent:
       self.events.add(EventName.steerUnavailable)
 

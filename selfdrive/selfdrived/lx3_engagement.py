@@ -78,13 +78,20 @@ class Lx3Engagement:
 
   def observe_rejection(self, panda, now):
     if self.unbound_rejection is None or panda is None:
-      return
+      return False
     mode, counter, stamp = self.unbound_rejection
     if (0 <= now - stamp < 0.5 and panda.lx3PermissionPhase == 1 and panda.lx3RequestAgeMs < 500 and
         panda.lx3RequestedMode == int(mode) and panda.lx3PhysicalCounter == counter):
       self.rejection = panda.lx3RequestGeneration, counter, now
       self.set_ack(EngagementMode.OFF, panda.lx3RequestGeneration, counter)
       self.unbound_rejection = None
+      if self.pending == mode and self.pending_counter == counter:
+        # A replayed/default producer must not overwrite a retained refusal of
+        # this same physical gesture with an enable ACK in the same frame.
+        self.pending_generation = panda.lx3RequestGeneration
+        self.reject(now)
+        return True
+    return False
 
   def request(self, buttons, now):
     """Return a candidate mode and whether there was an explicit request.

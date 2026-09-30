@@ -81,7 +81,7 @@ qualification items; this is not an adversarial replay-proof protocol claim.
 
 ## Mutual review decisions
 
-Eight same-topic rounds used the actual installed Claude Code session. Accepted:
+Nine same-topic rounds used the actual installed Claude Code session. Accepted:
 tag-aware heartbeat decoding, rechecking NO_ENTRY/SOFT_DISABLE during preEnabled,
 atomic accepted-mode telemetry, and stable main gesture identity. Rejected:
 8-bit-only nonce, unconditional pending cancellation on disabled heartbeat, and
@@ -93,6 +93,10 @@ Rounds7/8 also found and corrected the upgrade's lost USER_DISABLE alert,
 unbound refusal arriving before the companion, accepted transactions being
 timed out while another normal PRE_ENABLE condition holds, and invalid guarded
 companion data falling back to the independently sampled health permission.
+Round9 corrected a duplicate denied gesture overwriting its OFF ACK and the
+observer's lost publication gap when its chunk was full. Same-counter replay
+is denied; normal IPC retry uses a different physical counter. Rotated chunks
+now include permission baselines and per-service omitted-observation attempts.
 A condition
 can change immediately after any confirmation; tests must measure bounded
 revocation and absence of new host active commands, not assert zero latency.
@@ -128,7 +132,7 @@ guarded protocol data is unknown, not permission inferred from universal health.
 
 ## Verification at this checkpoint
 
-- 183 Python regressions pass, including actual-parser batching/counter and
+- 186 Python regressions pass, including actual-parser batching/counter and
  production host adapter/StateMachine tests. New cases cover delayed refusals,
  499/500ms request boundaries, generation wrap, unrelated PRE_ENABLE, retained
  disable alerts, one update per frame, and bounded transition recording.
@@ -150,9 +154,10 @@ guarded protocol data is unknown, not permission inferred from universal health.
 - A strict/UBSan STM32F4-conditional desktop compile/run confirms the classic
  8byte CAN packet, unchanged health16/58byte and legacy heartbeat behavior.
  It is a protocol compatibility test, not an STM32F4 firmware build.
-- Firmware/transport commit8d2f245c has all5 CI jobs successful, including full
- Linux runtime/import/IPC and H7. The new host/recorder/IPC changes require the
- resulting commit's full CI before being recorded as build-verified. Neither
+- Host integration commit91054cf1 has all5 CI jobs successful (run36746545417),
+ including full Linux runtime/import/production publisher IPC and H7. Round9
+ follow-up changes including real AlertManager smoke require their resulting
+ commit's full CI before being recorded as build-verified. Neither
  build establishes EPS reception, real steering, LFA icon or warning removal.
 
 ## Required next work
