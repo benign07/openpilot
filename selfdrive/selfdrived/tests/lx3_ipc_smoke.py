@@ -1,6 +1,8 @@
 """Linux real IPC/schema/production host publishing; no vehicle or CAN TX."""
 import time
+import tempfile
 from types import SimpleNamespace as NS
+from unittest.mock import patch
 from cereal import car, log, messaging
 from cereal.services import SERVICE_LIST
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
@@ -8,10 +10,12 @@ from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager
 from openpilot.selfdrive.selfdrived.lx3_engagement import Lx3Engagement, lx3_control_permissions
+from openpilot.common.params import Params
+from openpilot.selfdrive.car.car_specific import CarSpecificEvents
 
 
 def main():
-  cp = car.CarParams.new_message(carFingerprint='HYUNDAI_PALISADE_LX3_HEV', steerControlType='angle',
+  cp = car.CarParams.new_message(carFingerprint='HYUNDAI_PALISADE_LX3_HEV', brand='hyundai', steerControlType='angle',
                                  openpilotLongitudinalControl=True, alternativeExperience=1,
                                  safetyConfigs=[{'safetyModel': 'hyundaiCanfd', 'safetyParam': 1214}])
   pm = messaging.PubMaster(['pandaStates', 'carState', 'selfdriveState', 'onroadEvents'])
@@ -22,6 +26,11 @@ def main():
                AM=AlertManager(), is_metric=True, experimental_mode=False, personality=log.LongitudinalPersonality.standard,
                distance_traveled=0.0)
   panda = dict(version=1, requested=0, accepted=0, counter=0, generation=1, age=0, phase=0, allowed=False)
+  directory = tempfile.TemporaryDirectory()
+  with patch('openpilot.selfdrive.car.car_specific.Params', return_value=Params(directory.name)):
+    car_events = CarSpecificEvents(cp)
+  previous_cs = car.CarState.new_message(gearShifter='drive', vEgo=15, vCruise=50)
+  cc = car.CarControl.new_message()
   def publish_panda():
     msg = messaging.new_message('pandaStates', 1, valid=True)
     p = msg.pandaStates[0]
@@ -36,18 +45,30 @@ def main():
     publish_panda(); sm.update(100)
     time.sleep(1 / SERVICE_LIST['pandaStates'].frequency)
   assert sm.all_checks(['pandaStates']), (sm.alive, sm.valid, sm.freq_ok)
-  def step(button=None, counter=0, event=None, physical_valid=True):
+  def step(button=None, counter=0, event=None, physical_valid=True, door=False):
+    nonlocal previous_cs
     time.sleep(1 / SERVICE_LIST['pandaStates'].frequency)
     publish_panda()
     msg = messaging.new_message('carState', valid=True)
     msg.carState.canValid = True
+    msg.carState.gearShifter = 'drive'
+    msg.carState.vEgo = 15
+    msg.carState.vCruise = 50
+    msg.carState.doorOpen = door
+    # LFA-only must not depend on the legacy stock SCC availability latch.
+    msg.carState.cruiseState.available = False
     msg.carState.buttonEvents = [] if button is None else [dict(type=button, pressed=False,
                                       lx3PhysicalCounter=counter, lx3PhysicalValid=physical_valid)]
     pm.send('carState', msg); sm.update(100)
     assert sm.all_checks(['pandaStates']), (sm.alive, sm.valid, sm.freq_ok)
     context.events.clear()
+    stock_events = car_events.update(sm['carState'], previous_cs, cc)
+    assert log.OnroadEvent.EventName.wrongCarMode in stock_events.events
+    context.events.add_from_msg(stock_events.to_msg())
+    previous_cs = sm['carState']
     if event is not None: context.events.add(event)
     SelfdriveD.update_lx3_state(context, sm['carState'])
+    assert log.OnroadEvent.EventName.wrongCarMode not in context.events.events
     SelfdriveD.update_alerts(context, sm['carState'])
     # Execute the actual production publisher, including ACK fields and events.
     SelfdriveD.publish_selfdriveState(context, sm['carState'])
@@ -95,6 +116,11 @@ def main():
   ss, permission = step('lfaButton', 48, physical_valid=False)
   assert not ss.enabled and permission == (False, False)
   assert not (ss.lx3AckValid and ss.lx3AckMode == 1 and ss.lx3AckGeneration == 5)
+  panda.update(requested=1, accepted=0, counter=50, generation=6, phase=1, allowed=False)
+  ss, permission = step('lfaButton', 50, door=True)
+  assert log.OnroadEvent.EventName.doorOpen in context.events.events
+  assert not ss.enabled and permission == (False, False)
+  assert ss.lx3AckValid and ss.lx3AckMode == 0 and ss.lx3AckGeneration == 6
   # Exercise the real pending Alert creation delay in30 normal10ms frames,
   # separately from this smoke's deliberately10Hz transport sample steps.
   alert_events, manager = Events(), AlertManager()
@@ -107,7 +133,8 @@ def main():
     manager.process_alerts(frame, set())
   assert manager.current_alert.alert_text_1 == '주행보조 준비 중'
   assert manager.current_alert.alert_type == 'lx3PermissionPending/preEnable'
-  print('PASS real msgq/Capnp/production host publisher and AlertManager: request ACK, PRE_ENABLE, LAT/COMB, upgrade alert, denial, cancel, old firmware/default producer')
+  directory.cleanup()
+  print('PASS real msgq/Capnp/production host publisher, CarSpecificEvents and AlertManager: stock SCC unavailable LAT/COMB, door barrier, request ACK, PRE_ENABLE, upgrade alert, denial, cancel, old firmware/default producer')
 
 
 if __name__ == '__main__':
