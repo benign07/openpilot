@@ -6,6 +6,33 @@ on:
 permissions:
   contents: read
 jobs:
+  native-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build actual Panda safety code with undefined-behavior checks
+        run: >-
+          gcc -std=gnu11 -Wall -Werror -Wno-pointer-to-int-cast
+          -fsanitize=undefined -fno-sanitize-recover=undefined -g
+          -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety
+          -Iopendbc_repo/opendbc/safety/tests/libsafety
+          opendbc_repo/opendbc/safety/tests/test_lx3_native.c -lm -o /tmp/lx3-safety
+      - name: Configuration and forwarding compatibility
+        run: /tmp/lx3-safety
+      - name: Release audit (must pass before OTA; known blockers remain)
+        id: release-audit
+        continue-on-error: true
+        run: /tmp/lx3-safety --release-audit | tee native-release-audit.txt
+      - name: Record OTA qualification separately from test infrastructure
+        if: always()
+        run: |
+          echo '## Native release audit: ${{ steps.release-audit.outcome }}' >> "$GITHUB_STEP_SUMMARY"
+          echo 'OTA remains blocked by the passive interlock and vehicle qualification requirements.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-release-audit
+          path: native-release-audit.txt
   offline-tests:
     runs-on: ubuntu-latest
     strategy:
