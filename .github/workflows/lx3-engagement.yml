@@ -6,6 +6,50 @@ on:
 permissions:
   contents: read
 jobs:
+  full-runtime-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+      - name: Install locked runtime dependencies
+        run: uv sync --frozen --no-dev
+      - name: Build complete runtime dependency graph
+        run: |
+          set -o pipefail
+          uv run --no-sync scons --minimal -j2 2>&1 | tee lx3-full-build.log
+      - name: Import actual control processes and generated schema
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          uv run --no-sync python - <<'PY'
+          import importlib
+          for name in (
+            'openpilot.selfdrive.car.card',
+            'openpilot.selfdrive.selfdrived.selfdrived',
+            'openpilot.selfdrive.controls.controlsd',
+            'openpilot.selfdrive.carrot.can_diagnostics.automatic_runtime',
+          ):
+            importlib.import_module(name)
+            print('IMPORTED', name)
+          from cereal import log
+          msg = log.SelfdriveState.new_message(enabled=True, lx3EngagementMode=1)
+          assert msg.lx3EngagementMode == 1
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-full-runtime-build-log
+          path: lx3-full-build.log
+      - name: Record scope
+        if: always()
+        run: echo 'This builds the complete Linux x86_64 runtime graph using the repository lockfile. --minimal excludes extra tools/tests. Import checks are not a closed-loop IPC or in-vehicle test. No OTA or installation.' >> "$GITHUB_STEP_SUMMARY"
   board-firmware:
     runs-on: ubuntu-24.04
     steps:
