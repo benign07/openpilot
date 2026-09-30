@@ -6,13 +6,13 @@
 #undef main
 
 int main(int argc, char **argv) {
-  if (argc != 3) return 2;
+  if ((argc != 3) && (argc != 4)) return 2;
   FILE *input = fopen(argv[1], "rb");
   FILE *output = fopen(argv[2], "w");
   if ((input == NULL) || (output == NULL)) return 2;
   assert(set_safety_hooks(SAFETY_HYUNDAI_CANFD, lx3_param()) == 0);
   init_tests();
-  set_alternative_experience(0);  // Conservative; do not enable on pressed gas.
+  set_alternative_experience((argc == 4 && strcmp(argv[3], "1") == 0) ? ALT_EXP_DISABLE_DISENGAGE_ON_GAS : 0);
   uint8_t record[41];
   uint32_t last_us = 0U, tick_us = 0U;
   unsigned int rx_invalid = 0U, tx_accepted = 0U, tx_rejected = 0U;

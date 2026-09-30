@@ -24,6 +24,17 @@ permissions = MODULE['lx3_control_permissions']
 pandas_ready = MODULE['lx3_pandas_ready']
 
 
+class TestLx3PedalPolicy(unittest.TestCase):
+  def test_startup_setting_is_shared_with_panda(self):
+    for setting, flag in ((False, 1), (True, 0)):
+      self.assertEqual(MODULE['lx3_alternative_experience'](setting), flag)
+      self.assertEqual(MODULE['lx3_disengage_on_gas'](flag), setting)
+
+  def test_unrelated_safety_flags_do_not_change_gas_policy(self):
+    self.assertTrue(MODULE['lx3_disengage_on_gas'](16))
+    self.assertFalse(MODULE['lx3_disengage_on_gas'](17))
+
+
 def load_definitions(path, env, names):
   nodes = [n for n in ast.walk(ast.parse(path.read_text(encoding='utf-8')))
            if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
@@ -260,10 +271,32 @@ class TestLx3CanOwnership(unittest.TestCase):
     self.env = dict(copy=copy, math=math, HyundaiFlags=NS(CAMERA_SCC=NS(value=1)),
                     Params=lambda: NS(get_int=lambda _: 0), _get_desire_and_lane_changing=lambda _: (0, 0))
     load_definitions(ROOT / 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py', self.env,
-                     {'create_ccnc_messages', 'create_steering_messages_camera_scc'})
+                     {'create_ccnc_messages', 'create_steering_messages_camera_scc', 'create_acc_control_scc2'})
     self.cp = NS(carFingerprint='HYUNDAI_PALISADE_LX3_HEV', flags=1)
     self.can = NS(CAM=2, ECAN=0)
     self.cc = NS(enabled=False, latActive=False)
+
+  def acc(self, enabled, gas=False, soft_hold=1, carrot=0, guarded=True):
+    cs = NS(scc_control={'COUNTER':3, 'InfoDisplay':0}, softHoldActive=soft_hold, paddle_button_prev=0,
+            out=NS(gasPressed=gas, vEgo=10, aEgo=0))
+    jerk = NS(carrot_cruise=carrot, carrot_cruise_accel=1.5, jerk_u=2, jerk_l=2)
+    hud = NS(leadDistanceBars=2, leadVisible=False)
+    return self.env['create_acc_control_scc2'](Packer(), self.can, enabled, 1, 1, False, False,
+                                               60, hud, jerk, cs, lx3_guard=guarded)[2]
+
+  def test_lateral_only_cannot_become_acc_via_soft_hold(self):
+    for carrot in (0, 1, 2):
+      msg = self.acc(False, carrot=carrot)
+      self.assertEqual((msg['ACCMode'], msg['aReqRaw'], msg['aReqValue'], msg['StopReq']), (0, 0, 0, 0))
+
+  def test_gas_override_is_zero_accel_and_no_stop_request(self):
+    for carrot in (0, 1, 2):
+      msg = self.acc(True, gas=True, carrot=carrot)
+      self.assertEqual((msg['ACCMode'], msg['aReqRaw'], msg['aReqValue'], msg['StopReq']), (2, 0, 0, 0))
+
+  def test_other_models_retain_soft_hold_authority(self):
+    msg = self.acc(False, guarded=False)
+    self.assertEqual((msg['ACCMode'], msg['aReqRaw'], msg['StopReq']), (1, 1, 1))
 
   def test_no_periodic_virtual_buttons_even_with_stock_icon_off(self):
     cs = NS(modelV2=None, lfahda_cluster={'HDA_LFA_SymSta': 0, 'HDA_CntrlModSta': 0},

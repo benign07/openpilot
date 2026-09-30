@@ -20,6 +20,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
       - name: Install locked runtime dependencies
         run: uv sync --frozen --no-dev
+      - name: Verify original driving model source
+        run: |
+          uv run --no-sync python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          from openpilot.common.file_chunker import read_file_chunked
+          path = Path('selfdrive/modeld/models/driving_supercombo.onnx')
+          data = read_file_chunked(path)
+          expected = path.with_name(path.name + '.sha256').read_text().strip()
+          assert hashlib.sha256(data).hexdigest() == expected
+          assert len(data) == 60792584
+          print('Original driving ONNX verified', expected)
+          PY
       - name: Build complete runtime dependency graph
         run: |
           set -o pipefail
@@ -88,6 +101,13 @@ jobs:
           opendbc_repo/opendbc/safety/tests/test_lx3_native.c -lm -o /tmp/lx3-safety
       - name: Configuration and forwarding compatibility
         run: /tmp/lx3-safety
+      - name: Compile recorded-CAN replay harness
+        run: >-
+          gcc -std=gnu11 -Wall -Wextra -Wstrict-prototypes -Werror -Wno-pointer-to-int-cast
+          -fsanitize=undefined -fno-sanitize-recover=undefined -g
+          -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety
+          -Iopendbc_repo/opendbc/safety/tests/libsafety
+          opendbc_repo/opendbc/safety/tests/test_lx3_archive_replay.c -lm -o /tmp/lx3-archive-replay
       - name: Record legacy policy separately from guarded LX3
         shell: bash
         run: |

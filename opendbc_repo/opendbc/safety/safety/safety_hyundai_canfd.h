@@ -60,6 +60,14 @@ static bool hyundai_canfd_actuator_active(const CANPacket_t *pkt) {
   return (addr == 0x1A0) && (((GET_BYTE(pkt, 8) >> 4) & 0x7U) != 0U);
 }
 
+static bool lx3_neutral_gas_override(const CANPacket_t *pkt) {
+  const int raw = (((GET_BYTE(pkt, 17) & 0x7U) << 8) | GET_BYTE(pkt, 16)) - 1023U;
+  const int val = ((GET_BYTE(pkt, 18) << 4) | (GET_BYTE(pkt, 17) >> 4)) - 1023U;
+  return (GET_ADDR(pkt) == 0x1A0) && gas_pressed &&
+         (((GET_BYTE(pkt, 8) >> 4) & 0x7U) == 2U) &&
+         (raw == 0) && (val == 0) && ((GET_BYTE(pkt, 23) & 0x3U) == 0U);
+}
+
 const TorqueSteeringLimits HYUNDAI_CANFD_STEERING_LIMITS = {
   .max_steer = 512, //270,
   .max_rt_delta = 112,
@@ -473,11 +481,12 @@ static bool canfd_bfwd_expired(const CanfdBufferedFwd* st, uint32_t accepted_us)
 
 static bool canfd_bfwd_authorized(const CanfdBufferedFwd* st) {
   return controls_allowed && !safety_rx_checks_invalid && !relay_malfunction &&
-         ((st->addr != 0x1A0) || ((lx3_mode == 2) && get_longitudinal_allowed()));
+         ((st->addr != 0x1A0) || (lx3_mode == 2));
 }
 
 static bool canfd_bfwd_packet_authorized(const CanfdBufferedFwd* st, const CANPacket_t* pkt) {
-  return canfd_bfwd_authorized(st) && ((st->addr != 0xCB) || lx3_angle_context_valid(GET_BYTE(pkt, 6)));
+  return canfd_bfwd_authorized(st) && ((st->addr != 0xCB) || lx3_angle_context_valid(GET_BYTE(pkt, 6))) &&
+         ((st->addr != 0x1A0) || get_longitudinal_allowed() || lx3_neutral_gas_override(pkt));
 }
 
 static void canfd_bfwd_revoke_actuators(void) {
@@ -860,7 +869,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
       const bool active_mode = (cruise_status == 1) || (cruise_status == 2) || (cruise_status == 4);
       // The common helper in this fork self-authorizes on nonzero accel.
       // Keep this opt-in policy independent of that legacy side effect.
-      violation |= !inactive && ((lx3_mode != 2) || !get_longitudinal_allowed() || !active_mode);
+      violation |= !inactive && ((lx3_mode != 2) || (!get_longitudinal_allowed() && !lx3_neutral_gas_override(to_send)) || !active_mode);
       violation |= (desired_accel_raw > HYUNDAI_LONG_LIMITS.max_accel) || (desired_accel_raw < HYUNDAI_LONG_LIMITS.min_accel);
       violation |= (desired_accel_val > HYUNDAI_LONG_LIMITS.max_accel) || (desired_accel_val < HYUNDAI_LONG_LIMITS.min_accel);
     } else if (hyundai_longitudinal) {

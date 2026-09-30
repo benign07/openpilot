@@ -337,6 +337,44 @@ static void rejected_tx_regressions(void) {
 }
 
 static void physical_permission_regressions(void) {
+  for (int alternative = 0; alternative <= 1; alternative++) {
+    reset(lx3_param());
+    set_alternative_experience(alternative);
+    CANPacket_t gas = packet(0x105, 0, 13);
+    gas.data[12] = 0x80U;
+    assert(safety_rx_hook(&gas));
+    physical_baseline();
+    physical_button(8);
+    for (int i = 0; i < 8; i++) physical_button(0);
+    assert(controls_allowed == (alternative == ALT_EXP_DISABLE_DISENGAGE_ON_GAS));
+    if (controls_allowed) {
+      CANPacket_t angle = angle_command(true);
+      assert(safety_tx_hook(&angle));
+      CANPacket_t accel = accel_command();
+      assert(!safety_tx_hook(&accel));  // Mode 1 cannot automate gas while overridden.
+      accel.data[8] = 0x20U;
+      assert(safety_tx_hook(&accel));  // Qualified combined session, zero-accel override.
+      CANPacket_t stock = accel; stock.bus = 2;
+      hyundai_canfd_update_checksum(&stock);
+      assert(safety_fwd_hook(&stock) == 0);
+      accel.data[23] = 1U;  // StopReq would conflict with the driver's gas input.
+      assert(!safety_tx_hook(&accel));
+      accel.data[23] = 0U;
+      set_accel(&accel, 10, 0);
+      assert(!safety_tx_hook(&accel));
+      set_accel(&accel, 0, -10);
+      assert(!safety_tx_hook(&accel));
+      CANPacket_t cancel = packet(0x10B, 0, 10);
+      cancel.data[2] = (uint8_t)(lx3_button_counter + 2U);
+      cancel.data[10] = 4U;
+      set_timer(microsecond_timer_get() + 40000U);
+      hyundai_canfd_update_checksum(&cancel);
+      assert(safety_rx_hook(&cancel));
+      set_accel(&accel, 0, 0);
+      assert(!controls_allowed && !safety_tx_hook(&accel));
+    }
+  }
+  set_alternative_experience(0);
   reset(lx3_param());
   // A held button at boot, including its release, cannot obtain permission.
   physical_button(128);

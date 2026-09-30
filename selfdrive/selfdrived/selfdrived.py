@@ -19,7 +19,7 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.state import StateMachine
-from openpilot.selfdrive.selfdrived.lx3_engagement import Lx3Engagement, EngagementMode, lx3_pandas_ready
+from openpilot.selfdrive.selfdrived.lx3_engagement import Lx3Engagement, EngagementMode, lx3_pandas_ready, lx3_disengage_on_gas
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 from openpilot.selfdrive.controls.lib.latcontrol import MIN_LATERAL_CONTROL_SPEED
 
@@ -236,7 +236,9 @@ class SelfdriveD:
           self.events.add(EventName.pcmEnable)
 
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
-      if (CS.gasPressed and not self.CS_prev.gasPressed and self.params.get_bool("DisengageOnAccelerator")) or \
+      disengage_on_gas = (lx3_disengage_on_gas(self.CP.alternativeExperience) if self.lx3_engagement is not None
+                          else self.params.get_bool("DisengageOnAccelerator"))
+      if (CS.gasPressed and not self.CS_prev.gasPressed and disengage_on_gas) or \
         (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
         (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
         self.events.add(EventName.pedalPressed)

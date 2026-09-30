@@ -5,6 +5,19 @@ an automatic cruise request, or the previously transmitted actuator command.
 """
 from enum import IntEnum
 
+# Panda safety_declarations.h: ALT_EXP_DISABLE_DISENGAGE_ON_GAS.
+LX3_DISABLE_DISENGAGE_ON_GAS = 1
+
+
+def lx3_alternative_experience(disengage_on_accelerator):
+  return 0 if disengage_on_accelerator else LX3_DISABLE_DISENGAGE_ON_GAS
+
+
+def lx3_disengage_on_gas(alternative_experience):
+  # Use the acknowledged startup policy, rather than a live setting that has
+  # not been sent to Panda. A change takes effect on the next control startup.
+  return not bool(alternative_experience & LX3_DISABLE_DISENGAGE_ON_GAS)
+
 
 class EngagementMode(IntEnum):
   OFF = 0

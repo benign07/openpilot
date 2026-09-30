@@ -330,20 +330,23 @@ def create_lfa_icon_non_camera_scc(packer, CS, CAN, CC):
     ret.append(packer.make_can_msg("ADRV_0x161", CAN.ECAN, values, rx_counter=rx_counter))
   return ret
 
-def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, gas_override, set_speed, hud_control, hyundai_jerk, CS):
+def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, gas_override, set_speed, hud_control, hyundai_jerk, CS,
+                           lx3_guard=False):
 
   if CS.scc_control is None:
     return None
-  enabled = (enabled or CS.softHoldActive > 0) and CS.paddle_button_prev == 0
+  enabled = (enabled or (CS.softHoldActive > 0 and not lx3_guard)) and CS.paddle_button_prev == 0
+  if lx3_guard:
+    gas_override = gas_override or CS.out.gasPressed
 
   acc_mode = 0 if not enabled else (2 if gas_override else 1)
 
-  if hyundai_jerk.carrot_cruise == 1:
+  if hyundai_jerk.carrot_cruise == 1 and not lx3_guard:
     acc_mode = 4 if enabled else 0
     enabled = False
     accel = accel_last = 0.5
 
-  elif hyundai_jerk.carrot_cruise == 2:
+  elif hyundai_jerk.carrot_cruise == 2 and not lx3_guard:
     accel = accel_last = hyundai_jerk.carrot_cruise_accel
 
   jerk_u = hyundai_jerk.jerk_u
@@ -361,6 +364,8 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, g
   values["ACCMode"] = acc_mode
   values["MainMode_ACC"] = 1
   values["StopReq"] = 1 if stopping or CS.softHoldActive > 0 else 0  # 1: Stop control is required, 2: Not used, 3: Error Indicator
+  if lx3_guard and (not enabled or gas_override):
+    values["StopReq"] = 0
   values["aReqValue"] = a_val
   values["aReqRaw"] = a_raw
   values["VSetDis"] = set_speed
