@@ -336,6 +336,16 @@ static void rejected_tx_regressions(void) {
   puts("PASS: rejected CAN-FD TX has no buffer or authorization side effects across 64 configurations");
 }
 
+// Explicit host entry-check acknowledgement. Physical input alone must not
+// grant; this helper is only used after a test has established a real pending.
+static void acknowledge_request(void) {
+  assert(lx3_pending && !controls_allowed);
+  const uint16_t value = LX3_HEARTBEAT_TAG | 1U | ((uint16_t)lx3_requested_mode << 1U) |
+                         ((uint16_t)lx3_request_counter << 8U);
+  safety_host_heartbeat(value, lx3_request_generation);
+  assert(controls_allowed && !lx3_pending && heartbeat_engaged);
+}
+
 static void physical_permission_regressions(void) {
   reset(lx3_param());
   CANPacket_t inactive_acc = accel_command();
@@ -354,6 +364,7 @@ static void physical_permission_regressions(void) {
     physical_baseline();
     physical_button(8);
     for (int i = 0; i < 8; i++) physical_button(0);
+    if (alternative == ALT_EXP_DISABLE_DISENGAGE_ON_GAS) acknowledge_request();
     assert(controls_allowed == (alternative == ALT_EXP_DISABLE_DISENGAGE_ON_GAS));
     if (controls_allowed) {
       CANPacket_t angle = angle_command(true);
@@ -394,6 +405,7 @@ static void physical_permission_regressions(void) {
   physical_button(128);
   assert(!controls_allowed);
   physical_button(0);
+  acknowledge_request();
   assert(controls_allowed && lx3_mode == 1);
   CANPacket_t angle = angle_command(true);
   assert(safety_tx_hook(&angle));
@@ -413,6 +425,7 @@ static void physical_permission_regressions(void) {
   }
   for (unsigned int i = 0; i < 7U; i++) { physical_button(0); assert(!controls_allowed); }
   physical_button(0);
+  acknowledge_request();
   assert(controls_allowed && lx3_mode == 2);
   assert(safety_tx_hook(&acc));
   physical_button(132);  // Physical CANCEL and LFA together: cancel wins.
@@ -425,6 +438,7 @@ static void physical_permission_regressions(void) {
     physical_button(raw);
     assert(!controls_allowed);
     physical_button(0);
+    acknowledge_request();
     assert(controls_allowed && lx3_mode == 2);
   }
 
@@ -433,6 +447,7 @@ static void physical_permission_regressions(void) {
     physical_baseline();
     physical_button(128);
     physical_button(0);
+    acknowledge_request();
     assert(controls_allowed);
     set_timer(microsecond_timer_get() + 40000U);
     CANPacket_t p = packet(0x10B, 0, 10);
@@ -454,6 +469,7 @@ static void physical_permission_regressions(void) {
   physical_baseline();
   physical_button(128);
   physical_button(0);
+  acknowledge_request();
   assert(safety_tx_hook(&angle));
   set_timer(microsecond_timer_get() + 200001U);
   CANPacket_t inactive = stock_angle(false);
@@ -491,6 +507,216 @@ static void physical_permission_regressions(void) {
   angle.data[3] = 0x10U;
   assert(safety_tx_hook(&angle));  // Host's inactive keepalive remains allowed.
   puts("PASS: physical CRC/counter/gestures, LFA-only authority, cancel, held recovery, stale and zero-force active rejection");
+}
+
+static uint16_t ack_value(unsigned int mode, bool enabled, uint8_t counter) {
+  return LX3_HEARTBEAT_TAG | (enabled ? 1U : 0U) | (uint16_t)(mode << 1U) | ((uint16_t)counter << 8U);
+}
+
+static void pending_lateral(void) {
+  reset(lx3_param());
+  physical_baseline();
+  physical_button(128);
+  physical_button(0);
+  assert(lx3_pending && lx3_requested_mode == 1 && !controls_allowed && lx3_mode == 0);
+}
+
+static void transaction_regressions(void) {
+  assert(sizeof(lx3_permission_t) == 12U);
+  pending_lateral();
+  lx3_permission_t s = safety_lx3_permission();
+  assert(lx3_permission_valid(&s, sizeof(s)));
+  for (int len = -1; len <= 13; len++) {
+    if (len != 12) assert(!lx3_permission_valid(&s, len));
+  }
+  assert(!lx3_permission_valid(NULL, 12));
+  for (unsigned int field = 0; field < 9U; field++) {
+    lx3_permission_t invalid = s;
+    if (field == 0U) invalid.version = 0;
+    if (field == 1U) invalid.requested_mode = 3;
+    if (field == 2U) invalid.accepted_mode = 1;
+    if (field == 3U) invalid.generation = 0;
+    if (field == 4U) invalid.age_ms = 500;
+    if (field == 5U) invalid.controls_allowed = 1;
+    if (field == 6U) invalid.phase = 3;
+    if (field == 7U) invalid.reserved = 1;
+    if (field == 8U) invalid.controls_allowed = 2;
+    assert(!lx3_permission_valid(&invalid, sizeof(invalid)));
+  }
+  for (unsigned int counter = 0; counter < 256U; counter++) {
+    const uint16_t encoded = lx3_heartbeat_value(true, 2, 1, (uint8_t)counter);
+    assert((encoded & 0xF8U) == LX3_HEARTBEAT_TAG && (encoded >> 8U) == counter && (encoded & 7U) == 5U);
+    assert(lx3_heartbeat_value(false, 2, 0, (uint8_t)counter) == LX3_HEARTBEAT_TAG);
+  }
+  assert(s.version == 1U && s.phase == 1U && s.requested_mode == 1U && s.accepted_mode == 0U);
+  assert(s.physical_counter == lx3_button_counter && s.generation != 0U && s.age_ms == 0U);
+  CANPacket_t angle = angle_command(true);
+  angle.data[6] = 0U;
+  assert(!safety_tx_hook(&angle));  // Zero-force active still cannot bypass pending.
+  CANPacket_t accel = accel_command();
+  assert(!safety_tx_hook(&accel));
+  const uint16_t g = s.generation;
+  const uint16_t value = ack_value(1, true, s.physical_counter);
+  safety_host_heartbeat(value, (uint16_t)(g + 1U));
+  assert(lx3_pending && !controls_allowed);
+  safety_host_heartbeat(ack_value(2, true, s.physical_counter), g);
+  assert(lx3_pending && !controls_allowed);
+  safety_host_heartbeat(ack_value(1, true, (uint8_t)(s.physical_counter + 2U)), g);
+  assert(lx3_pending && !controls_allowed);
+  safety_host_heartbeat(ack_value(1, false, s.physical_counter), g);
+  assert(lx3_pending && !controls_allowed);
+  // A disabled heartbeat sent before this request cannot reject it.
+  safety_host_heartbeat(ack_value(0, false, 0), 0);
+  assert(lx3_pending && !controls_allowed);
+  heartbeat_engaged_mismatches = 2U;
+  safety_host_heartbeat(value, g);
+  assert(controls_allowed && lx3_mode == 1 && !lx3_pending && heartbeat_engaged);
+  assert(heartbeat_engaged_mismatches == 0U);
+  s = safety_lx3_permission();
+  assert(s.phase == 2U && s.accepted_mode == 1U && s.controls_allowed == 1U);
+  safety_host_heartbeat(value, g);  // Idempotent ACK does not reset motion queues.
+  assert(controls_allowed);
+  safety_host_heartbeat(ack_value(0, false, 0), 0);
+  assert(!controls_allowed && lx3_mode == 0);
+  s = safety_lx3_permission();
+  assert(s.phase == 0U && s.requested_mode == 0U && s.accepted_mode == 0U);
+  safety_host_heartbeat(value, g);
+  assert(!controls_allowed);  // No pending remains to consume.
+
+  pending_lateral();
+  s = safety_lx3_permission();
+  safety_host_heartbeat(ack_value(0, false, s.physical_counter), s.generation);
+  assert(!lx3_pending && !controls_allowed && lx3_button_ready);
+  // Rejection preserves the healthy input baseline; a new gesture is required.
+  physical_button(128); physical_button(0);
+  assert(lx3_pending && lx3_request_generation != s.generation);
+  safety_host_heartbeat(ack_value(1, true, s.physical_counter), s.generation);
+  assert(lx3_pending && !controls_allowed);
+  acknowledge_request();
+
+  pending_lateral();
+  s = safety_lx3_permission();
+  physical_button(128); physical_button(0);  // Rapid second toggle cancels pending.
+  assert(!lx3_pending && !controls_allowed);
+  safety_host_heartbeat(ack_value(1, true, s.physical_counter), s.generation);
+  assert(!controls_allowed);
+  assert(lx3_button_ready);
+  physical_button(128); physical_button(0);  // OFF does not invent a 120ms fault holdoff.
+  assert(lx3_pending && !controls_allowed);
+  acknowledge_request();
+
+  for (int fault = 0; fault < 6; fault++) {
+    pending_lateral();
+    s = safety_lx3_permission();
+    if (fault == 0) brake_pressed = true;
+    if (fault == 1) regen_braking = true;
+    if (fault == 2) gas_pressed = true;
+    if (fault == 3) relay_malfunction = true;
+    if (fault == 4) safety_rx_checks_invalid = true;
+    if (fault == 5) lx3_mdps_fault = true;
+    (void)safety_lx3_permission();
+    assert(!lx3_pending && !controls_allowed);
+    brake_pressed = false; regen_braking = false; gas_pressed = false;
+    relay_malfunction = false; safety_rx_checks_invalid = false; lx3_mdps_fault = false;
+    safety_host_heartbeat(ack_value(1, true, s.physical_counter), s.generation);
+    assert(!controls_allowed);
+  }
+
+  pending_lateral();
+  s = safety_lx3_permission();
+  // Keep RX and MDPS fresh while the original request expires.
+  for (int i = 0; i < 13; i++) physical_button(0);
+  assert(!lx3_pending && lx3_button_ready && !controls_allowed);
+  safety_host_heartbeat(ack_value(1, true, s.physical_counter), s.generation);
+  assert(!controls_allowed);
+
+  pending_lateral();
+  s = safety_lx3_permission();
+  safety_host_heartbeat(1U, s.generation);  // Legacy bool cannot grant in guard.
+  assert(!controls_allowed && !heartbeat_engaged && !lx3_pending);
+  pending_lateral();
+  s = safety_lx3_permission();
+  reset(lx3_param());  // Mode reset invalidates the previous generation.
+  assert(lx3_request_generation != s.generation);
+  safety_host_heartbeat(ack_value(1, true, s.physical_counter), s.generation);
+  assert(!controls_allowed);
+
+  // Generation zero is reserved, including wrap. Button counter wraps normally.
+  reset(lx3_param()); physical_baseline();
+  lx3_request_generation = UINT16_MAX;
+  physical_button(128); physical_button(0);
+  assert(lx3_pending && lx3_request_generation == 1U && lx3_request_counter == 2U);
+  acknowledge_request();
+
+  // RES/SET in combined is speed adjustment, not another permission transaction.
+  reset(lx3_param()); physical_baseline();
+  physical_button(1); physical_button(0); acknowledge_request();
+  const uint16_t combined_g = lx3_request_generation;
+  physical_button(2); physical_button(0);
+  assert(controls_allowed && lx3_mode == 2 && lx3_request_generation == combined_g && !lx3_pending);
+  // Upgrade from LAT suspends active commands until a new, matching COMB ACK.
+  pending_lateral(); acknowledge_request();
+  const uint16_t lat_g = lx3_request_generation;
+  physical_button(1); physical_button(0);
+  assert(!controls_allowed && lx3_pending && lx3_requested_mode == 2 && lx3_request_generation != lat_g);
+  assert(!safety_tx_hook(&accel));
+  acknowledge_request(); assert(lx3_mode == 2);
+
+  // Main's identity is the FIRST neutral counter, not delayed 300ms decision.
+  reset(lx3_param()); physical_baseline(); physical_button(8);
+  const uint8_t anchor = (uint8_t)(lx3_button_counter + 2U);
+  for (int i = 0; i < 8; i++) physical_button(0);
+  assert(lx3_pending && lx3_request_counter == anchor && lx3_request_counter != lx3_button_counter);
+  acknowledge_request();
+
+  // ABI and exact policy scope: old flags 190 and NOOUTPUT use legacy bools.
+  reset(190);
+  assert(safety_lx3_permission().version == 0U);
+  safety_host_heartbeat(1U, 0U); assert(heartbeat_engaged);
+  safety_host_heartbeat(ack_value(1, true, 0), 0U); assert(!heartbeat_engaged);
+  assert(set_safety_hooks(SAFETY_NOOUTPUT, 0U) == 0);
+  assert(safety_lx3_permission().version == 0U);
+  safety_host_heartbeat(1U, 0U); assert(heartbeat_engaged);
+  puts("PASS: LX3 physical request/host ACK transaction, expiry, fault/cancel, stale ACK, counter/generation wrap, legacy ABI");
+}
+
+static void snapshot_state_regressions(void) {
+  reset(lx3_param());
+  physical_baseline();
+  uint32_t seed = 0x1057C0DEU;
+  unsigned int phases[3] = {0};
+  for (unsigned int i = 0; i < 20000U; i++) {
+    seed = seed * 1664525U + 1013904223U;
+    const unsigned int action = (seed >> 24U) % 16U;
+    if (action < 5U) physical_button(0);
+    else if (action == 5U) physical_button(128);
+    else if (action == 6U) physical_button(8);
+    else if (action == 7U) physical_button(4);
+    else if (action == 8U) physical_button(1);
+    else if (action == 9U) {
+      const uint8_t mode = (seed >> 8U) % 4U;
+      const uint16_t g = (seed & 0x1000U) ? lx3_request_generation : (uint16_t)(lx3_request_generation + 1U);
+      safety_host_heartbeat(lx3_heartbeat_value(true, mode, g, lx3_request_counter), mode <= 2U ? g : 0U);
+    } else if (action == 10U) safety_host_heartbeat(lx3_heartbeat_value(false, 0, 0, 0), 0);
+    else if (action == 11U) {
+      safety_host_heartbeat(lx3_heartbeat_value(false, 0, lx3_request_generation, lx3_request_counter), lx3_request_generation);
+    } else if (action == 12U) {
+      brake_pressed = !brake_pressed;
+    } else if (action == 13U) {
+      set_timer(microsecond_timer_get() + 600000U);
+    } else if (action == 14U) {
+      fresh_mdps(0, 0);
+    } else {
+      reset(lx3_param());
+    }
+    const lx3_permission_t state = safety_lx3_permission();
+    assert(lx3_permission_valid(&state, sizeof(state)));
+    assert(!(lx3_pending && controls_allowed));
+    phases[state.phase]++;
+  }
+  printf("PASS: 20000 deterministic mixed C input/heartbeat/fault/reset states have coherent companions (idle=%u pending=%u accepted=%u)\n",
+         phases[0], phases[1], phases[2]);
+  assert(phases[0] > 0U && phases[1] > 0U && phases[2] > 0U);
 }
 
 static void compatibility_checks(void) {
@@ -657,6 +883,7 @@ static void release_audit(uint16_t param) {
     physical_baseline();
     physical_button(8);
     for (unsigned int i = 0; i < 8U; i++) physical_button(0);
+    acknowledge_request();
     check("physical_main_release_has_qualified_permission_path", controls_allowed);
 
     reset(param);
@@ -684,5 +911,7 @@ int main(int argc, char **argv) {
   guarded_regressions();
   angle_envelope_regressions();
   physical_permission_regressions();
+  transaction_regressions();
+  snapshot_state_regressions();
   return 0;
 }

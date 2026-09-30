@@ -170,11 +170,65 @@ class TestPhysicalParser(unittest.TestCase):
     self.assertEqual(events, [('lfaButton', True), ('lfaButton', False)])
     self.assertEqual(self.intent.from_parser(self.parser, checksum), ([], True))
 
+  def test_shared_batch_timestamp_preserves_counter_order(self):
+    self.warmup()
+    press, release = self.frame(128), self.frame()
+    batch = [release[0], press[1] + release[1]]
+    self.parser.update([batch])
+    events, ready = self.intent.from_parser(self.parser, checksum, with_counter=True)
+    self.assertTrue(ready)
+    self.assertEqual(events, [('lfaButton', True, 0), ('lfaButton', False, 2)])
+
+  def test_fast_delivery_uses_counter_not_transport_min_period(self):
+    self.warmup()
+    press = self.frame(128)
+    release = self.frame()
+    release[0] = press[0] + 5_000_000
+    self.parser.update([press, release])
+    events, ready = self.intent.from_parser(self.parser, checksum, with_counter=True)
+    self.assertTrue(ready)
+    self.assertEqual([e[2] for e in events], [0, 2])
+
+  def test_counter_metadata_belongs_to_each_release_in_batch(self):
+    self.warmup()
+    frames = [self.frame(128), self.frame(), self.frame(128), self.frame()]
+    batch = [frames[-1][0], [f for frame in frames for f in frame[1]]]
+    self.parser.update([batch])
+    events, ready = self.intent.from_parser(self.parser, checksum, with_counter=True)
+    self.assertTrue(ready)
+    self.assertEqual([e[2] for e in events if not e[1]], [2, 6])
+
+  def test_main_counter_is_first_neutral_before_debounce(self):
+    self.warmup()
+    self.feed(self.frame(8))
+    first = self.frame()
+    anchor = self.counter
+    self.feed(first)
+    for _ in range(6): self.feed(self.frame())
+    self.parser.update([self.frame()])
+    events, ready = self.intent.from_parser(self.parser, checksum, with_counter=True)
+    self.assertTrue(ready)
+    self.assertEqual(events, [('mainCruise', False, anchor)])
+    self.assertNotEqual(anchor, self.intent.input.counter)
+
+  def test_shared_timestamp_does_not_allow_duplicate_or_reverse_counter(self):
+    self.warmup()
+    press = self.frame(128)
+    self.parser.update([[press[0], press[1] + press[1]]])
+    self.assertEqual(self.intent.from_parser(self.parser, checksum, with_counter=True), ([], False))
+
   def test_bad_frame_after_release_clears_batch_enable(self):
     self.warmup()
     events, ready = self.feed(self.frame(128), self.frame(), self.frame(corrupt=True))
     self.assertFalse(ready)
     self.assertEqual(events, [])
+
+  def test_bad_frame_after_valid_cancel_preserves_cancel_and_faults(self):
+    self.warmup()
+    self.parser.update([self.frame(4), self.frame(corrupt=True)])
+    events, ready = self.intent.from_parser(self.parser, checksum, with_counter=True)
+    self.assertFalse(ready)
+    self.assertEqual(events, [('cancel', True, 0)])
 
   def test_bounded_overflow_never_replays_last_held_press(self):
     self.warmup()

@@ -800,9 +800,10 @@ class CarState(CarStateBase):
       # Only validated physical frames can request the LX3 session. Cached
       # parsed values and alternate/forwarded button messages have no authority.
       intent = self.lx3_button_intent
-      events, ready = intent.from_parser(cp, hkg_can_fd_checksum)
-      ret.buttonEvents = [structs.CarState.ButtonEvent(type=getattr(ButtonType, name), pressed=pressed)
-                          for name, pressed in events]
+      events, ready = intent.from_parser(cp, hkg_can_fd_checksum, with_counter=True)
+      ret.buttonEvents = [structs.CarState.ButtonEvent(type=getattr(ButtonType, name), pressed=pressed,
+                                                     lx3PhysicalCounter=counter, lx3PhysicalValid=True)
+                          for name, pressed, counter in events]
       ret.steerFaultTemporary |= not ready
 
     self.paddle_button_prev = paddle_button

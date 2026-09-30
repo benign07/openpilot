@@ -13,6 +13,7 @@
 #include "cereal/gen/cpp/log.capnp.h"
 #include "panda/board/health.h"
 #include "panda/board/can.h"
+#include "opendbc_repo/opendbc/safety/lx3_permission.h"
 #include "selfdrive/pandad/panda_comms.h"
 
 #define USB_TX_SOFT_LIMIT   (0x100U)
@@ -69,6 +70,7 @@ public:
   uint16_t get_fan_speed();
   void set_ir_pwr(uint16_t ir_pwr);
   std::optional<health_t> get_state();
+  std::optional<lx3_permission_t> get_lx3_permission();
   std::optional<can_health_t> get_can_state(uint16_t can_number);
   void set_loopback(bool loopback);
   std::optional<std::vector<uint8_t>> get_firmware_version();
@@ -76,7 +78,8 @@ public:
   std::optional<std::string> get_serial();
   void set_power_saving(bool power_saving);
   void enable_deepsleep();
-  void send_heartbeat(bool engaged);
+  void send_heartbeat(bool engaged, bool lx3_guard=false, uint8_t ack_mode=0U,
+                      uint16_t ack_generation=0U, uint8_t ack_counter=0U);
   void set_can_speed_kbps(uint16_t bus, uint16_t speed);
   void set_can_fd_auto(uint16_t bus, bool enabled);
   void set_data_speed_kbps(uint16_t bus, uint16_t speed);

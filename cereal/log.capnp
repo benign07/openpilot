@@ -140,6 +140,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     stopStop @120;
     audioLaneChange @121;
     audioTurn @122;
+    lx3PermissionPending @123;
     trafficSignGreen @100;
     trafficSignChanged @101;
     turningLeft @102;
@@ -588,6 +589,16 @@ struct PandaState @0xa7649e2575e4591e {
   controlsAllowedRESERVED1 @38 :Bool;
   controlsAllowedRESERVED2 @39 :Bool;
 
+  # Atomic guarded LX3 companion (health v16 remains unchanged).
+  lx3PermissionVersion @40 :UInt8;
+  lx3RequestedMode @41 :UInt8;
+  lx3AcceptedMode @42 :UInt8;
+  lx3PhysicalCounter @43 :UInt8;
+  lx3RequestGeneration @44 :UInt16;
+  lx3RequestAgeMs @45 :UInt16;
+  lx3ControlsAllowed @46 :Bool;
+  lx3PermissionPhase @47 :UInt8;
+
   enum FaultStatus {
     none @0;
     faultTemp @1;
@@ -813,6 +824,11 @@ struct SelfdriveState {
   # LX3 explicit session intent. 0=off, 1=lateral, 2=lateral+longitudinal.
   # enabled/active still come from the normal StateMachine, never from this enum.
   lx3EngagementMode @14 :UInt8;
+  # Request-specific ACK; absent/default producers cannot grant guarded control.
+  lx3AckMode @15 :UInt8;
+  lx3AckGeneration @16 :UInt16;
+  lx3AckPhysicalCounter @17 :UInt8;
+  lx3AckValid @18 :Bool;
 
   enum OpenpilotState @0xdbe58b96d2d1ac61 {
     disabled @0;

@@ -301,6 +301,9 @@ struct CarState {
 
   # send on change
   struct ButtonEvent {
+    # LX3 validated physical frame association; defaults keep old producers inert.
+    lx3PhysicalCounter @2 :UInt8;
+    lx3PhysicalValid @3 :Bool;
     pressed @0 :Bool;
     type @1 :Type;
 

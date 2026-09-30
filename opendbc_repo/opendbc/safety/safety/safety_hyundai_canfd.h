@@ -2,6 +2,7 @@
 
 #include "safety_declarations.h"
 #include "safety_hyundai_common.h"
+#include "lx3_permission.h"
 
 // Explicit opt-in: the legacy flag combination (e.g. 190) also identifies
 // other vehicles. This development policy must not be inferred from it.
@@ -17,6 +18,12 @@ static bool lx3_angle_active_prev = false;
 static int lx3_angle_accepted = 0;
 static uint32_t lx3_angle_accepted_us = 0U;
 static int lx3_mode = 0;  // 0 OFF, 1 lateral only, 2 combined; same as host.
+static int lx3_requested_mode = 0;
+static bool lx3_pending = false;
+// Never reset this on a safety-mode change: old ACKs must not match a new request.
+static uint16_t lx3_request_generation = 0U;
+static uint8_t lx3_request_counter = 0U;
+static uint32_t lx3_request_us = 0U;
 static bool lx3_button_seen = false;
 static bool lx3_button_ready = false;
 static uint8_t lx3_button_counter = 0U;
@@ -24,6 +31,7 @@ static uint32_t lx3_button_us = 0U;
 static unsigned int lx3_neutral_samples = 0U;
 static bool lx3_main_held = false;
 static uint32_t lx3_main_us = 0U;
+static uint8_t lx3_main_release_counter = 0U;
 static int lx3_button_prev = 0;
 
 // Software envelope derived from this port's host maximum of 2 deg/10ms.
@@ -499,9 +507,21 @@ static void canfd_bfwd_revoke_actuators(void) {
   }
 }
 
-static void lx3_revoke_permission(void) {
+static void lx3_clear_session(void) {
   controls_allowed = false;
   lx3_mode = 0;
+  lx3_requested_mode = 0;
+  lx3_pending = false;
+  canfd_bfwd_revoke_actuators();
+}
+
+static void lx3_next_generation(void) {
+  lx3_request_generation++;
+  if (lx3_request_generation == 0U) lx3_request_generation = 1U;
+}
+
+static void lx3_revoke_permission(void) {
+  lx3_clear_session();
   lx3_button_ready = false;
   lx3_neutral_samples = 0U;
   lx3_main_held = false;
@@ -509,28 +529,97 @@ static void lx3_revoke_permission(void) {
   canfd_bfwd_revoke_actuators();
 }
 
+static bool lx3_request_context_valid(void);
+
 static void lx3_permission_maintenance(void) {
   if ((controls_allowed && (!lx3_button_ready || !lx3_button_seen)) ||
       (lx3_button_ready && (microsecond_timer_get() - lx3_button_us > 200000U)) ||
-      safety_rx_checks_invalid || relay_malfunction || (!controls_allowed && (lx3_mode != 0))) {
+      safety_rx_checks_invalid || relay_malfunction || (!controls_allowed && (lx3_mode != 0)) ||
+      (lx3_pending && !lx3_request_context_valid())) {
     lx3_revoke_permission();
+  } else if (lx3_pending && (microsecond_timer_get() - lx3_request_us >= LX3_REQUEST_TIMEOUT_US)) {
+    // Host denial/timeout is not a corrupt physical input stream.
+    lx3_clear_session();
   }
 }
 
-static void lx3_request_mode(int mode) {
+static bool lx3_request_context_valid(void) {
+  return hyundai_camera_scc && hyundai_canfd_hda2 && hyundai_hybrid_gas_signal && hyundai_longitudinal &&
+         lx3_button_seen && lx3_button_ready && (microsecond_timer_get() - lx3_button_us <= 200000U) &&
+         lx3_angle_context_valid(0) && !safety_rx_checks_invalid && !relay_malfunction &&
+         !brake_pressed && !regen_braking &&
+         (!gas_pressed || (alternative_experience & ALT_EXP_DISABLE_DISENGAGE_ON_GAS));
+}
+
+static void lx3_request_mode(int mode, uint8_t counter) {
+  lx3_next_generation();
+  lx3_request_counter = counter;
+  lx3_request_us = microsecond_timer_get();
   if (mode == 0) {
-    lx3_revoke_permission();
-  } else if (hyundai_camera_scc && hyundai_canfd_hda2 && hyundai_hybrid_gas_signal && hyundai_longitudinal &&
-             lx3_angle_context_valid(0) && !safety_rx_checks_invalid && !relay_malfunction &&
-             !brake_pressed && !regen_braking &&
-             (!gas_pressed || (alternative_experience & ALT_EXP_DISABLE_DISENGAGE_ON_GAS))) {
-    // Physical RX is the only producer of guarded permission. Host still
-    // performs its independent StateMachine/CAN/camera/driver checks.
-    lx3_mode = mode;
-    controls_allowed = true;
+    // Driver OFF is not evidence of a corrupt physical input stream.
+    lx3_clear_session();
+  } else if (((mode == 1) || (mode == 2)) && lx3_request_context_valid()) {
+    lx3_clear_session();
+    lx3_requested_mode = mode;
+    lx3_pending = true;
+    // Physical RX creates a request, never actuator permission. Host must
+    // acknowledge this generation after normal entry checks have passed.
   } else {
-    lx3_revoke_permission();
+    lx3_clear_session();
   }
+}
+
+static void lx3_heartbeat(uint16_t value, uint16_t generation) {
+  const bool tagged = (value & 0x00F8U) == LX3_HEARTBEAT_TAG;
+  heartbeat_engaged = tagged && ((value & 1U) != 0U);
+  lx3_permission_maintenance();
+  if (!tagged) {
+    // An old host cannot grant permission under the guarded policy.
+    lx3_clear_session();
+    return;
+  }
+  const int mode = (value >> 1U) & 3U;
+  const bool matches = (generation != 0U) && (generation == lx3_request_generation) &&
+                       ((value >> 8U) == lx3_request_counter);
+  if (!heartbeat_engaged) {
+    // A disabled heartbeat queued before a new request must not cancel it.
+    // Revoke accepted permission immediately; explicit matching OFF also
+    // consumes a pending request. Neither path can create authority.
+    controls_allowed = false;
+    lx3_mode = 0;
+    canfd_bfwd_revoke_actuators();
+    if (!lx3_pending) lx3_clear_session();
+    if (matches && (mode == 0)) lx3_clear_session();
+    return;
+  }
+  if (matches && (mode == 0)) {
+    lx3_clear_session();
+  } else if (matches && lx3_pending && (mode == lx3_requested_mode) &&
+             (microsecond_timer_get() - lx3_request_us < LX3_REQUEST_TIMEOUT_US) &&
+             lx3_request_context_valid()) {
+    lx3_mode = mode;
+    lx3_pending = false;
+    controls_allowed = true;
+    // This rising edge happens in USB/SPI, outside safety_rx_hook's edge reset.
+    heartbeat_engaged_mismatches = 0U;
+  }
+}
+
+static lx3_permission_t lx3_permission_snapshot(void) {
+  lx3_permission_maintenance();
+  const uint32_t age_ms = (microsecond_timer_get() - lx3_request_us) / 1000U;
+  const lx3_permission_t state = {
+    .version = LX3_PERMISSION_VERSION,
+    .requested_mode = (uint8_t)lx3_requested_mode,
+    .accepted_mode = (uint8_t)lx3_mode,
+    .physical_counter = lx3_request_counter,
+    .generation = lx3_request_generation,
+    .age_ms = (uint16_t)MIN(age_ms, 65535U),
+    .controls_allowed = controls_allowed ? 1U : 0U,
+    .phase = lx3_pending ? 1U : ((controls_allowed && (lx3_mode != 0)) ? 2U : 0U),
+    .reserved = 0U,
+  };
+  return state;
 }
 
 static void lx3_physical_buttons_rx(const CANPacket_t *pkt) {
@@ -572,17 +661,19 @@ static void lx3_physical_buttons_rx(const CANPacket_t *pkt) {
   if (raw == 8) {
     lx3_main_held = true;
     lx3_main_us = now;
+    // Stable byte identity independent of USB batching and the 300ms decision.
+    lx3_main_release_counter = (uint8_t)(counter + 2U);
   } else if (lx3_main_held && (button != 0)) {
     lx3_revoke_permission();
     return;
   } else if (lx3_main_held && (now - lx3_main_us >= 300000U)) {
     lx3_main_held = false;
-    lx3_request_mode((controls_allowed && (lx3_mode == 2)) ? 0 : 2);
+    lx3_request_mode((lx3_pending || (controls_allowed && (lx3_mode == 2))) ? 0 : 2, lx3_main_release_counter);
   }
   if ((button == 0) && (lx3_button_prev == 16)) {
-    lx3_request_mode(controls_allowed ? 0 : 1);
+    lx3_request_mode((lx3_pending || controls_allowed) ? 0 : 1, counter);
   } else if ((button == 0) && ((lx3_button_prev == HYUNDAI_BTN_RESUME) || (lx3_button_prev == HYUNDAI_BTN_SET))) {
-    lx3_request_mode(2);
+    if (!lx3_pending && !(controls_allowed && (lx3_mode == 2))) lx3_request_mode(2, counter);
   }
   lx3_button_prev = (raw == 8) ? 0 : button;
 }
@@ -1015,6 +1106,11 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   lx3_angle_accepted = 0;
   lx3_angle_accepted_us = 0U;
   lx3_mode = 0;
+  lx3_requested_mode = 0;
+  lx3_pending = false;
+  lx3_next_generation();
+  lx3_request_counter = 0U;
+  lx3_request_us = 0U;
   lx3_button_seen = false;
   lx3_button_ready = false;
   lx3_button_counter = 0U;
@@ -1022,6 +1118,7 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   lx3_neutral_samples = 0U;
   lx3_main_held = false;
   lx3_main_us = 0U;
+  lx3_main_release_counter = 0U;
   lx3_button_prev = 0;
 
   gen_crc_lookup_table_16(0x1021, hyundai_canfd_crc_lut);

@@ -96,6 +96,12 @@ std::optional<can_health_t> Panda::get_can_state(uint16_t can_number) {
   return err >= 0 ? std::make_optional(can_health) : std::nullopt;
 }
 
+std::optional<lx3_permission_t> Panda::get_lx3_permission() {
+  lx3_permission_t state{};
+  int n = handle->control_read(LX3_PERMISSION_REQUEST, 0, 0, (unsigned char*)&state, sizeof(state));
+  return lx3_permission_valid(&state, n) ? std::make_optional(state) : std::nullopt;
+}
+
 void Panda::set_loopback(bool loopback) {
   handle->control_write(0xe5, loopback, 0);
 }
@@ -134,8 +140,14 @@ void Panda::enable_deepsleep() {
   handle->control_write(0xfb, 0, 0);
 }
 
-void Panda::send_heartbeat(bool engaged) {
-  handle->control_write(0xf3, engaged, 0);
+void Panda::send_heartbeat(bool engaged, bool lx3_guard, uint8_t ack_mode, uint16_t ack_generation, uint8_t ack_counter) {
+  uint16_t value = engaged ? 1U : 0U;
+  uint16_t generation = 0U;
+  if (lx3_guard) {
+    generation = ack_mode <= 2U ? ack_generation : 0U;
+    value = lx3_heartbeat_value(engaged, ack_mode, generation, ack_counter);
+  }
+  handle->control_write(0xf3, value, generation);
 }
 
 void Panda::set_can_speed_kbps(uint16_t bus, uint16_t speed) {

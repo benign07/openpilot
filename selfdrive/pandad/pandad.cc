@@ -161,7 +161,7 @@ void fill_panda_can_state(cereal::PandaState::PandaCanState::Builder &cs, const 
   cs.setCanCoreResetCnt(can_health.can_core_reset_cnt);
 }
 
-std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroad, bool spoofing_started) {
+std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroad, bool spoofing_started, bool *lx3_guard) {
   // build msg
   MessageBuilder msg;
   auto evt = msg.initEvent();
@@ -173,6 +173,8 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
   }
 
   health_t health = *health_opt;
+  *lx3_guard = health.safety_mode_pkt == (uint8_t)cereal::CarParams::SafetyModel::HYUNDAI_CANFD &&
+               (health.safety_param_pkt & 1024U) != 0U;
 
   std::array<can_health_t, PANDA_CAN_CNT> can_health{};
   for (uint32_t i = 0; i < PANDA_CAN_CNT; i++) {
@@ -211,6 +213,20 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
 
   auto ps = pss[0];
   fill_panda_state(ps, panda->hw_type, health);
+  if (*lx3_guard) {
+    // Companion authority is internally atomic. Do not combine its controls bit
+    // with the earlier, independently sampled universal health bit.
+    if (auto state = panda->get_lx3_permission()) {
+      ps.setLx3PermissionVersion(state->version);
+      ps.setLx3RequestedMode(state->requested_mode);
+      ps.setLx3AcceptedMode(state->accepted_mode);
+      ps.setLx3PhysicalCounter(state->physical_counter);
+      ps.setLx3RequestGeneration(state->generation);
+      ps.setLx3RequestAgeMs(state->age_ms);
+      ps.setLx3ControlsAllowed(state->controls_allowed != 0U);
+      ps.setLx3PermissionPhase(state->phase);
+    }
+  }
 
   auto cs = std::array{ps.initCanState0(), ps.initCanState1(), ps.initCanState2()};
   for (uint32_t j = 0; j < PANDA_CAN_CNT; j++) {
@@ -267,8 +283,10 @@ void send_peripheral_state(Panda *panda, PubMaster *pm) {
   pm->send("peripheralState", msg);
 }
 
-void process_panda_state(Panda *panda, PubMaster *pm, bool engaged, bool is_onroad, bool spoofing_started) {
-  auto ignition_opt = send_panda_states(pm, panda, is_onroad, spoofing_started);
+void process_panda_state(Panda *panda, PubMaster *pm, bool engaged, bool is_onroad, bool spoofing_started,
+                         cereal::SelfdriveState::Reader ss, bool ss_fresh) {
+  bool lx3_guard = false;
+  auto ignition_opt = send_panda_states(pm, panda, is_onroad, spoofing_started, &lx3_guard);
   if (!ignition_opt) {
     LOGE("Failed to get ignition_opt");
     return;
@@ -282,7 +300,11 @@ void process_panda_state(Panda *panda, PubMaster *pm, bool engaged, bool is_onro
     }
   }
 
-  panda->send_heartbeat(engaged);
+  const bool ack_valid = ss_fresh && ss.getLx3AckValid();
+  panda->send_heartbeat(lx3_guard ? (ss_fresh && engaged) : engaged, lx3_guard,
+                        ack_valid ? ss.getLx3AckMode() : 0U,
+                        ack_valid ? ss.getLx3AckGeneration() : 0U,
+                        ack_valid ? ss.getLx3AckPhysicalCounter() : 0U);
 }
 
 void process_peripheral_state(Panda *panda, PubMaster *pm, bool no_fan_control) {
@@ -379,7 +401,11 @@ void pandad_run(Panda *panda) {
       sm.update(0);
       engaged = sm.allAliveAndValid({"selfdriveState"}) && sm["selfdriveState"].getSelfdriveState().getEnabled();
       is_onroad = params.getBool("IsOnroad");
-      process_panda_state(panda, &pm, engaged, is_onroad, spoofing_started);
+      const auto ss_event = sm["selfdriveState"];
+      const uint64_t now = nanos_since_boot();
+      const bool ss_fresh = sm.allAliveAndValid({"selfdriveState"}) && now >= ss_event.getLogMonoTime() &&
+                            now - ss_event.getLogMonoTime() <= 250000000ULL;
+      process_panda_state(panda, &pm, engaged, is_onroad, spoofing_started, ss_event.getSelfdriveState(), ss_fresh);
       panda_safety.configureSafetyMode(is_onroad);
     }
 

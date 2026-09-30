@@ -35,7 +35,7 @@ class Lx3ButtonInput:
       return self.reject('length')
     if received_ns <= 0 or not 0 <= now_ns - received_ns <= self.TIMEOUT_NS:
       return self.reject('stale')
-    if received_ns <= self.last_observed_ns:
+    if received_ns < self.last_observed_ns:
       return self.reject('reordered')
     self.last_observed_ns = received_ns
     if int.from_bytes(data[:2], 'little') != checksum(addr, None, data):
@@ -46,7 +46,10 @@ class Lx3ButtonInput:
       delta = (counter - self.counter) % 256
       if delta == 0:
         return self.reject('duplicate')  # Does not refresh the valid timestamp.
-      if delta != self.COUNTER_STEP or not self.MIN_PERIOD_NS <= elapsed <= self.TIMEOUT_NS:
+      # pandad timestamps CAN batches, not individual frames. A valid sequence
+      # can share one timestamp or be delivered less than 10ms apart. Physical
+      # minimum-period enforcement belongs to Panda's actual RX timer.
+      if delta != self.COUNTER_STEP or not 0 <= elapsed <= self.TIMEOUT_NS:
         self.counter, self.received_ns = counter, received_ns
         return self.reject('sequence')
     self.counter, self.received_ns = counter, received_ns
@@ -81,6 +84,7 @@ class Lx3ButtonIntent:
   def reset_gesture(self):
     self.main = False
     self.main_last_ns = 0
+    self.main_release_counter = 0
     self.button = None
 
   def update(self, addr, bus, data, received_ns, now_ns, checksum):
@@ -103,6 +107,7 @@ class Lx3ButtonIntent:
       if not self.main:
         events.append(('mainCruise', True))
       self.main, self.main_last_ns = True, received_ns
+      self.main_release_counter = (self.input.counter + 2) % 256
     elif self.main and raw == 0 and received_ns - self.main_last_ns >= self.MAIN_RELEASE_NS:
       self.main = False
       events.append(('mainCruise', False))
@@ -125,7 +130,7 @@ class Lx3ButtonIntent:
       self.reset_gesture()
     return ready
 
-  def from_parser(self, parser, checksum):
+  def from_parser(self, parser, checksum, with_counter=False):
     if parser.raw_overflow:
       self.input.reject('capture_overflow')
       self.reset_gesture()
@@ -134,7 +139,14 @@ class Lx3ButtonIntent:
     events = []
     while parser.raw_frames:
       address, bus, data, received_ns = parser.raw_frames.popleft()
-      events.extend(self.update(address, bus, data, received_ns, parser._last_update_nanos, checksum))
+      frame_events = self.update(address, bus, data, received_ns, parser._last_update_nanos, checksum)
+      if with_counter:
+        events.extend((name, pressed, self.main_release_counter if name == 'mainCruise' and not pressed
+                       else self.input.counter) for name, pressed in frame_events)
+      else:
+        events.extend(frame_events)
       if not self.input.ready:
-        events.clear()  # A later bad frame invalidates earlier enables in this batch.
+        # Discard every potential enable after a later invalid frame, but keep
+        # an earlier CRC-valid explicit cancel. Not-ready also faults the host.
+        events[:] = [event for event in events if event[0] == 'cancel']
     return events, self.fresh(parser._last_update_nanos)

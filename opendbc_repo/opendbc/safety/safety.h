@@ -2,6 +2,7 @@
 
 #include "safety_declarations.h"
 #include "can.h"
+#include "lx3_permission.h"
 
 // include the safety policies.
 #include "safety/safety_defaults.h"
@@ -56,6 +57,35 @@
 #define SAFETY_HYUNDAI_CANFD 28U
 #define SAFETY_RIVIAN 33U
 #define SAFETY_VOLKSWAGEN_MEB 34U
+
+// Companion/ACK only exists on the exact guarded CAN-FD policy. Classic boards
+// and every legacy safety configuration retain their existing heartbeat ABI.
+static inline bool safety_lx3_guarded(void) {
+#ifdef CANFD
+  return (current_safety_mode == SAFETY_HYUNDAI_CANFD) && hyundai_canfd_lx3_guard;
+#else
+  return false;
+#endif
+}
+
+static inline lx3_permission_t safety_lx3_permission(void) {
+  lx3_permission_t state = {0};
+#ifdef CANFD
+  if (safety_lx3_guarded()) state = lx3_permission_snapshot();
+#endif
+  return state;
+}
+
+static inline void safety_host_heartbeat(uint16_t value, uint16_t generation) {
+#ifdef CANFD
+  if (safety_lx3_guarded()) {
+    lx3_heartbeat(value, generation);
+    return;
+  }
+#endif
+  (void)generation;
+  heartbeat_engaged = (value == 1U);
+}
 
 uint32_t GET_BYTES(const CANPacket_t *msg, int start, int len) {
   uint32_t ret = 0U;
