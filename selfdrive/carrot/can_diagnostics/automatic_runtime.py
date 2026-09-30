@@ -23,7 +23,7 @@ FIELDS = {
 PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFollowGap1', 'TFollowGap2',
           'TFollowGap3', 'TFollowGap4', 'LaneChangeNeedTorque', 'AlwaysLateral', 'TurnSpeedControlMode',
           'ModelTurnSpeedFactor', 'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar',
-          'EnableSpeedTF')
+          'EnableSpeedTF', 'DisengageOnAccelerator')
 
 
 def read_param(params, key):
@@ -111,7 +111,8 @@ class AutomaticController:
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
                'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
                'opendbc_repo/opendbc/car/hyundai/radar_interface.py', 'opendbc_repo/opendbc/car/hyundai/lx3_inputs.py',
-               'selfdrive/selfdrived/lx3_engagement.py', 'opendbc_repo/opendbc/safety/safety/safety_hyundai_canfd.h')
+               'selfdrive/selfdrived/lx3_engagement.py', 'opendbc_repo/opendbc/safety/safety/safety_hyundai_canfd.h',
+               'selfdrive/car/card.py', 'selfdrive/selfdrived/selfdrived.py', 'selfdrive/controls/controlsd.py')
     metadata['source_hashes'] = {rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest()
                                for rel in sources if (repo / rel).is_file()}
     dbc = repo / 'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc'

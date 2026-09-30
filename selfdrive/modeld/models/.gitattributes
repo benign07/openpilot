@@ -1,0 +1,2 @@
+*.onnx.chunk* -text -diff
+*.pkl.chunk* -text -diff

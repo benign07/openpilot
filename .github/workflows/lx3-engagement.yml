@@ -55,6 +55,10 @@ jobs:
           msg = log.SelfdriveState.new_message(enabled=True, lx3EngagementMode=1)
           assert msg.lx3EngagementMode == 1
           PY
+      - name: Real messaging and state-machine smoke check
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run --no-sync python -m openpilot.selfdrive.selfdrived.tests.lx3_ipc_smoke
       - uses: actions/upload-artifact@v4
         if: always()
         with:
