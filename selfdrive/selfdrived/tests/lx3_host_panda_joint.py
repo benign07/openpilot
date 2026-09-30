@@ -35,6 +35,8 @@ def library(path):
     'state': ([C.POINTER(Companion)], None),
     'heartbeat': ([C.c_bool, C.c_uint8, C.c_uint16, C.c_uint8], None),
     'active_tx': ([C.c_uint8], C.c_bool),
+    'packet_tx': ([C.c_int, C.c_int, C.c_int, C.POINTER(C.c_uint8)], C.c_bool),
+    'packet_fwd': ([C.c_int, C.c_int, C.c_int, C.POINTER(C.c_uint8), C.POINTER(C.c_uint8)], C.c_int),
   }
   for name, (args, result) in declarations.items():
     fn = getattr(lib, 'lx3_test_' + name)
@@ -66,7 +68,7 @@ def run_case(lib, spec):
   if scenario == 'rapid_toggle': buttons.update({280: 128})
   if scenario == 'no_entry_before_ack': pass
   if scenario == 'no_entry_after_ack': pass
-  if scenario in ('cancel', 'brake', 'rapid_toggle', 'no_entry_before_ack', 'no_entry_after_ack'):
+  if scenario in ('cancel', 'brake', 'rapid_toggle', 'no_entry_before_ack', 'no_entry_after_ack', 'angle_delivery_revoke'):
     expected = 0
   if scenario == 'quick_denied_retry':
     # Golden delivery schedule: refusal reaches C before the second release
@@ -86,6 +88,8 @@ def run_case(lib, spec):
   last_off_host = None
   last_heartbeat = None
   first_grant = None
+  delivery_revoke_ms = None
+  host_delivery_revoke_ms = None
   def snapshot():
     value = Companion()
     lib.lx3_test_state(C.byref(value))
@@ -106,7 +110,7 @@ def run_case(lib, spec):
     p.safetyRxChecksInvalid = not lib.lx3_test_rx_valid()
     case.ctx.sm.logMonoTime['pandaStates'] = 1_000_000_000 + ms * 1_000_000
   def step_host(ms):
-    nonlocal last_off_host
+    nonlocal last_off_host, host_delivery_revoke_ms
     parser._last_update_nanos = 1_000_000_000 + ms * 1_000_000
     due = [x for x in deliveries if x[0] <= ms]
     deliveries[:] = [x for x in deliveries if x[0] > ms]
@@ -133,11 +137,14 @@ def run_case(lib, spec):
       assert not session.ack_valid
       assert case.panda.lx3PermissionPhase == 2 and case.panda.lx3ControlsAllowed
       assert session.accepted_generation == case.panda.lx3RequestGeneration
-      for mode in (1, 2) if session.mode == 2 else (1,):
+      for mode in (() if scenario == 'angle_delivery_revoke' else ((1, 2) if session.mode == 2 else (1,))):
         state = snapshot()
         allowed = lib.lx3_test_active_tx(mode)
         assert not (state.phase == 1 and allowed)
         counters['host_active_tx_allowed' if allowed else 'stale_host_tx_blocked'] += 1
+    if delivery_revoke_ms is not None and not case.ctx.enabled and host_delivery_revoke_ms is None:
+      host_delivery_revoke_ms = ms
+      counters['host_disable_after_delivery_revoke'] += 1
     if case.ctx.enabled and not case.ctx.active:
       counters['host_pre_enabled_frames'] += 1
     if barriers and not case.ctx.enabled:
@@ -170,6 +177,32 @@ def run_case(lib, spec):
         deliveries.append((delivered, bytes(data)))
       if ms % 1000 == 0:
         lib.lx3_test_tick()
+      if scenario == 'angle_delivery_revoke':
+        if 800 <= ms <= 840 and ms % 10 == 0:
+          assert snapshot().allowed and case.ctx.active
+          # Native permission came from the actual button/ACK path above.
+          # Fresh synthetic MDPS remains zero; valid USB goals ramp by2deg
+          # but no original CB slot is provided until the backlog has grown.
+          goal = bytearray(24)
+          goal[3], goal[6] = 0x20, 25
+          goal[4:6] = (20 * (1 + (ms - 800) // 10)).to_bytes(2, 'little')
+          raw = (C.c_uint8 * 24).from_buffer_copy(goal)
+          assert lib.lx3_test_packet_tx(0xCB, 0, 24, raw)
+          counters['usb_ramp_goals_accepted'] += 1
+        if ms == 850:
+          original = bytearray(24)
+          original[:2] = physical.checksum(0xCB, None, original).to_bytes(2, 'little')
+          raw = (C.c_uint8 * 24).from_buffer_copy(original)
+          output = (C.c_uint8 * 24)()
+          assert lib.lx3_test_packet_fwd(0xCB, 2, 24, raw, output) == 0
+          state = snapshot()
+          assert not state.allowed and state.phase == 0 and state.accepted == 0
+          assert ((output[3] >> 4) & 3) != 2
+          delivery_revoke_ms = ms
+          counters['actual_c_delivery_revokes'] += 1
+        if delivery_revoke_ms is not None and ms % 10 == 0:
+          assert not lib.lx3_test_active_tx(1)
+          counters['stale_tx_blocked_after_delivery_revoke'] += 1
       host_tick = ms % 10 == 0
       panda_tick = ms >= offset and (ms - offset) % 100 == 0
       if host_tick and order == 'host_first': step_host(ms)
@@ -194,6 +227,12 @@ def run_case(lib, spec):
       assert last_off_host is not None and last_heartbeat is not None
     if scenario == 'no_entry_after_ack':
       assert first_grant is not None
+    if scenario == 'angle_delivery_revoke':
+      assert first_grant is not None and delivery_revoke_ms == 850
+      assert host_delivery_revoke_ms is not None
+      # Includes 10Hz companion publication plus a possible next host tick.
+      assert 0 <= host_delivery_revoke_ms - delivery_revoke_ms <= 110, (spec, trace)
+      counters['delivery_revoke_host_delay_ms'] = host_delivery_revoke_ms - delivery_revoke_ms
   return {'spec': list(spec), 'counts': dict(counters), 'trace': trace}
 
 
@@ -211,6 +250,8 @@ def main():
   specs.extend(itertools.product((0, 10), (0,), (0, 30, 90), ('host_first', 'between', 'host_last'),
                                   ('quick_denied_retry', 'denied_then_retry', 'rapid_toggle',
                                    'no_entry_before_ack', 'no_entry_after_ack')))
+  specs.extend(itertools.product((0, 30, 90), (0, 80), (0, 30, 90),
+                                  ('host_first', 'between', 'host_last'), ('angle_delivery_revoke',)))
   results = [run_case(lib, spec) for spec in specs]
   total = Counter()
   for result in results: total.update(result['counts'])

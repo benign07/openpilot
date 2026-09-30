@@ -937,6 +937,164 @@ static void camera_suppression_permission_regressions(void) {
   puts("PASS: LX3 camera suppression requires accepted permission; OFF/pending/fault rejected and legacy preserved");
 }
 
+static void angle_buffer_delivery_rate_regressions(void) {
+  // Explicit isolated permission and fresh MDPS fixtures. Accepted USB goals
+  // are not evidence that any command has been emitted on the vehicle bus.
+  for (int sign = -1; sign <= 1; sign += 2) {
+    reset(lx3_param());
+    grant_controls();
+    CANPacket_t p = angle_command(true);
+    for (unsigned int step = 1; step <= 10U; step++) {
+      set_timer(1000000U + step * 10000U);
+      fresh_mdps(0, 0);
+      lx3_button_us = microsecond_timer_get();
+      set_angle(&p, sign * (int)step * 20);
+      assert(safety_tx_hook(&p));
+    }
+    CANPacket_t emitted = forward(stock_angle(false), 2);
+    const int emitted_angle = to_signed(GET_BYTES(&emitted, 4, 2) & 0x3FFFU, 14);
+    assert(!hyundai_canfd_actuator_active(&emitted) || ABS(emitted_angle) <= 21);
+    assert(!controls_allowed && lx3_mode == 0 && !lx3_pending && lx3_button_ready);
+    assert(!lx3_angle_active_prev && !lx3_angle_forwarded_active_prev);
+    lx3_permission_t idle = safety_lx3_permission();
+    assert(lx3_permission_valid(&idle, sizeof(idle)) && idle.phase == 0U);
+    assert(!safety_tx_hook(&p));  // Cannot silently resume from another USB goal.
+  }
+  puts("PASS: buffered angle rate budget follows emitted commands, not unsent USB goals");
+}
+
+static void angle_delivery_continuity_regressions(void) {
+  for (int sign = -1; sign <= 1; sign += 2) {
+    // Two queued, still-fresh goals can be delivered one tick apart. The EPS
+    // measurement may lag: continuous output uses the previous inserted goal.
+    reset(lx3_param());
+    grant_controls();
+    CANPacket_t p = angle_command(true);
+    set_timer(1010000U);
+    set_angle(&p, sign * 20);
+    assert(safety_tx_hook(&p));
+    set_timer(1020000U);
+    set_angle(&p, sign * 40);
+    assert(safety_tx_hook(&p));
+    CANPacket_t out = forward(stock_angle(false), 2);
+    assert(hyundai_canfd_actuator_active(&out) && lx3_angle_forwarded == sign * 20);
+    set_timer(1030000U);
+    out = forward(stock_angle(false), 2);
+    assert(hyundai_canfd_actuator_active(&out) && lx3_angle_forwarded == sign * 40);
+    assert(controls_allowed);
+
+    // A queue overflow loses the first step. Do not enlarge the output budget
+    // or silently clamp the remaining goal: revoke the accepted session.
+    reset(lx3_param());
+    grant_controls();
+    p = angle_command(true);
+    for (unsigned int step = 1; step <= 3U; step++) {
+      set_timer(1000000U + step * 10000U);
+      set_angle(&p, sign * (int)step * 20);
+      assert(safety_tx_hook(&p));
+    }
+    out = forward(stock_angle(false), 2);
+    assert(!hyundai_canfd_actuator_active(&out));
+    assert(!controls_allowed && lx3_mode == 0 && lx3_button_ready);
+
+    // The same timestamp cannot buy a second output budget from the FIFO.
+    reset(lx3_param());
+    grant_controls();
+    p = angle_command(true);
+    set_timer(1010000U);
+    set_angle(&p, sign * 20);
+    assert(safety_tx_hook(&p));
+    set_timer(1020000U);
+    set_angle(&p, sign * 40);
+    assert(safety_tx_hook(&p));
+    out = forward(stock_angle(false), 2);
+    assert(hyundai_canfd_actuator_active(&out));
+    out = forward(stock_angle(false), 2);
+    assert(!hyundai_canfd_actuator_active(&out) && !controls_allowed);
+
+    // OFF is a real stream boundary. The next first active target is measured
+    // angle +/- 2 degrees, even if the previous inserted goal was near zero.
+    reset(lx3_param());
+    grant_controls();
+    p = angle_command(true);
+    set_angle(&p, sign * 20);
+    assert(safety_tx_hook(&p));
+    out = forward(stock_angle(false), 2);
+    assert(hyundai_canfd_actuator_active(&out));
+    p = angle_command(false);
+    assert(safety_tx_hook(&p));
+    out = forward(stock_angle(true), 2);
+    assert(!hyundai_canfd_actuator_active(&out) && !lx3_angle_forwarded_active_prev);
+    fresh_mdps(sign * 100, 0);
+    p = angle_command(true);
+    set_angle(&p, sign * 120);
+    assert(safety_tx_hook(&p));
+    out = forward(stock_angle(false), 2);
+    assert(hyundai_canfd_actuator_active(&out) && lx3_angle_forwarded == sign * 120);
+
+    // Original fallback, malformed originals, or a >=30ms output gap each
+    // break continuity. Replaying an old goal must then recheck measured EPS.
+    for (unsigned int boundary = 0; boundary < 4U; boundary++) {
+      reset(lx3_param());
+      grant_controls();
+      p = angle_command(true);
+      for (unsigned int step = 1; step <= 5U; step++) {
+        set_timer(1000000U + step * 10000U);
+        fresh_mdps(0, 0);
+        set_angle(&p, sign * (int)step * 20);
+        assert(safety_tx_hook(&p));
+        out = forward(stock_angle(false), 2);
+        assert(hyundai_canfd_actuator_active(&out));
+      }
+      if (boundary == 0U) {
+        // Two reuses retain the acceptance deadline. The third uses OEM data.
+        for (unsigned int reuse = 1; reuse <= 3U; reuse++) {
+          set_timer(1050000U + reuse * 1000U);
+          out = forward(stock_angle(false), 2);
+          assert(hyundai_canfd_actuator_active(&out) == (reuse <= 2U));
+        }
+        assert(!lx3_angle_forwarded_active_prev);
+      } else if (boundary <= 2U) {
+        set_timer(1051000U);
+        CANPacket_t malformed = stock_angle(false);
+        if (boundary == 1U) malformed.data[0] ^= 1U;
+        else malformed.data_len_code = 13U;
+        const CANPacket_t saved = malformed;
+        assert(safety_fwd_hook(&malformed) == 0);
+        assert(memcmp(&saved, &malformed, sizeof(saved)) == 0);
+        assert(!lx3_angle_forwarded_active_prev);
+      }
+      set_timer(boundary == 3U ? 1080000U : 1060000U);
+      fresh_mdps(0, 0);
+      assert(safety_tx_hook(&p));  // USB reference has not moved: still accepted.
+      out = forward(stock_angle(false), 2);
+      assert(!hyundai_canfd_actuator_active(&out));
+      assert(!controls_allowed && lx3_mode == 0 && lx3_button_ready);
+      assert(canfd_bfwd_find(0xCB, 0)->count == 0U);
+      assert(!safety_tx_hook(&p));
+    }
+
+    // Unsigned time subtraction preserves the same envelope across MCU wrap.
+    reset(lx3_param());
+    const uint32_t start = UINT32_MAX - 5000U;
+    set_timer(start);
+    fresh_mdps(0, 0);
+    grant_controls();
+    p = angle_command(true);
+    set_angle(&p, sign * 20);
+    assert(safety_tx_hook(&p));
+    out = forward(stock_angle(false), 2);
+    assert(hyundai_canfd_actuator_active(&out));
+    set_timer(start + 10000U);
+    fresh_mdps(0, 0);
+    set_angle(&p, sign * 40);
+    assert(safety_tx_hook(&p));
+    out = forward(stock_angle(false), 2);
+    assert(hyundai_canfd_actuator_active(&out) && controls_allowed);
+  }
+  puts("PASS: output FIFO, overflow, same-tick budget, OFF/OEM/gap boundaries and timer wrap");
+}
+
 int main(int argc, char **argv) {
   if (argc == 2 && strcmp(argv[1], "--release-audit") == 0) {
     release_audit(lx3_param());
@@ -954,5 +1112,7 @@ int main(int argc, char **argv) {
   transaction_regressions();
   snapshot_state_regressions();
   camera_suppression_permission_regressions();
+  angle_buffer_delivery_rate_regressions();
+  angle_delivery_continuity_regressions();
   return 0;
 }
