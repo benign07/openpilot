@@ -81,7 +81,7 @@ qualification items; this is not an adversarial replay-proof protocol claim.
 
 ## Mutual review decisions
 
-Nine same-topic rounds used the actual installed Claude Code session. Accepted:
+Ten same-topic rounds used the actual installed Claude Code session. Accepted:
 tag-aware heartbeat decoding, rechecking NO_ENTRY/SOFT_DISABLE during preEnabled,
 atomic accepted-mode telemetry, and stable main gesture identity. Rejected:
 8-bit-only nonce, unconditional pending cancellation on disabled heartbeat, and
@@ -97,6 +97,9 @@ Round9 corrected a duplicate denied gesture overwriting its OFF ACK and the
 observer's lost publication gap when its chunk was full. Same-counter replay
 is denied; normal IPC retry uses a different physical counter. Rotated chunks
 now include permission baselines and per-service omitted-observation attempts.
+Round10 corrected duplicated LX3 cluster producers and OEM warning masking.
+Actual DBC packing also exposed the missing0x161 checksum/counter definitions;
+see [cluster transport review](LX3_CLUSTER_TRANSPORT_REVIEW_20261001.md).
 A condition
 can change immediately after any confirmation; tests must measure bounded
 revocation and absence of new host active commands, not assert zero latency.
@@ -132,7 +135,7 @@ guarded protocol data is unknown, not permission inferred from universal health.
 
 ## Verification at this checkpoint
 
-- 186 Python regressions pass, including actual-parser batching/counter and
+- 192 Python regressions pass, including actual-parser batching/counter and
  production host adapter/StateMachine tests. New cases cover delayed refusals,
  499/500ms request boundaries, generation wrap, unrelated PRE_ENABLE, retained
  disable alerts, one update per frame, and bounded transition recording.
@@ -154,10 +157,10 @@ guarded protocol data is unknown, not permission inferred from universal health.
 - A strict/UBSan STM32F4-conditional desktop compile/run confirms the classic
  8byte CAN packet, unchanged health16/58byte and legacy heartbeat behavior.
  It is a protocol compatibility test, not an STM32F4 firmware build.
-- Host integration commit91054cf1 has all5 CI jobs successful (run36746545417),
- including full Linux runtime/import/production publisher IPC and H7. Round9
- follow-up changes including real AlertManager smoke require their resulting
- commit's full CI before being recorded as build-verified. Neither
+- Host follow-up commita64e454d has all5 CI jobs successful (run36748114010),
+ including full Linux runtime/import/production publisher IPC/AlertManager and
+ H7. Round10 cluster/DBC/parser changes and actual module blinker tests require
+ their resulting commit's full CI before being recorded as build-verified. Neither
  build establishes EPS reception, real steering, LFA icon or warning removal.
 
 ## Required next work
@@ -168,3 +171,12 @@ guarded protocol data is unknown, not permission inferred from universal health.
    RX separately from synthetic host acknowledgements; old logs have no such ACK.
 3. Keep the original-camera fault gate until bit meanings/ownership are verified.
    The historical LSS/DAS onset association is not root-cause proof.
+
+The updated actual-C archive replay covers78 unique saved streams under both
+accelerator policies (156 cases), without any synthesized ACK. All observed
+physical-button rows retain mode0/no accepted permission;684/937 pending rows
+are observed for alternativeExperience0/1. Each policy rejects all121,620 old
+active0xCB requests. Historical inactive/display TX may still be accepted.
+Recorded batch timestamps do not validate hardware RX timing; original logs do
+not contain the new protocol, so this is a no-self-grant replay, not evidence
+that the new handshake was used successfully on a vehicle.

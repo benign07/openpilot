@@ -59,6 +59,10 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: uv run --no-sync python -m openpilot.selfdrive.selfdrived.tests.lx3_ipc_smoke
+      - name: Manual blinker handoff using actual control modules
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run --no-sync python -m unittest openpilot.selfdrive.carrot.tests.test_manual_blinker_suspend -v
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -177,6 +181,7 @@ jobs:
       - run: python -m pip install aiohttp cryptography pycapnp
       - run: python -m unittest discover -s selfdrive/selfdrived/tests -p test_lx3_engagement.py -v
       - run: python -m unittest selfdrive.selfdrived.tests.test_lx3_inputs -v
+      - run: python -m unittest selfdrive.selfdrived.tests.test_lx3_cluster_transport -v
       - run: >-
           python -m unittest selfdrive.carrot.tests.test_hud_updater
           selfdrive.carrot.tests.test_live_driving_mode

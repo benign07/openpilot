@@ -691,6 +691,10 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control,
       _apply_radar_blink(values, blink_pairs, frame, t=blink_t)
 
 def _make_ccnc_cluster_msg(packer, name, bus, values, lx3_hev, rx_counter=None):
+  if lx3_hev and name in ('ADRV_0x161', 'CCNC_0x162') and rx_counter is not None:
+    # Direct cluster TX replaces this camera publication, rather than adding a
+    # new ECU counter stream. Do not let CANPacker invent another increment.
+    values = {**values, 'COUNTER': rx_counter}
   msg = packer.make_can_msg(name, bus, values, rx_counter=rx_counter)
   address, data, bus = msg
   if lx3_hev and address in (0x161, 0x162) and len(data) == 32:
@@ -797,31 +801,23 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         values["HDA_ICON"] = 5 if hdp_active else 2 if cruise_enabled else 1 if main_enabled else 0
         values["LFA_ICON"] = 5 if hdp_active else 2 if lat_active else 1 if lat_enabled else 0
         values["LKA_ICON"] = 4 if lat_active else 3 if lat_enabled else 0
-        values["FCA_ALT_ICON"] = 0
-
-        if values["ALERTS_2"] in [1, 2, 5, 6, 10, 21, 22]:
-          values["ALERTS_2"] = 0
-          values["DAW_ICON"] = 0
-
-        if values["ALERTS_1"] == 0: # alerts가 있으면 사운드도 같이 나옴
-          values["SOUNDS_1"] = 0
-          values["SOUNDS_2"] = 0
-          values["SOUNDS_4"] = 0
-
-        if values["ALERTS_3"] in [3, 4, 11, 12, 13, 14, 17, 19, 20, 26, 27, 28, 7, 8, 9, 10]: # hide gap distance msg.(11,12,13,14), lanechange(19,20,27, 28)
-          values["ALERTS_3"] = 0
-          values["SOUNDS_3"] = 0
-
-        if values["ALERTS_5"] in [1, 2, 3, 4, 5]:
-          values["ALERTS_5"] = 0
-
-        if values["ALERTS_5"] in [11] and CS.softHoldActive == 0:
-          values["ALERTS_5"] = 0
-
-        # curvature 표시(0x161쪽 기존 로직 유지)
-        _suppress_trailer_mode_warning(values, CS)
-
         if not lx3_hev:
+          # These platform-specific warning meanings are unqualified on LX3.
+          # Keep its original warnings, sounds and FCA/DAW status visible.
+          values["FCA_ALT_ICON"] = 0
+          if values["ALERTS_2"] in [1, 2, 5, 6, 10, 21, 22]:
+            values["ALERTS_2"] = 0
+            values["DAW_ICON"] = 0
+          if values["ALERTS_1"] == 0:
+            values["SOUNDS_1"] = 0
+            values["SOUNDS_2"] = 0
+            values["SOUNDS_4"] = 0
+          if values["ALERTS_3"] in [3, 4, 11, 12, 13, 14, 17, 19, 20, 26, 27, 28, 7, 8, 9, 10]:
+            values["ALERTS_3"] = 0
+            values["SOUNDS_3"] = 0
+          if values["ALERTS_5"] in [1, 2, 3, 4, 5] or (values["ALERTS_5"] == 11 and CS.softHoldActive == 0):
+            values["ALERTS_5"] = 0
+          _suppress_trailer_mode_warning(values, CS)
           curvature = round(CS.out.steeringAngleDeg / 3)
           values["LANELINE_CURVATURE"] = (min(abs(curvature), 15) + (-1 if curvature < 0 else 0)) if lat_active else 0
           values["LANELINE_CURVATURE_DIRECTION"] = 1 if curvature < 0 and lat_active else 0

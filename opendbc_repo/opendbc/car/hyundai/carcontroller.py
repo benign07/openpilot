@@ -436,8 +436,9 @@ class CarController(CarControllerBase):
       # LFA and HDA icons
       if self.frame % 5 == 0 and camera_scc:
         can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
-        if self.camera_scc_params == 3:
-          # v25: LX3_HEV stock LFA suppress via ADRV_0x161 LANELINE/CENTERLINE=0
+        if self.camera_scc_params == 3 and self.CP.carFingerprint != 'HYUNDAI_PALISADE_LX3_HEV':
+          # LX3's complete CCNC display below owns0x161; avoid a second frame
+          # with different fields, warning masking and an unrefreshed CRC.
           can_sends.extend(hyundaicanfd.create_lfa_icon_non_camera_scc(self.packer, CS, self.CAN, CC))  # v25: carrot-wip equivalent (uses correct adrv_0x161 attr)
 
       # blinkers
