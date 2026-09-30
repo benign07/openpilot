@@ -261,6 +261,13 @@ bool safety_tx_hook(CANPacket_t *to_send) {
     allowed = true;
   }
 
+  // CAN-FD TX hooks enqueue replacement frames and can change authorization.
+  // Reject before those side effects, not only before the direct-send result.
+  // Keep other safety policies' hook ordering unchanged pending their audit.
+  if ((current_safety_mode == SAFETY_HYUNDAI_CANFD) && (!allowed || relay_malfunction)) {
+    return false;
+  }
+
   const bool safety_allowed = current_hooks->tx(to_send);
 
   /*

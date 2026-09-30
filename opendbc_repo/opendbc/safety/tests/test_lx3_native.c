@@ -42,6 +42,44 @@ static CANPacket_t accel_command(void) {
   return p;
 }
 
+static void assert_rejected_without_side_effects(CANPacket_t *p) {
+  assert(!safety_tx_hook(p));
+  assert(!controls_allowed);
+  assert(!safety_tx_buffered_for_fwd);
+  for (int i = 0; canfd_bfwd[i].addr > 0; i++) {
+    assert(canfd_bfwd[i].count == 0U);
+    assert(!canfd_bfwd[i].has_last_pkt);
+  }
+}
+
+static void rejected_tx_regressions(void) {
+  for (uint16_t param = 0; param < 256U; param += 4U) {
+    reset(param);
+    int count = current_safety_config.tx_msgs_len;
+    for (int i = 0; i < count; i++) {
+      reset(param);
+      const CanMsg msg = current_safety_config.tx_msgs[i];
+      unsigned int dlc = 0;
+      while (dlc < 16U && dlc_to_len[dlc] != msg.len) dlc++;
+      assert(dlc < 16U);
+      CANPacket_t p = packet(msg.addr, msg.bus, 0);
+      assert_rejected_without_side_effects(&p);  // Zero DLC, payload not readable.
+      p.data_len_code = dlc;
+      p.bus = 3;
+      assert_rejected_without_side_effects(&p);
+      p.bus = msg.bus;
+      set_relay_malfunction(true);
+      assert_rejected_without_side_effects(&p);
+    }
+  }
+  // Also exercise meaningful ACCMode data, not only zero-filled invalid frames.
+  reset(190);
+  CANPacket_t p = accel_command();
+  p.bus = 3;
+  assert_rejected_without_side_effects(&p);
+  puts("PASS: rejected CAN-FD TX has no buffer or authorization side effects across 64 configurations");
+}
+
 static void compatibility_checks(void) {
   // HDA1/HDA2, stock/OP longitudinal, camera/radar, alternate buttons/steering.
   // Validates configuration selection and transparent unknown-frame forwarding,
@@ -159,5 +197,6 @@ int main(int argc, char **argv) {
     return blockers == 0U ? 0 : 1;
   }
   compatibility_checks();
+  rejected_tx_regressions();
   return 0;
 }
