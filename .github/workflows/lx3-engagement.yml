@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build actual Panda safety code with undefined-behavior checks
         run: >-
-          gcc -std=gnu11 -Wall -Werror -Wno-pointer-to-int-cast
+          gcc -std=gnu11 -Wall -Wextra -Wstrict-prototypes -Werror -Wno-pointer-to-int-cast
           -fsanitize=undefined -fno-sanitize-recover=undefined -g
           -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety
           -Iopendbc_repo/opendbc/safety/tests/libsafety

@@ -311,35 +311,35 @@ typedef struct {
 
 // forwarding block��: bus 0,2�� ���
 CanfdTxState canfd_tx_states[] = {
-  {0x50,  0, 100, 0U, 0U}, // 80:  LKAS
-  {0x51,  0, 100, 0U, 0U}, // 81:  ADRV_0x51
-  {0x110, 0, 100, 0U, 0U}, // 272: LKAS_ALT
-  {0x12A, 0, 100, 0U, 0U}, // 298: LFA
-  {0x160, 0, 50,  0U, 0U}, // 352: ADRV_0x160
-  {0x161, 0, 20,  0U, 0U}, // 353: ADRV_0x161
-  {0x162, 0, 20,  0U, 0U}, // 354: CCNC_0x162
-  {0x1A0, 0, 50,  0U, 0U}, // 416: SCC_CONTROL
-  {0x1DA, 0, 1,   0U, 0U}, // 474: ADRV_0x1da
-  {0x1E0, 0, 20,  0U, 0U}, // 480: LFAHDA_CLUSTER
-  {0x1EA, 0, 20,  0U, 0U}, // 490: ADRV_0x1ea
-  {0x200, 0, 20,  0U, 0U}, // 512: ADRV_0x200
-  {0x2A4, 0, 20,  0U, 0U}, // 676: CAM_0x2a4
-  {0x345, 0, 5,   0U, 0U}, // 837: ADRV_0x345
-  {0x362, 0, 10,  0U, 0U}, // 866: CAM_0x362
-  {0x0CB, 0, 100, 0U, 0U}, // 203: LFA_ALT
+  {0x50,  0, 100, 0U, 0U, false}, // 80:  LKAS
+  {0x51,  0, 100, 0U, 0U, false}, // 81:  ADRV_0x51
+  {0x110, 0, 100, 0U, 0U, false}, // 272: LKAS_ALT
+  {0x12A, 0, 100, 0U, 0U, false}, // 298: LFA
+  {0x160, 0, 50,  0U, 0U, false}, // 352: ADRV_0x160
+  {0x161, 0, 20,  0U, 0U, false}, // 353: ADRV_0x161
+  {0x162, 0, 20,  0U, 0U, false}, // 354: CCNC_0x162
+  {0x1A0, 0, 50,  0U, 0U, false}, // 416: SCC_CONTROL
+  {0x1DA, 0, 1,   0U, 0U, false}, // 474: ADRV_0x1da
+  {0x1E0, 0, 20,  0U, 0U, false}, // 480: LFAHDA_CLUSTER
+  {0x1EA, 0, 20,  0U, 0U, false}, // 490: ADRV_0x1ea
+  {0x200, 0, 20,  0U, 0U, false}, // 512: ADRV_0x200
+  {0x2A4, 0, 20,  0U, 0U, false}, // 676: CAM_0x2a4
+  {0x345, 0, 5,   0U, 0U, false}, // 837: ADRV_0x345
+  {0x362, 0, 10,  0U, 0U, false}, // 866: CAM_0x362
+  {0x0CB, 0, 100, 0U, 0U, false}, // 203: LFA_ALT
 
-  {0x175, 2, 50,  0U, 0U}, // 373: TCS
-  {0x1AA, 2, 50,  0U, 0U}, // 426: CRUISE_ALT_BUTTONS
-  {0x1CF, 2, 50,  0U, 0U}, // 463: CRUISE_BUTTON
-  {0x1FA, 2, 10,  0U, 0U}, // 506: CLUSTER_SPEED_LIMIT
-  {0x0EA, 2, 100, 0U, 0U}, // 234: MDPS
-  {0x2AF, 2, 10,  0U, 0U}, // 687: STEER_TOUCH_2AF
-  {0x4A3, 2, 5,   0U, 0U}, // 1187: HDA_INFO_4A3
-  {0x4B4, 2, 10,  0U, 0U}, // 1204: NEW_MSG_4B4
-  {0x4BE, 2, 10,  0U, 0U}, // 1214: NEW_MSG_4BE
-  {0x4B9, 2, 10,  0U, 0U}, // 1209: NEW_MSG_4B9
+  {0x175, 2, 50,  0U, 0U, false}, // 373: TCS
+  {0x1AA, 2, 50,  0U, 0U, false}, // 426: CRUISE_ALT_BUTTONS
+  {0x1CF, 2, 50,  0U, 0U, false}, // 463: CRUISE_BUTTON
+  {0x1FA, 2, 10,  0U, 0U, false}, // 506: CLUSTER_SPEED_LIMIT
+  {0x0EA, 2, 100, 0U, 0U, false}, // 234: MDPS
+  {0x2AF, 2, 10,  0U, 0U, false}, // 687: STEER_TOUCH_2AF
+  {0x4A3, 2, 5,   0U, 0U, false}, // 1187: HDA_INFO_4A3
+  {0x4B4, 2, 10,  0U, 0U, false}, // 1204: NEW_MSG_4B4
+  {0x4BE, 2, 10,  0U, 0U, false}, // 1214: NEW_MSG_4BE
+  {0x4B9, 2, 10,  0U, 0U, false}, // 1209: NEW_MSG_4B9
 
-  {0, 0, 0, 0U, 0U},
+  {0, 0, 0, 0U, 0U, false},
 };
 
 static CanfdTxState* find_canfd_tx_state(int bus, int addr) {
