@@ -74,14 +74,15 @@ ENV = dict(Events=Events, ET=ET, State=State, DT_CTRL=.01, SOFT_DISABLE_TIME=3,
            ACTIVE_STATES=(State.enabled, State.softDisabling, State.overriding),
            ENABLED_STATES=(State.preEnabled, State.enabled, State.softDisabling, State.overriding),
            EventName=NS(**{name: name for name in EVENT_TYPES}), EngagementMode=Mode,
-           time=NS(monotonic=lambda: 0.0),
-           lx3_pandas_ready=pandas_ready, car=NS(CarParams=NS(SteerControlType=NS(angle='angle'))))
+           time=NS(monotonic=lambda: 0.0, monotonic_ns=lambda: 0),
+           lx3_pandas_ready=pandas_ready, lx3_permission_sample=MODULE['lx3_permission_sample'],
+           lx3_permission_matches=MODULE['lx3_permission_matches'], car=NS(CarParams=NS(SteerControlType=NS(angle='angle'))))
 load_definitions(ROOT / 'selfdrive/selfdrived/state.py', ENV, {'StateMachine'})
 load_definitions(ROOT / 'selfdrive/selfdrived/selfdrived.py', ENV, {'update_lx3_state'})
 
 
-def button(name, pressed=False):
-  return NS(type=name, pressed=pressed)
+def button(name, pressed=False, counter=40, valid=True):
+  return NS(type=name, pressed=pressed, lx3PhysicalCounter=counter, lx3PhysicalValid=valid)
 
 
 class SubMaster(dict):
@@ -92,187 +93,420 @@ class SubMaster(dict):
 
 
 class TestLx3Session(unittest.TestCase):
+  """Production host adapter frames, with an explicit companion message facade.
+
+  Acceptance publication below is a transport fixture, not the Panda algorithm.
+  Actual C/host joint scheduling is verified separately.
+  """
   def setUp(self):
-    self.now = 0.0
-    ENV['time'] = NS(monotonic=lambda: self.now)
+    self.now = 1.0
+    ENV['time'] = NS(monotonic=lambda: self.now, monotonic_ns=lambda: int(self.now * 1e9))
     self.panda = NS(safetyModel='hyundaiCanfd', safetyParam=LX3_SAFETY_PARAM, alternativeExperience=0,
-                    controlsAllowed=True, safetyRxChecksInvalid=False, faults=[])
+                    controlsAllowed=False, safetyRxChecksInvalid=False, faults=[],
+                    lx3PermissionVersion=1, lx3RequestedMode=0, lx3AcceptedMode=0, lx3PhysicalCounter=0,
+                    lx3RequestGeneration=1, lx3RequestAgeMs=0, lx3ControlsAllowed=False, lx3PermissionPhase=0)
     self.ctx = NS(lx3_engagement=Lx3Engagement(), car_state_fresh=True,
                   CP=NS(openpilotLongitudinalControl=True, steerControlType='angle', alternativeExperience=0,
                         safetyConfigs=[NS(safetyModel='hyundaiCanfd', safetyParam=LX3_SAFETY_PARAM)]),
-                  sm=SubMaster(pandaStates=[self.panda]), state_machine=ENV['StateMachine'](),
-                  enabled=False, active=False)
+                  sm=SubMaster(pandaStates=[self.panda]), state_machine=ENV['StateMachine'](), enabled=False, active=False)
+    self.ctx.sm.logMonoTime = {'pandaStates': 1_000_000_000}
     self.cs = NS(canValid=True, steerFaultTemporary=False, steerFaultPermanent=False, buttonEvents=[])
+    self.refresh_panda = True
 
   def step(self, *buttons, events=()):
     self.ctx.events = Events(*events)
     self.cs.buttonEvents = list(buttons)
+    if self.refresh_panda:
+      self.ctx.sm.logMonoTime['pandaStates'] = int(self.now * 1e9)
     with contextlib.redirect_stdout(io.StringIO()):
       ENV['update_lx3_state'](self.ctx, self.cs)
     return permissions(self.ctx.lx3_engagement.mode, self.ctx.enabled, self.ctx.active, True, True, True)
 
-  def test_lfa_uses_normal_enabled_state_without_longitudinal(self):
-    self.assertEqual(self.step(button('lfaButton')), (True, False))
-    self.assertEqual(self.ctx.state_machine.state, State.enabled)
-    self.assertTrue(self.ctx.enabled)
+  def pending(self, mode=Mode.LATERAL, counter=40):
+    self.panda.lx3RequestGeneration = self.panda.lx3RequestGeneration % 65535 + 1
+    self.panda.lx3PermissionPhase = 1
+    self.panda.lx3RequestedMode = int(mode)
+    self.panda.lx3AcceptedMode = 0
+    self.panda.lx3PhysicalCounter = counter
+    self.panda.lx3ControlsAllowed = self.panda.controlsAllowed = False
+    self.panda.lx3RequestAgeMs = 0
 
-  def test_idle_without_panda_permission_is_not_a_controls_mismatch(self):
-    self.panda.controlsAllowed = False
+  def accept(self):
+    self.panda.lx3PermissionPhase = 2
+    self.panda.lx3AcceptedMode = self.panda.lx3RequestedMode
+    self.panda.lx3ControlsAllowed = self.panda.controlsAllowed = True
+
+  def engage(self, name='lfaButton', mode=None, events=(), counter=40):
+    mode = mode or (Mode.LATERAL if name == 'lfaButton' else Mode.COMBINED)
+    self.pending(mode, counter)
+    first = self.step(button(name, counter=counter), events=events)
+    self.assertEqual(first, (False, False))
+    intent = self.ctx.lx3_engagement
+    if intent.pending is not None and not self.ctx.enabled and not events:
+      # Mode upgrades publish one normal disable frame before fresh PRE_ENABLE.
+      self.assertIn(ET.USER_DISABLE, self.ctx.state_machine.current_alert_types)
+      self.step()
+    if intent.ack_valid and intent.ack_mode == mode:
+      self.assertTrue(self.ctx.enabled)
+      self.assertEqual(self.ctx.state_machine.state, State.preEnabled)
+      self.assertEqual(intent.ack_generation, self.panda.lx3RequestGeneration)
+      self.assertEqual(intent.ack_counter, counter)
+      self.accept()
+      return self.step(events=events)
+    return first
+
+  def test_lfa_uses_normal_pre_enabled_then_enabled_without_acc(self):
+    self.assertEqual(self.engage(), (True, False))
+    self.assertEqual(self.ctx.state_machine.state, State.enabled)
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.assertEqual(self.ctx.lx3_engagement.ack_generation, 0)
+
+  def test_idle_without_permission_is_not_mismatch(self):
     self.assertEqual(self.step(), (False, False))
     self.assertNotIn('controlsMismatch', self.ctx.events.events)
 
-  def test_mismatched_panda_is_still_reported_on_requested_entry(self):
+  def test_wrong_firmware_is_reported_on_request(self):
     self.panda.safetyParam = 190
-    self.assertEqual(self.step(button('lfaButton')), (False, False))
+    self.assertEqual(self.engage(), (False, False))
     self.assertIn('controlsMismatch', self.ctx.events.events)
 
-  def test_permission_revoked_in_active_session_is_still_reported(self):
-    self.step(button('lfaButton'))
+  def test_legacy_default_companion_cannot_grant(self):
+    self.panda.controlsAllowed = True
+    self.panda.lx3PermissionVersion = 0
+    self.assertEqual(self.engage(), (False, False))
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+
+  def test_permission_revoked_in_active_session_is_reported(self):
+    self.engage()
+    self.panda.lx3ControlsAllowed = False
+    self.assertEqual(self.step(), (False, False))
+    self.assertIn('controlsMismatch', self.ctx.events.events)
+
+  def test_companion_is_authority_not_independently_sampled_health(self):
+    self.engage()
     self.panda.controlsAllowed = False
+    self.assertEqual(self.step(), (True, False))
+
+  def test_scc_enables_both_after_its_ack(self):
+    self.assertEqual(self.engage('mainCruise'), (True, True))
+
+  def test_scc_upgrade_suspends_then_checks_new_combined_ack(self):
+    self.engage()
+    self.assertEqual(self.engage('mainCruise'), (True, True))
+
+  def test_upgrade_has_one_normal_disable_transition_and_alert(self):
+    self.engage()
+    machine = self.ctx.state_machine
+    original = machine.update
+    calls = []
+    def update(events):
+      calls.append(list(events.events))
+      return original(events)
+    machine.update = update
+    self.pending(Mode.COMBINED, 42)
+    self.assertEqual(self.step(button('mainCruise', counter=42)), (False, False))
+    self.assertEqual(len(calls), 1)
+    self.assertEqual(machine.state, State.disabled)
+    self.assertIn(ET.USER_DISABLE, machine.current_alert_types)
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.assertEqual(self.step(), (False, False))
+    self.assertEqual(machine.state, State.preEnabled)
+
+  def test_matching_recent_physical_off_clears_unbound_request(self):
+    self.engage(events=('seatbeltNotLatched',))
+    self.panda.lx3RequestGeneration += 1
+    self.panda.lx3PhysicalCounter = 42
+    self.panda.lx3PermissionPhase = 0
+    self.panda.lx3RequestedMode = self.panda.lx3AcceptedMode = 0
+    self.assertEqual(self.step(button('lfaButton', counter=42)), (False, False))
+    self.assertIsNone(self.ctx.lx3_engagement.pending)
+
+  def test_res_set_in_combined_does_not_restart_transaction(self):
+    self.engage('mainCruise')
+    generation = self.ctx.lx3_engagement.accepted_generation
+    for name in ('accelCruise', 'decelCruise'):
+      self.assertEqual(self.step(button(name)), (True, True))
+      self.assertEqual(self.ctx.lx3_engagement.accepted_generation, generation)
+      self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+
+  def test_main_and_lfa_off_disable(self):
+    for start, stop in (('mainCruise', 'mainCruise'), ('mainCruise', 'lfaButton'), ('lfaButton', 'lfaButton')):
+      self.setUp()
+      self.engage(start)
+      self.assertEqual(self.step(button(stop)), (False, False))
+
+  def test_cancel_dominates_all_enables_even_without_metadata(self):
+    self.pending(Mode.COMBINED)
+    self.assertEqual(self.step(button('lfaButton'), button('cancel', True, valid=False), button('mainCruise')), (False, False))
+    self.assertIsNone(self.ctx.lx3_engagement.pending)
+
+  def test_press_and_hold_and_old_metadata_cannot_request(self):
+    for b in (button('lfaButton', True), button('lfaButton', valid=False), NS(type='mainCruise', pressed=False)):
+      self.assertEqual(self.step(b), (False, False))
+      self.assertIsNone(self.ctx.lx3_engagement.pending)
+
+  def test_no_entry_is_rejected_and_not_latched(self):
+    self.assertEqual(self.engage(events=('seatbeltNotLatched',)), (False, False))
+    self.assertEqual(self.ctx.lx3_engagement.ack_mode, Mode.OFF)
+    self.assertTrue(self.ctx.lx3_engagement.ack_valid)
+    self.assertEqual(self.step(), (False, False))
+    self.assertEqual(self.engage(counter=42), (True, False))
+
+  def test_denial_before_companion_rejects_late_pending_without_enable(self):
+    self.assertEqual(self.step(button('lfaButton'), events=('tooDistracted',)), (False, False))
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.assertIsNone(self.ctx.lx3_engagement.pending)
+    self.now += .1
+    self.pending()
+    self.assertEqual(self.step(), (False, False))
+    self.assertTrue(self.ctx.lx3_engagement.ack_valid)
+    self.assertEqual(self.ctx.lx3_engagement.ack_mode, Mode.OFF)
+    self.assertEqual(self.ctx.lx3_engagement.ack_generation, self.panda.lx3RequestGeneration)
+    self.assertFalse(self.ctx.enabled)
+
+  def test_unbound_rejection_does_not_match_other_or_expired_physical_request(self):
+    for delay, counter in ((.1, 42), (.501, 40)):
+      self.setUp()
+      self.step(button('lfaButton'), events=('tooDistracted',))
+      self.now += delay
+      self.pending(counter=counter)
+      self.step()
+      self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+      self.assertFalse(self.ctx.enabled)
+
+  def test_unbound_refusal_respects_panda_499_500ms_boundary(self):
+    for age, expected in ((499, True), (500, False)):
+      self.setUp()
+      self.step(button('lfaButton'), events=('tooDistracted',))
+      self.now += .1
+      self.pending()
+      self.panda.lx3RequestAgeMs = age
+      self.step()
+      self.assertEqual(self.ctx.lx3_engagement.ack_valid, expected)
+      self.assertFalse(self.ctx.enabled)
+      self.assertEqual(self.ctx.lx3_engagement.ack_mode, Mode.OFF)
+
+  def test_generation_wrap_cannot_accept_bound_old_request(self):
+    self.panda.lx3RequestGeneration = 65534
+    self.pending()
+    self.step(button('lfaButton'))
+    self.assertEqual(self.ctx.lx3_engagement.ack_generation, 65535)
+    self.accept()
+    self.panda.lx3RequestGeneration = 1
     self.assertEqual(self.step(), (False, False))
     self.assertIn('controlsMismatch', self.ctx.events.events)
+    self.assertFalse(self.ctx.enabled)
 
-  def test_scc_from_off_enables_both(self):
-    self.assertEqual(self.step(button('mainCruise')), (True, True))
-
-  def test_scc_upgrades_lateral(self):
-    self.step(button('lfaButton'))
-    self.assertEqual(self.step(button('mainCruise')), (True, True))
-
-  def test_scc_off_disables_both(self):
-    self.step(button('mainCruise'))
-    self.assertEqual(self.step(button('mainCruise')), (False, False))
-
-  def test_lfa_off_ends_session(self):
-    for start in ('lfaButton', 'mainCruise'):
-      self.setUp()
-      self.step(button(start))
-      self.assertEqual(self.step(button('lfaButton')), (False, False))
-
-  def test_res_set_reenable_both_after_lfa_off(self):
-    for resume in ('accelCruise', 'decelCruise'):
-      self.setUp()
-      self.step(button('lfaButton'))
-      self.step(button('lfaButton'))
-      self.assertEqual(self.step(button(resume)), (True, True))
-
-  def test_cancel_dominates_simultaneous_enable(self):
-    self.assertEqual(self.step(button('lfaButton'), button('cancel', True), button('mainCruise')), (False, False))
-
-  def test_press_and_hold_does_not_engage(self):
-    for _ in range(100):
-      self.assertEqual(self.step(button('lfaButton', True)), (False, False))
-    self.assertEqual(self.step(button('lfaButton')), (True, False))
-
-  def test_no_entry_is_not_latched(self):
-    self.assertEqual(self.step(button('lfaButton'), events=('seatbeltNotLatched',)), (False, False))
-    self.assertEqual(self.step(), (False, False))
-    self.assertEqual(self.step(button('lfaButton')), (True, False))
+  def test_old_refusal_is_displaced_by_new_generation_after_wrap(self):
+    self.panda.lx3RequestGeneration = 65534
+    self.engage(events=('tooDistracted',))
+    self.assertEqual(self.ctx.lx3_engagement.ack_generation, 65535)
+    self.pending(counter=42)
+    self.step(button('lfaButton', counter=42))
+    self.assertEqual(self.ctx.lx3_engagement.ack_generation, 1)
+    self.assertEqual(self.ctx.lx3_engagement.ack_mode, Mode.LATERAL)
+    self.accept()
+    self.assertEqual(self.step(), (True, False))
 
   def test_upgrade_cannot_bypass_no_entry(self):
-    self.step(button('lfaButton'))
-    self.assertEqual(self.step(button('mainCruise'), events=('seatbeltNotLatched',)), (False, False))
+    self.engage()
+    self.assertEqual(self.engage('mainCruise', events=('seatbeltNotLatched',)), (False, False))
 
-  def test_automatic_or_stock_enable_is_ignored(self):
+  def test_pre_enabled_rechecks_no_entry_and_soft_disable(self):
+    for event in ('seatbeltNotLatched', 'commIssue', 'tooDistracted'):
+      self.setUp()
+      self.pending()
+      self.step(button('lfaButton'))
+      self.assertTrue(self.ctx.enabled)
+      self.assertFalse(self.ctx.active)
+      self.assertEqual(self.step(events=(event,)), (False, False))
+      self.assertFalse(self.ctx.enabled)
+      self.assertEqual(self.ctx.lx3_engagement.ack_mode, Mode.OFF)
+      self.accept()  # Old ACK might already be in transit; no resurrection.
+      self.assertEqual(self.step(), (False, False))
+
+  def test_other_pre_enable_condition_outlives_completed_panda_transaction(self):
+    self.pending()
+    self.step(button('lfaButton'), events=('preEnableStandstill',))
+    self.accept()
+    self.now += .1
+    self.assertEqual(self.step(events=('preEnableStandstill',)), (False, False))
+    self.assertTrue(self.ctx.enabled)
+    self.assertFalse(self.ctx.active)
+    self.assertIsNone(self.ctx.lx3_engagement.pending)
+    self.assertEqual(self.ctx.lx3_engagement.mode, Mode.LATERAL)
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.now += 1
+    self.assertEqual(self.step(events=('preEnableStandstill',)), (False, False))
+    self.assertEqual(self.step(), (True, False))
+
+  def test_accepted_but_still_pre_enabled_also_rechecks_no_entry(self):
+    self.pending()
+    self.step(button('lfaButton'), events=('preEnableStandstill',))
+    self.accept()
+    self.step(events=('preEnableStandstill',))
+    self.assertIsNone(self.ctx.lx3_engagement.pending)
+    self.assertEqual(self.step(events=('tooDistracted',)), (False, False))
+    self.assertFalse(self.ctx.enabled)
+
+  def test_automatic_stock_enable_and_enabled_without_intent_are_reset(self):
     self.assertEqual(self.step(events=('buttonEnable', 'pcmEnable')), (False, False))
-
-  def test_enabled_state_without_driver_intent_is_reset(self):
     self.ctx.enabled = self.ctx.active = True
     self.ctx.state_machine.state = State.enabled
     self.assertEqual(self.step(), (False, False))
-    self.assertEqual(self.ctx.state_machine.state, State.disabled)
 
-  def test_stock_available_flicker_does_not_cancel_session(self):
-    self.step(button('lfaButton'))
+  def test_stock_available_flicker_does_not_cancel(self):
+    self.engage()
     self.assertEqual(self.step(events=('wrongCarMode', 'pcmDisable')), (True, False))
 
-  def test_pedal_disables_and_requires_new_request(self):
-    self.step(button('mainCruise'))
+  def test_pedal_disables_and_requires_new_physical_request(self):
+    self.engage('mainCruise')
     self.assertEqual(self.step(events=('pedalPressed',)), (False, False))
     self.assertEqual(self.step(), (False, False))
 
-  def test_soft_disable_uses_existing_state_machine(self):
-    self.step(button('lfaButton'))
+  def test_active_soft_disable_preserves_existing_state_machine(self):
+    self.engage()
     self.step(events=('seatbeltNotLatched',))
     self.assertEqual(self.ctx.state_machine.state, State.softDisabling)
-    for _ in range(301):
-      self.step(events=('seatbeltNotLatched',))
+    for _ in range(301): self.step(events=('seatbeltNotLatched',))
     self.assertEqual(self.ctx.state_machine.state, State.disabled)
     self.assertEqual(self.step(), (False, False))
 
-  def test_steer_fault_disables_immediately(self):
-    self.step(button('lfaButton'))
-    self.cs.steerFaultTemporary = True
-    self.assertEqual(self.step(), (False, False))
-    self.cs.steerFaultTemporary = False
-    self.assertEqual(self.step(), (False, False))
-
-  def test_stale_car_state_cannot_replay_release(self):
-    self.step(button('lfaButton'))
+  def test_steer_fault_and_stale_invalid_car_state_disable(self):
+    for field, value in (('steerFaultTemporary', True), ('steerFaultPermanent', True), ('canValid', False)):
+      self.setUp()
+      self.engage()
+      setattr(self.cs, field, value)
+      self.assertEqual(self.step(), (False, False))
+    self.setUp()
+    self.engage()
     self.ctx.car_state_fresh = False
     self.assertEqual(self.step(button('mainCruise')), (False, False))
     self.ctx.car_state_fresh = True
     self.assertEqual(self.step(), (False, False))
 
-  def test_invalid_can_disables(self):
-    self.step(button('lfaButton'))
-    self.cs.canValid = False
-    self.assertEqual(self.step(), (False, False))
-
-  def test_unavailable_or_mismatched_panda_denies_entry(self):
-    for field, value in (('controlsAllowed', False), ('safetyRxChecksInvalid', True),
-                         ('safetyParam', 0), ('safetyModel', 'noOutput'),
+  def test_config_fault_extra_panda_and_stock_long_deny(self):
+    for field, value in (('safetyRxChecksInvalid', True), ('safetyParam', 0), ('safetyModel', 'noOutput'),
                          ('alternativeExperience', 1), ('faults', ['relayMalfunction'])):
       self.setUp()
       setattr(self.panda, field, value)
-      self.assertEqual(self.step(button('lfaButton')), (False, False), field)
+      self.assertEqual(self.engage(), (False, False), field)
     for pandas in ([], [self.panda, self.panda]):
       self.setUp()
       self.ctx.sm['pandaStates'] = pandas
-      self.assertEqual(self.step(button('mainCruise')), (False, False))
+      self.assertEqual(self.engage('mainCruise'), (False, False))
+    self.setUp()
+    self.ctx.CP.openpilotLongitudinalControl = False
+    self.assertEqual(self.engage('mainCruise'), (False, False))
 
-  def test_stale_panda_denies_entry(self):
+  def test_invalid_stale_or_future_panda_timestamp_denies(self):
     self.ctx.sm.valid_streams = False
-    self.assertEqual(self.step(button('lfaButton')), (False, False))
+    self.assertEqual(self.engage(), (False, False))
+    for stamp in (0, 749_000_000, 1_001_000_000):
+      self.setUp()
+      self.refresh_panda = False
+      self.ctx.sm.logMonoTime['pandaStates'] = stamp
+      self.assertEqual(self.engage(), (False, False))
 
-  def test_delayed_panda_ack_waits_without_actuation(self):
-    self.panda.controlsAllowed = False
+  def test_can_before_companion_waits_disabled_without_ack(self):
     self.assertEqual(self.step(button('lfaButton')), (False, False))
-    self.now = .1
+    self.assertFalse(self.ctx.enabled)
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.now += .1
     self.assertEqual(self.step(), (False, False))
-    self.panda.controlsAllowed = True
-    self.now = .2
+    self.pending()
+    self.now += .1
+    self.assertEqual(self.step(), (False, False))
+    self.assertEqual(self.ctx.state_machine.state, State.preEnabled)
+    self.assertTrue(self.ctx.lx3_engagement.ack_valid)
+    self.accept()
+    self.now += .1
     self.assertEqual(self.step(), (True, False))
 
-  def test_late_ack_cannot_resurrect_expired_request(self):
-    self.panda.controlsAllowed = False
-    self.step(button('lfaButton'))
-    self.now = .501
-    self.panda.controlsAllowed = True
+  def test_companion_before_can_does_not_create_intent(self):
+    self.pending()
     self.assertEqual(self.step(), (False, False))
-    self.assertEqual(self.step(button('lfaButton')), (True, False))
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.assertEqual(self.step(button('lfaButton')), (False, False))
+    self.assertTrue(self.ctx.lx3_engagement.ack_valid)
 
-  def test_cancel_while_waiting_clears_request(self):
-    self.panda.controlsAllowed = False
+  def test_wrong_counter_cannot_bind_pending(self):
+    self.pending(counter=42)
+    self.step(button('lfaButton', counter=40))
+    self.assertFalse(self.ctx.enabled)
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+
+  def test_changed_generation_counter_or_mode_cannot_activate(self):
+    for field in ('lx3RequestGeneration', 'lx3PhysicalCounter', 'lx3RequestedMode'):
+      self.setUp()
+      self.pending()
+      self.step(button('lfaButton'))
+      self.accept()
+      setattr(self.panda, field, getattr(self.panda, field) + 1)
+      self.assertEqual(self.step(), (False, False))
+      self.assertFalse(self.ctx.enabled)
+
+  def test_late_ack_cannot_resurrect_and_fresh_request_can_retry(self):
+    self.pending()
     self.step(button('lfaButton'))
-    self.step(button('cancel', True))
-    self.panda.controlsAllowed = True
+    self.accept()
+    self.now += .501
     self.assertEqual(self.step(), (False, False))
+    self.assertEqual(self.engage(counter=42), (True, False))
 
-  def test_fault_while_waiting_clears_request(self):
-    self.panda.controlsAllowed = False
+  def test_new_request_after_expiry_is_not_mistaken_for_second_toggle(self):
+    self.pending()
     self.step(button('lfaButton'))
-    self.step(events=('seatbeltNotLatched',))
-    self.panda.controlsAllowed = True
-    self.assertEqual(self.step(), (False, False))
+    self.now += .501
+    self.assertEqual(self.engage(counter=42), (True, False))
 
-  def test_unsupported_stock_long_denies_entry(self):
-    self.ctx.CP.openpilotLongitudinalControl = False
-    self.assertEqual(self.step(button('mainCruise')), (False, False))
+  def test_rapid_second_toggle_and_ordered_batch_are_off(self):
+    self.pending()
+    self.step(button('lfaButton'))
+    self.assertEqual(self.step(button('lfaButton', counter=42)), (False, False))
+    self.assertEqual(self.ctx.state_machine.state, State.disabled)
+    self.accept()
+    self.assertEqual(self.step(), (False, False))
+    self.setUp()
+    self.pending()
+    self.assertEqual(self.step(button('lfaButton', counter=40), button('lfaButton', counter=42)), (False, False))
+    self.assertIsNone(self.ctx.lx3_engagement.pending)
+
+  def test_res_set_during_pending_does_not_change_generation_or_deadline(self):
+    self.pending()
+    self.step(button('lfaButton'))
+    intent = self.ctx.lx3_engagement
+    before = intent.pending_generation, intent.pending_since
+    self.now += .1
+    self.step(button('accelCruise', counter=42))
+    self.assertEqual((intent.pending_generation, intent.pending_since), before)
+
+  def test_rejection_retention_and_active_ack_lifetime(self):
+    self.engage(events=('seatbeltNotLatched',))
+    generation = self.ctx.lx3_engagement.ack_generation
+    self.now += .11
+    self.step()
+    self.assertEqual(self.ctx.lx3_engagement.ack_generation, generation)
+    self.assertTrue(self.ctx.lx3_engagement.ack_valid)
+    self.engage(counter=42)
+    self.now += .01
+    self.step()
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.assertEqual(self.ctx.lx3_engagement.ack_generation, 0)
+
+  def test_cancel_waiting_and_fault_after_ack_never_resume(self):
+    for events, buttons in (((), (button('cancel', True),)), (('steerUnavailable',), ())):
+      self.setUp()
+      self.pending()
+      self.step(button('lfaButton'))
+      self.assertEqual(self.step(*buttons, events=events), (False, False))
+      self.accept()
+      self.assertEqual(self.step(), (False, False))
 
   def test_output_has_no_always_lateral_fallback(self):
     for mode in Mode:
       self.assertEqual(permissions(mode, False, False, True, True, True), (False, False))
+      self.assertEqual(permissions(mode, True, False, True, True, True), (False, False))
       for valid, gear, steer in ((False, True, True), (True, False, True), (True, True, False)):
         self.assertEqual(permissions(mode, True, True, valid, gear, steer), (False, False))
 

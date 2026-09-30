@@ -19,7 +19,8 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.state import StateMachine
-from openpilot.selfdrive.selfdrived.lx3_engagement import Lx3Engagement, EngagementMode, lx3_pandas_ready, lx3_disengage_on_gas
+from openpilot.selfdrive.selfdrived.lx3_engagement import (Lx3Engagement, EngagementMode, lx3_pandas_ready,
+                                                        lx3_disengage_on_gas, lx3_permission_sample, lx3_permission_matches)
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 from openpilot.selfdrive.controls.lib.latcontrol import MIN_LATERAL_CONTROL_SPEED
 
@@ -533,6 +534,10 @@ class SelfdriveD:
     ss.state = self.state_machine.state
     if self.lx3_engagement is not None:
       ss.lx3EngagementMode = int(self.lx3_engagement.mode)
+      ss.lx3AckMode = int(self.lx3_engagement.ack_mode)
+      ss.lx3AckGeneration = self.lx3_engagement.ack_generation
+      ss.lx3AckPhysicalCounter = self.lx3_engagement.ack_counter
+      ss.lx3AckValid = self.lx3_engagement.ack_valid
     ss.engageable = not self.events.contains(ET.NO_ENTRY)
     ss.experimentalMode = self.experimental_mode
     ss.personality = self.personality
@@ -572,8 +577,11 @@ class SelfdriveD:
     self.CS_prev = CS
 
   def update_lx3_state(self, CS):
-    candidate, requested = self.lx3_engagement.request(
-      CS.buttonEvents if self.car_state_fresh else (), time.monotonic())
+    now_ns = time.monotonic_ns()
+    now = now_ns / 1e9
+    intent = self.lx3_engagement
+    intent.begin_step(now)
+    candidate, requested = intent.request(CS.buttonEvents if self.car_state_fresh else (), now)
     # LX3 main/RES/SET/LFA intent is owned here. In particular, a stock SCC
     # response or a cruise helper's automatic request cannot engage this path.
     excluded = (EventName.wrongCarMode, EventName.buttonEnable, EventName.buttonCancel, EventName.pcmEnable,
@@ -583,38 +591,97 @@ class SelfdriveD:
     # Do not use a stale button event or admit unsupported stock-long configs.
     # Exact Panda firmware/angle-limit qualification remains a release blocker;
     # no command is allowed to manufacture controlsAllowed to satisfy this gate.
+    panda_ns = self.sm.logMonoTime['pandaStates']
+    panda_fresh = panda_ns > 0 and 0 <= now_ns - panda_ns <= 250_000_000
     healthy = (self.car_state_fresh and CS.canValid and self.CP.openpilotLongitudinalControl and
              self.CP.steerControlType == car.CarParams.SteerControlType.angle and
-             self.sm.all_checks(['pandaStates']) and
+             panda_fresh and self.sm.all_checks(['pandaStates']) and
              lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience,
                               require_controls=False))
-    ready = healthy and lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience)
+    panda = lx3_permission_sample(self.sm['pandaStates']) if healthy else None
+    intent.observe_rejection(panda, now)
     if CS.steerFaultTemporary or CS.steerFaultPermanent:
       self.events.add(EventName.steerUnavailable)
-
-    # A physical release and Panda's periodic status can arrive in either order.
-    # Wait only for that request's ACK, for at most 0.5 s, with the normal state
-    # machine still disabled. Faults cancel the request instead of being retried.
-    waiting = (healthy and not ready and not self.enabled and requested and candidate != EngagementMode.OFF and
-               not any(self.events.contains(et) for et in (ET.NO_ENTRY, ET.USER_DISABLE, ET.SOFT_DISABLE, ET.IMMEDIATE_DISABLE)))
-    if waiting:
-      self.enabled, self.active = self.state_machine.update(self.events)
-      return
-    if not ready and (self.enabled or (requested and candidate != EngagementMode.OFF)):
-      self.events.add(EventName.controlsMismatch)
 
     if candidate == EngagementMode.OFF:
       if requested or self.enabled:
         self.events.add(EventName.buttonCancel)
-    elif requested:
-      if self.enabled and self.events.contains(ET.NO_ENTRY):
-        # An upgrade from lateral to combined must satisfy entry conditions too.
-        candidate = self.lx3_engagement.mode
+      self.enabled, self.active = self.state_machine.update(self.events)
+      intent.reject(now)
+      return
+
+    if intent.pending is not None:
+      # Suspend an old accepted session before requesting a different mode. Use
+      # the normal disable transition; PRE_ENABLE entry is only from disabled.
+      if self.enabled and intent.mode != EngagementMode.OFF:
         self.events.add(EventName.buttonCancel)
-      else:
+        self.enabled, self.active = self.state_machine.update(self.events)
+        intent.mode = EngagementMode.OFF
+        intent.accepted_generation = 0
+        intent.accepted_counter = 0
+        # One state-machine transition per frame preserves the disengage alert.
+        # The pending request is associated and entered on the next frame.
+        return
+      if (panda is not None and intent.pending_generation == 0 and
+          panda.lx3PhysicalCounter == intent.pending_counter and panda.lx3RequestAgeMs < 500 and
+          (panda.lx3PermissionPhase != 1 or panda.lx3RequestedMode != int(candidate))):
+        # Panda already processed this physical gesture as OFF (e.g. a quick
+        # toggle before an earlier host rejection arrived). Do not silently
+        # keep an impossible enable pending for another half-second.
+        self.events.add(EventName.buttonCancel)
+        self.enabled, self.active = self.state_machine.update(self.events)
+        intent.reject(now)
+        return
+      if (panda is not None and intent.pending_generation == 0 and panda.lx3PermissionPhase == 1 and
+          panda.lx3RequestedMode == int(candidate) and panda.lx3PhysicalCounter == intent.pending_counter):
+        intent.pending_generation = panda.lx3RequestGeneration
+      if not healthy:
+        self.events.add(EventName.controlsMismatch)
+      barriers = any(self.events.contains(et) for et in (ET.NO_ENTRY, ET.USER_DISABLE, ET.SOFT_DISABLE, ET.IMMEDIATE_DISABLE))
+      if barriers:
+        # Generic preEnabled does not process new NO_ENTRY/SOFT_DISABLE. Check
+        # both every frame here and revoke rather than promote this pending.
+        if self.enabled:
+          self.events.add(EventName.buttonCancel)
+        elif self.events.contains(ET.NO_ENTRY):
+          self.events.add(EventName.buttonEnable)  # Normal rejected-entry alert.
+        self.enabled, self.active = self.state_machine.update(self.events)
+        intent.reject(now)
+        return
+      if intent.pending_generation == 0:
+        # Physical CAN and the 10Hz companion may arrive in either order. There
+        # is no enable or ACK until the same physical request is associated.
+        self.enabled, self.active = self.state_machine.update(self.events)
+        return
+      accepted = lx3_permission_matches(panda, candidate, intent.pending_generation, intent.pending_counter, accepted=True)
+      pending = lx3_permission_matches(panda, candidate, intent.pending_generation, intent.pending_counter)
+      if not accepted and not pending:
+        self.events.add(EventName.controlsMismatch)
+      elif not accepted:
+        self.events.add(EventName.lx3PermissionPending)
+      if not self.enabled:
         self.events.add(EventName.buttonEnable)
+      self.enabled, self.active = self.state_machine.update(self.events)
+      if self.enabled and accepted:
+        # Panda's transaction is complete even if another normal PRE_ENABLE
+        # condition still holds. Keep StateMachine inactive without renewing an
+        # ACK or timing out an already accepted transaction.
+        intent.commit(candidate, True)
+      elif self.enabled and pending:
+        intent.set_ack(candidate, intent.pending_generation, intent.pending_counter)
+      elif not self.enabled:
+        intent.reject(now)
+      return
+
+    if not healthy or not lx3_permission_matches(panda, intent.mode, intent.accepted_generation,
+                                                intent.accepted_counter, accepted=True):
+      self.events.add(EventName.controlsMismatch)
+    if self.enabled and not self.active and any(self.events.contains(et) for et in
+                                                (ET.NO_ENTRY, ET.USER_DISABLE, ET.SOFT_DISABLE, ET.IMMEDIATE_DISABLE)):
+      self.events.add(EventName.buttonCancel)
     self.enabled, self.active = self.state_machine.update(self.events)
-    self.lx3_engagement.commit(candidate, self.enabled)
+    if not self.enabled:
+      intent.reject(now)
 
   def read_personality_param(self):
     try:

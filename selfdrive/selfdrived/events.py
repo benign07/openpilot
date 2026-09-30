@@ -746,6 +746,13 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOWEST, VisualAlert.none, AudibleAlert.none, .1, creation_delay=1.),
   },
 
+  EventName.lx3PermissionPending: {
+    ET.PRE_ENABLE: Alert(
+      "주행보조 준비 중", "",
+      AlertStatus.normal, AlertSize.small,
+      Priority.LOWEST, VisualAlert.none, AudibleAlert.none, .1, creation_delay=.3),
+  },
+
   EventName.gasPressedOverride: {
     ET.OVERRIDE_LONGITUDINAL: Alert(
       "",

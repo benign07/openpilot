@@ -105,6 +105,14 @@ jobs:
           opendbc_repo/opendbc/safety/tests/test_lx3_native.c -lm -o /tmp/lx3-safety
       - name: Configuration and forwarding compatibility
         run: /tmp/lx3-safety
+      - name: Classic non-CANFD protocol compatibility
+        run: |
+          gcc -DSTM32F4 -std=gnu11 -Wall -Wextra -Wstrict-prototypes -Werror -Wno-pointer-to-int-cast \
+            -fsanitize=undefined -fno-sanitize-recover=undefined -g \
+            -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety \
+            -Iopendbc_repo/opendbc/safety/tests/libsafety \
+            opendbc_repo/opendbc/safety/tests/test_lx3_classic_protocol.c -lm -o /tmp/lx3-classic
+          /tmp/lx3-classic
       - name: Compile recorded-CAN replay harness
         run: >-
           gcc -std=gnu11 -Wall -Wextra -Wstrict-prototypes -Werror -Wno-pointer-to-int-cast
@@ -125,6 +133,15 @@ jobs:
         id: release-audit
         shell: bash
         run: /tmp/lx3-safety --release-audit | tee native-release-audit.txt
+      - name: Actual Panda C and production host delivery-order schedules
+        run: |
+          gcc -shared -fPIC -std=gnu11 -Wall -Wextra -Wstrict-prototypes -Werror -Wno-pointer-to-int-cast \
+            -fsanitize=undefined -fno-sanitize-recover=undefined -g \
+            -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety \
+            -Iopendbc_repo/opendbc/safety/tests/libsafety \
+            opendbc_repo/opendbc/safety/tests/lx3_host_bridge.c -lm -o /tmp/lx3-host-bridge.so
+          python -m selfdrive.selfdrived.tests.lx3_host_panda_joint \
+            --library /tmp/lx3-host-bridge.so --report lx3-host-panda-joint.json
       - name: Record OTA qualification separately from test infrastructure
         if: always()
         run: |
@@ -146,6 +163,7 @@ jobs:
           path: |
             native-release-audit.txt
             native-legacy-audit.txt
+            lx3-host-panda-joint.json
   offline-tests:
     runs-on: ubuntu-latest
     strategy:

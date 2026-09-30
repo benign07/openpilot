@@ -219,7 +219,7 @@ class Car:
     if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
       # Status only: the cruise helper must no longer own lateral permission.
       ss = self.sm['selfdriveState']
-      CS.latEnabled = self.sm.all_checks(['selfdriveState']) and ss.enabled and ss.lx3EngagementMode in (1, 2)
+      CS.latEnabled = self.sm.all_checks(['selfdriveState']) and ss.active and ss.lx3EngagementMode in (1, 2)
     CS.useLaneLineSpeed = self.v_cruise_helper.useLaneLineSpeedApply
     CS.carrotCruise = 1 if self.v_cruise_helper.carrot_cruise_active else 0
 

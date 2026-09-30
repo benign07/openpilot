@@ -163,14 +163,33 @@ def host_disabled_panda_allowed(services, now):
   enabled = services['selfdriveState']['data'].get('enabled')
   # Same ignored models as the control path; a passive Panda is not a grant.
   pandas = [p for p in services['pandaStates']['data'] if p.get('safetyModel') not in ('silent', 'noOutput')]
-  if type(enabled) is not bool or not pandas or not all(type(p.get('controlsAllowed')) is bool for p in pandas):
+  permissions = []
+  for panda in pandas:
+    guarded = panda.get('safetyModel') == 'hyundaiCanfd' and type(panda.get('safetyParam')) is int and bool(panda['safetyParam'] & 1024)
+    version = panda.get('lx3PermissionVersion')
+    if version == 1:
+      permissions.append(panda.get('lx3ControlsAllowed'))
+    elif guarded or version not in (None, 0):
+      # Protocol0 on this policy includes a failed/short companion read. The
+      # separately sampled universal health bit cannot fill that missing data.
+      permissions.append(None)
+    else:
+      permissions.append(panda.get('controlsAllowed'))
+  if type(enabled) is not bool or not pandas or not all(type(value) is bool for value in permissions):
     return None
-  return not enabled and any(p['controlsAllowed'] for p in pandas)
+  return not enabled and any(permissions)
 
 
 class AutoRecorder:
   ADDRESSES = {0x161, 0x162, 0x1EA, 0x2A4, 0x362, 0x1A0, 0x41B, 0x417, 0x367,
                0x10B, 0xCB, 0xEA, 0x12A, 0x1AA}
+  PERMISSION_FIELDS = {
+    'pandaStates': ('safetyModel', 'safetyParam', 'lx3PermissionVersion', 'lx3RequestedMode',
+                    'lx3AcceptedMode', 'lx3PhysicalCounter', 'lx3RequestGeneration',
+                    'lx3ControlsAllowed', 'lx3PermissionPhase'),
+    'selfdriveState': ('enabled', 'active', 'state', 'lx3EngagementMode', 'lx3AckMode',
+                       'lx3AckGeneration', 'lx3AckPhysicalCounter', 'lx3AckValid'),
+  }
 
   def __init__(self, store, metadata):
     self.store, self.metadata = store, metadata
@@ -181,6 +200,8 @@ class AutoRecorder:
     self.last_event = {}
     self.can_last, self.faults = {}, {}
     self.actuation_states = {}
+    self.permission_states, self.permission_times = {}, {}
+    self.permission_sequence = 0
     self.sampled_out = self.stale_packets = 0
     self.state = 'waiting_for_ignition'
 
@@ -189,6 +210,42 @@ class AutoRecorder:
       return
     self.last_event[name] = now
     self.store.append({'kind': 'event', 'name': name, 'mono_ns': int(now * 1e9), **details}, now)
+
+  def permission_observations(self, services, now):
+    """Keep received phase/ACK changes without the generic one-second throttle.
+
+    SubMaster conflates publications. A small publication gap does not prove
+    every firmware transition was observed; these rows never assert that.
+    """
+    if self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV':
+      return
+    for name, fields in self.PERMISSION_FIELDS.items():
+      service = services.get(name, {})
+      timestamp = service.get('mono_ns', 0)
+      available = fresh(services, name, now, .25)
+      data = service.get('data', [] if name == 'pandaStates' else {})
+      value = ([{key: panda.get(key) for key in fields} for panda in data] if name == 'pandaStates'
+               else {key: data.get(key) for key in fields})
+      current = {'fresh_valid': available, 'data': value}
+      previous_time = self.permission_times.get(name)
+      gap = timestamp - previous_time if previous_time is not None and timestamp > previous_time else None
+      changed = current != self.permission_states.get(name)
+      if timestamp > self.permission_times.get(name, 0):
+        self.permission_times[name] = timestamp
+      if not changed and (gap is None or gap <= 250_000_000):
+        continue
+      if self.store.full(now):
+        self.sampled_out += 1
+        continue  # Do not advance the baseline when storage omitted the change.
+      self.permission_sequence += 1
+      self.store.append({'kind': 'event', 'name': 'lx3_permission_observation',
+                         'mono_ns': int(now * 1e9), 'service_mono_ns': timestamp,
+                         'service': name, 'sequence': self.permission_sequence,
+                         'before': self.permission_states.get(name), 'after': current,
+                         'publication_gap_ns': gap,
+                         'coverage': 'conflated_publications_not_all_firmware_transitions',
+                         'classification': 'observation_only_not_engagement_authority'}, now)
+      self.permission_states[name] = current
 
   def update(self, services, now):
     ignition_fresh = fresh(services, 'deviceState', now, 3)
@@ -203,6 +260,8 @@ class AutoRecorder:
       self.trip = uuid.uuid4().hex
       self.previous, self.can_last, self.faults, self.last_event = {}, {}, {}, {}
       self.actuation_states = {}
+      self.permission_states, self.permission_times = {}, {}
+      self.permission_sequence = 0
       self.lead_changes.clear()
       self.last_sample = -math.inf
     if self.store.full(now):
@@ -213,6 +272,7 @@ class AutoRecorder:
       self.state = self.store.error
       return
     self.state = 'recording'
+    self.permission_observations(services, now)
     if now - self.last_sample < .2:
       return
     mode = control_mode(services, now)
@@ -287,9 +347,10 @@ class AutoRecorder:
                              'before': before, 'after': state,
                              'semantic_status': 'raw_dbc_state_not_verified_EPS_delivery'}, now)
         self.actuation_states[key] = state
-    # Physical 25Hz input is retained for CRC/counter/debounce replay. State
-    # edges bypass the 10Hz background limit; this remains sampled evidence.
-    period = .02 if address == 0x10B and bus == 0 and direction == 'rx' else .1
+    # Do not rate-limit physical frames by worker wall time: multiple valid
+    # 25Hz frames can be drained in one50ms worker batch. Keep their counters
+    # for replay, still bounded by drain/chunk/quota limits. Other CAN is sampled.
+    period = 0 if address == 0x10B and bus == 0 and direction == 'rx' else .1
     if now - self.can_last.get(key, -math.inf) < period and not fault_changed and not state_changed:
       self.sampled_out += 1
       return

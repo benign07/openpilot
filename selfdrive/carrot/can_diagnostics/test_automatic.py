@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace as NS
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -26,6 +27,35 @@ def services(now=100, started=True, lat=False, long=False):
 
 
 class RuntimeTests(unittest.TestCase):
+  def test_guarded_missing_companion_is_unknown_not_legacy_health(self):
+    sample = services()
+    panda = {'safetyModel': 'hyundaiCanfd', 'safetyParam': 1214, 'controlsAllowed': True}
+    sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': [panda]}
+    for version in (None, 0, 2):
+      panda['lx3PermissionVersion'] = version
+      self.assertIsNone(host_disabled_panda_allowed(sample, 100))
+    panda.update(lx3PermissionVersion=0, safetyParam=190)
+    self.assertTrue(host_disabled_panda_allowed(sample, 100))
+    panda.update(safetyParam=1214, safetyModel='hyundai')
+    self.assertTrue(host_disabled_panda_allowed(sample, 100))
+
+  def test_guarded_permission_observation_uses_atomic_companion(self):
+    sample = services()
+    panda = {'controlsAllowed': True, 'lx3PermissionVersion': 1, 'lx3ControlsAllowed': False}
+    sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': [panda]}
+    self.assertFalse(host_disabled_panda_allowed(sample, 100))
+    panda.update(controlsAllowed=False, lx3ControlsAllowed=True)
+    self.assertTrue(host_disabled_panda_allowed(sample, 100))
+    panda['lx3PermissionVersion'] = 2
+    self.assertIsNone(host_disabled_panda_allowed(sample, 100))
+  def test_button_metadata_is_preserved_without_trusting_old_producers(self):
+    old = NS(type='lfaButton', pressed=False)
+    new = NS(type='mainCruise', pressed=False, lx3PhysicalCounter=254, lx3PhysicalValid=True)
+    result = selected_fields(NS(buttonEvents=[old, new]), ('buttonEvents',))['buttonEvents']
+    self.assertFalse(result[0]['lx3PhysicalValid'])
+    self.assertIsNone(result[0]['lx3PhysicalCounter'])
+    self.assertEqual(result[1]['lx3PhysicalCounter'], 254)
+    self.assertTrue(result[1]['lx3PhysicalValid'])
   def test_permission_observation_is_not_engagement_authority(self):
     sample = services()
     sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': [{'controlsAllowed': True}]}
@@ -92,6 +122,60 @@ class RecorderTests(unittest.TestCase):
       with gzip.open(path, 'rt', encoding='utf-8') as stream:
         rows.extend(json.loads(line) for line in stream)
     return rows
+
+  def test_permission_changes_within_context_sample_are_not_throttled(self):
+    sample = services()
+    panda = {'safetyModel': 'hyundaiCanfd', 'safetyParam': 1214, 'lx3PermissionVersion': 1,
+             'lx3RequestGeneration': 8, 'lx3PhysicalCounter': 250, 'lx3RequestedMode': 1,
+             'lx3AcceptedMode': 0, 'lx3ControlsAllowed': False, 'lx3PermissionPhase': 1}
+    sample['pandaStates'] = {'mono_ns': 100_000_000_000, 'valid': True, 'data': [panda]}
+    self.recorder.update(sample, 100)
+    panda.update(lx3AcceptedMode=1, lx3ControlsAllowed=True, lx3PermissionPhase=2)
+    sample['pandaStates']['mono_ns'] += 100_000_000
+    self.recorder.update(sample, 100.1)
+    # Same payload at a new publication time must not produce a third change.
+    sample['pandaStates']['mono_ns'] += 50_000_000
+    self.recorder.update(sample, 100.15)
+    rows = self.rows()
+    changes = [r for r in rows if r.get('name') == 'lx3_permission_observation' and r['service'] == 'pandaStates']
+    self.assertEqual([r['after']['data'][0]['lx3PermissionPhase'] for r in changes], [1, 2])
+    self.assertEqual(len([r for r in rows if r['kind'] == 'sample']), 1)
+    self.assertEqual(changes[1]['before']['data'][0]['lx3PermissionPhase'], 1)
+    self.assertTrue(all(r['coverage'] == 'conflated_publications_not_all_firmware_transitions' for r in changes))
+
+  def test_permission_observation_marks_staleness_and_publication_gaps(self):
+    sample = services()
+    self.recorder.update(sample, 100)
+    self.recorder.update(sample, 100.3)
+    sample['selfdriveState']['mono_ns'] += 500_000_000
+    self.recorder.update(sample, 100.5)
+    changes = [r for r in self.rows() if r.get('name') == 'lx3_permission_observation' and r['service'] == 'selfdriveState']
+    self.assertEqual([r['after']['fresh_valid'] for r in changes], [True, False, True])
+    self.assertEqual(changes[-1]['publication_gap_ns'], 500_000_000)
+
+  def test_permission_burst_cannot_bypass_chunk_budget(self):
+    sample = services()
+    self.recorder.update(sample, 100)
+    self.store.chunk_bytes = self.store.size
+    before = self.store.size
+    sample['selfdriveState']['data']['enabled'] = True
+    self.recorder.permission_observations(sample, 100.01)
+    self.assertEqual(self.store.size, before)
+    self.assertGreater(self.recorder.sampled_out, 0)
+
+  def test_permission_transition_recording_is_lx3_only(self):
+    self.recorder.metadata['car_fingerprint'] = 'OTHER_CAR'
+    self.recorder.update(services(), 100)
+    self.assertFalse(any(r.get('name') == 'lx3_permission_observation' for r in self.rows()))
+
+  def test_two_physical_frames_drained_together_preserve_counter_continuity(self):
+    self.recorder.update(services(), 100)
+    for counter in (250, 252):
+      data = bytearray(16)
+      data[2] = counter
+      self.recorder.can_frame(0, 0x10B, bytes(data), 100_000_000_000, 100)
+    rows = [row for row in self.rows() if row['kind'] == 'can_sample']
+    self.assertEqual([bytes.fromhex(row['data'])[2] for row in rows], [250, 252])
 
   def test_starts_without_openpilot_and_rotates_without_stopping_trip(self):
     self.recorder.update(services(), 100)

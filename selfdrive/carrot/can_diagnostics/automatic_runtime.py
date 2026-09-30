@@ -13,9 +13,12 @@ FIELDS = {
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'seatbeltUnlatched',
                'steerFaultTemporary', 'steerFaultPermanent', 'latEnabled', 'buttonEvents', 'datetime'),
   'carControl': ('enabled', 'latActive', 'longActive', 'actuators'),
-  'selfdriveState': ('enabled', 'active', 'state', 'lx3EngagementMode', 'alertText1', 'alertText2', 'alertType'),
+  'selfdriveState': ('enabled', 'active', 'state', 'lx3EngagementMode', 'lx3AckMode', 'lx3AckGeneration',
+                    'lx3AckPhysicalCounter', 'lx3AckValid', 'alertText1', 'alertText2', 'alertType'),
   'pandaStates': ('controlsAllowed', 'safetyModel', 'safetyParam', 'safetyRxChecksInvalid', 'safetyRxInvalid',
-                  'safetyTxBlocked', 'faults', 'alternativeExperience'),
+                  'safetyTxBlocked', 'faults', 'alternativeExperience', 'lx3PermissionVersion', 'lx3RequestedMode',
+                  'lx3AcceptedMode', 'lx3PhysicalCounter', 'lx3RequestGeneration', 'lx3RequestAgeMs',
+                  'lx3ControlsAllowed', 'lx3PermissionPhase'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
   'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels',
                        'myDrivingMode', 'tFollow'),
@@ -43,7 +46,9 @@ def selected_fields(reader, fields):
     elif key in ('errors', 'faults') and value is not None:
       value = [str(error) for error in value]
     elif key == 'buttonEvents' and value is not None:
-      value = [{'type': str(button.type), 'pressed': bool(button.pressed)} for button in value]
+      value = [{'type': str(button.type), 'pressed': bool(button.pressed),
+                'lx3PhysicalCounter': getattr(button, 'lx3PhysicalCounter', None),
+                'lx3PhysicalValid': bool(getattr(button, 'lx3PhysicalValid', False))} for button in value]
     elif hasattr(value, 'to_dict'):
       value = value.to_dict()
     result[key] = value
@@ -106,13 +111,18 @@ class AutomaticController:
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     metadata = {'boot_id': boot, 'route': None, 'car_fingerprint': None,
-                'rate_hz': 5, 'can_per_key_max_hz': 10, 'physical_ecu_origin': 'not_inferred_from_bus'}
+                'rate_hz': 5, 'can_per_key_max_hz': 10, 'physical_ecu_origin': 'not_inferred_from_bus',
+                'physical_10b_capture': 'all_received_subject_to_drain_chunk_quota_limits',
+                'permission_transition_worker_max_hz': 20,
+                'permission_transition_coverage': 'conflated_publications_not_all_firmware_transitions'}
     repo = Path(__file__).resolve().parents[3]
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
                'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
                'opendbc_repo/opendbc/car/hyundai/radar_interface.py', 'opendbc_repo/opendbc/car/hyundai/lx3_inputs.py',
                'selfdrive/selfdrived/lx3_engagement.py', 'opendbc_repo/opendbc/safety/safety/safety_hyundai_canfd.h',
-               'selfdrive/car/card.py', 'selfdrive/selfdrived/selfdrived.py', 'selfdrive/controls/controlsd.py')
+               'selfdrive/car/card.py', 'selfdrive/selfdrived/selfdrived.py', 'selfdrive/controls/controlsd.py',
+               'selfdrive/pandad/panda.cc', 'selfdrive/pandad/pandad.cc', 'panda/board/main_comms.h',
+               'opendbc_repo/opendbc/safety/lx3_permission.h', 'opendbc_repo/opendbc/safety/safety.h')
     metadata['source_hashes'] = {rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest()
                                for rel in sources if (repo / rel).is_file()}
     dbc = repo / 'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc'
@@ -142,6 +152,16 @@ class AutomaticController:
                   else selected_fields(sm[name], fields))
           services[name] = {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]), 'data': data}
         last_context = now
+      else:
+        # Copy just these small messages on receipt, so the 5Hz full context
+        # sample does not discard a 100ms pending/accepted publication pair.
+        # The worker still conflates faster SS messages; report that limitation.
+        for name in AutoRecorder.PERMISSION_FIELDS:
+          if sm.updated[name]:
+            fields = FIELDS[name]
+            data = ([selected_fields(panda, fields) for panda in sm[name]] if name == 'pandaStates'
+                    else selected_fields(sm[name], fields))
+            services[name] = {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]), 'data': data}
       with self.lock:
         self.recorder.update(services, now)
       # Bounded drains; lag is recorded explicitly and stale CAN is discarded.

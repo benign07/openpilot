@@ -2,7 +2,8 @@
 
 This branch is a PC verification candidate. It is not OTA or vehicle qualified;
 the LX3 dashcamOnly interlock remains. Production remains e0747fca. Normal host
-engagement integration is the next step; the old host cannot grant this policy.
+engagement integration now uses the normal StateMachine PRE_ENABLE path and
+the request-specific companion. An old host cannot grant this policy.
 
 ## Confirmed defects motivating the change
 
@@ -80,7 +81,7 @@ qualification items; this is not an adversarial replay-proof protocol claim.
 
 ## Mutual review decisions
 
-Six same-topic rounds used the actual installed Claude Code session. Accepted:
+Eight same-topic rounds used the actual installed Claude Code session. Accepted:
 tag-aware heartbeat decoding, rechecking NO_ENTRY/SOFT_DISABLE during preEnabled,
 atomic accepted-mode telemetry, and stable main gesture identity. Rejected:
 8-bit-only nonce, unconditional pending cancellation on disabled heartbeat, and
@@ -88,15 +89,49 @@ the claim that a second ACK eliminates asynchronous disable races. Round6 also
 identified OFF's unnecessary requalification and explicit-cancel loss after a
 later bad batch frame; both corrected. Its claimed missing init-generation
 increment was disproved by the actual init and safety-reset native regression.
+Rounds7/8 also found and corrected the upgrade's lost USER_DISABLE alert,
+unbound refusal arriving before the companion, accepted transactions being
+timed out while another normal PRE_ENABLE condition holds, and invalid guarded
+companion data falling back to the independently sampled health permission.
 A condition
 can change immediately after any confirmation; tests must measure bounded
 revocation and absence of new host active commands, not assert zero latency.
 
+## Host integration
+
+Each adapter frame executes StateMachine.update exactly once. New physical
+requests need valid counter metadata; default/old ButtonEvent producers cannot
+enable. A physical request received before its companion waits while disabled.
+After binding the matching pending generation/counter/mode, normal ENABLE plus
+the LX3 PRE_ENABLE event makes enabled true but active false and publishes the
+matching ACK. Only the matching accepted companion completes the transaction.
+Independent health controlsAllowed is not used as a companion substitute.
+
+Pending rechecks NO_ENTRY, USER_DISABLE, SOFT_DISABLE and IMMEDIATE_DISABLE each
+frame. A refusal received before its nonce is remembered only to send a later
+matching OFF ACK; it cannot latch an enable. Normal StateMachine alerts and
+other-car paths remain. An upgrade first publishes one normal disable frame
+with USER_DISABLE, then enters the new pending on the next frame.
+
+An accepted transaction can remain normally preEnabled while a separate
+PRE_ENABLE condition holds. It has no pending timeout or repeated ACK and sends
+no active actuator commands. Its entry barriers are still rechecked. This is
+the existing enabled/inactive StateMachine distinction, not a new self-grant.
+
+The passive recorder keeps physical bus0 RX 0x10B frames without its previous
+worker-wall-time sampling cap (25Hz CAN can be drained in one50ms batch). It
+also records received companion/host ACK changes, with source timestamps,
+sequence and publication gaps, between the existing5Hz full context samples.
+The20Hz worker uses conflated subscriptions; these records do not prove every
+firmware transition was captured. Chunk/drain/quota limits still apply. Missing
+guarded protocol data is unknown, not permission inferred from universal health.
+
 ## Verification at this checkpoint
 
-- 162 Python regressions pass, including six new actual-parser batching/counter
- tests. Existing host tests are still the previous host adapter, not proof of
- the new end-to-end handshake.
+- 183 Python regressions pass, including actual-parser batching/counter and
+ production host adapter/StateMachine tests. New cases cover delayed refusals,
+ 499/500ms request boundaries, generation wrap, unrelated PRE_ENABLE, retained
+ disable alerts, one update per frame, and bounded transition recording.
 - Actual Panda C, compiled with strict warnings and undefined-behavior sanitizer,
  passes existing forwarding/angle/physical tests plus transaction tests for
  pending active rejection, wrong generation/mode/counter, old/disabled heartbeat,
@@ -106,18 +141,25 @@ revocation and absence of new host active commands, not assert zero latency.
   companion decoding in all observed phases (idle19,821; pending176; accepted3).
   Shared C/C++ decoder rejects short packets and incoherent fields; the encoder
   preserves all256 physical counter values and reserves generation0.
-- Linux full runtime and H7 build must be checked on the resulting commit. These
- do not establish EPS reception, real steering, LFA icon or warning removal.
+- Actual Panda C and production Python host logic pass360 synthetic delivery
+ schedules (CAN0/10/30/90ms, batching,10Hz companion phases and read/host/HB
+ order). All65,160 host frames call StateMachine.update exactly once;6,600
+ heartbeats and32,216 host active TX checks pass.391 host commands after a
+ physical revocation but before its publication are blocked by the actual C
+ policy. This counts synthetic schedules, not measured vehicle latency.
+- A strict/UBSan STM32F4-conditional desktop compile/run confirms the classic
+ 8byte CAN packet, unchanged health16/58byte and legacy heartbeat behavior.
+ It is a protocol compatibility test, not an STM32F4 firmware build.
+- Firmware/transport commit8d2f245c has all5 CI jobs successful, including full
+ Linux runtime/import/IPC and H7. The new host/recorder/IPC changes require the
+ resulting commit's full CI before being recorded as build-verified. Neither
+ build establishes EPS reception, real steering, LFA icon or warning removal.
 
 ## Required next work
 
-1. Integrate production SelfdriveD with the fresh request-specific companion,
-   normal preEnabled, per-frame entry barriers, and ACK lifetime limited to
-   pending. Legacy/default ButtonEvent producers cannot enable this path.
-2. Exercise actual C plus production host logic with reversed delivery orders,
-   rapid toggles, denial/retry, after-ACK faults and request expiry; expand real
-   msgq/Capnp smoke. Preserve other-car state-machine paths.
-3. Recheck latest complete CI. Compare current protocol against recorded physical
+1. Recheck latest complete CI including the expanded real msgq/Capnp production
+   publisher smoke, full runtime, classic compatibility and360 joint schedules.
+2. Compare current protocol against recorded physical
    RX separately from synthetic host acknowledgements; old logs have no such ACK.
-4. Keep the original-camera fault gate until bit meanings/ownership are verified.
+3. Keep the original-camera fault gate until bit meanings/ownership are verified.
    The historical LSS/DAS onset association is not root-cause proof.

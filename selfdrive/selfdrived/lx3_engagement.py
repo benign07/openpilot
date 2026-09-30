@@ -30,6 +30,61 @@ class Lx3Engagement:
     self.mode = EngagementMode.OFF
     self.pending = None
     self.pending_since = 0.0
+    self.pending_counter = 0
+    self.pending_generation = 0
+    self.accepted_counter = 0
+    self.accepted_generation = 0
+    self.rejection = None
+    self.unbound_rejection = None
+    self.clear_ack()
+
+  def clear_ack(self):
+    self.ack_mode = EngagementMode.OFF
+    self.ack_generation = 0
+    self.ack_counter = 0
+    self.ack_valid = False
+
+  def begin_step(self, now):
+    self.clear_ack()
+    # Keep a rejection long enough for the 10Hz transport to observe it. An old
+    # rejection cannot consume a different generation's newly pending request.
+    if self.rejection is not None:
+      generation, counter, stamp = self.rejection
+      if 0 <= now - stamp < 0.5:
+        self.set_ack(EngagementMode.OFF, generation, counter)
+      else:
+        self.rejection = None
+    if self.unbound_rejection is not None and not 0 <= now - self.unbound_rejection[2] < 0.5:
+      self.unbound_rejection = None
+
+  def set_ack(self, mode, generation, counter):
+    self.ack_mode, self.ack_generation, self.ack_counter = mode, generation, counter
+    self.ack_valid = generation != 0
+
+  def reject(self, now):
+    if self.pending_generation != 0:
+      self.rejection = self.pending_generation, self.pending_counter, now
+      self.set_ack(EngagementMode.OFF, self.pending_generation, self.pending_counter)
+      self.unbound_rejection = None
+    elif self.pending is not None:
+      # The physical CAN can precede the companion. Remember refusal identity
+      # without latching an enable; a later matching pending is rejected only.
+      self.unbound_rejection = self.pending, self.pending_counter, now
+    self.mode = EngagementMode.OFF
+    self.accepted_generation = 0
+    self.accepted_counter = 0
+    self.pending = None
+    self.pending_generation = 0
+
+  def observe_rejection(self, panda, now):
+    if self.unbound_rejection is None or panda is None:
+      return
+    mode, counter, stamp = self.unbound_rejection
+    if (0 <= now - stamp < 0.5 and panda.lx3PermissionPhase == 1 and panda.lx3RequestAgeMs < 500 and
+        panda.lx3RequestedMode == int(mode) and panda.lx3PhysicalCounter == counter):
+      self.rejection = panda.lx3RequestGeneration, counter, now
+      self.set_ack(EngagementMode.OFF, panda.lx3RequestGeneration, counter)
+      self.unbound_rejection = None
 
   def request(self, buttons, now):
     """Return a candidate mode and whether there was an explicit request.
@@ -39,31 +94,55 @@ class Lx3Engagement:
     A new session requires a new physical release edge after any fault/disable.
     """
     buttons = tuple(buttons)
-    released = {str(b.type) for b in buttons if not b.pressed}
-    current = self.pending if self.pending is not None else self.mode
-    candidate = None
+    expired = self.pending is not None and not 0 <= now - self.pending_since < 0.5
+    if expired:
+      self.reject(now)
     if any(str(b.type) == 'cancel' for b in buttons):
-      candidate = EngagementMode.OFF
-    elif 'mainCruise' in released:
-      candidate = EngagementMode.OFF if current == EngagementMode.COMBINED else EngagementMode.COMBINED
-    elif 'lfaButton' in released:
-      candidate = EngagementMode.LATERAL if current == EngagementMode.OFF else EngagementMode.OFF
-    elif released & {'accelCruise', 'decelCruise'}:
-      candidate = EngagementMode.COMBINED
+      self.reject(now)
+      return EngagementMode.OFF, True
+    candidate = None
+    current = self.mode
+    for b in buttons:
+      if b.pressed or not getattr(b, 'lx3PhysicalValid', False):
+        continue
+      name = str(b.type)
+      if name == 'mainCruise':
+        candidate = EngagementMode.OFF if self.pending is not None or current == EngagementMode.COMBINED else EngagementMode.COMBINED
+      elif name == 'lfaButton':
+        candidate = EngagementMode.OFF if self.pending is not None or current != EngagementMode.OFF else EngagementMode.LATERAL
+      elif name in ('accelCruise', 'decelCruise'):
+        if self.pending is not None or current == EngagementMode.COMBINED:
+          continue  # Speed adjustment is not another permission transaction.
+        candidate = EngagementMode.COMBINED
+      else:
+        continue
+      current = candidate
+      if candidate == EngagementMode.OFF:
+        self.reject(now)
+      else:
+        self.pending = candidate
+        self.pending_counter = int(b.lx3PhysicalCounter)
+        self.pending_generation = 0
+        self.pending_since = now
     if candidate is not None:
-      self.pending = candidate if candidate != EngagementMode.OFF else None
-      self.pending_since = now
       return candidate, True
     if self.pending is not None:
       if 0 <= now - self.pending_since < 0.5:
         return self.pending, True
-      self.pending = None
-    return self.mode, False
+      self.reject(now)
+      return EngagementMode.OFF, True
+    return self.mode, expired
 
   def commit(self, candidate, enabled):
     # A denied enable must not become a latched request which restarts later.
     self.mode = candidate if enabled else EngagementMode.OFF
+    self.accepted_generation = self.pending_generation if enabled else 0
+    self.accepted_counter = self.pending_counter if enabled else 0
     self.pending = None
+    self.pending_generation = 0
+    self.rejection = None
+    self.unbound_rejection = None
+    self.clear_ack()
 
 
 def lx3_control_permissions(mode, enabled, active, inputs_valid, driving_gear, steer_ok):
@@ -95,6 +174,34 @@ def lx3_pandas_ready(pandas, configs, alternative_experience, require_controls=T
       return False
     if str(panda.safetyModel) not in ignored:
       active_count += 1
-      if require_controls and not panda.controlsAllowed:
+      if require_controls and not getattr(panda, 'lx3ControlsAllowed', False):
         return False
-  return active_count > 0
+  return active_count == 1 and lx3_permission_sample(pandas) is not None
+
+
+def lx3_permission_sample(pandas):
+  """Mirror the shared companion decoder's semantic contract, not health bits."""
+  active = [p for p in pandas if str(p.safetyModel) not in ('silent', 'noOutput')]
+  if len(active) != 1:
+    return None
+  p = active[0]
+  if getattr(p, 'lx3PermissionVersion', 0) != 1 or not 1 <= p.lx3RequestGeneration <= 65535:
+    return None
+  requested, accepted, phase = p.lx3RequestedMode, p.lx3AcceptedMode, p.lx3PermissionPhase
+  if requested not in (0, 1, 2) or accepted not in (0, 1, 2) or phase not in (0, 1, 2):
+    return None
+  if not 0 <= p.lx3PhysicalCounter <= 255 or not 0 <= p.lx3RequestAgeMs <= 65535:
+    return None
+  idle = phase == 0 and requested == accepted == 0 and not p.lx3ControlsAllowed
+  pending = phase == 1 and requested != 0 and accepted == 0 and not p.lx3ControlsAllowed and p.lx3RequestAgeMs < 500
+  enabled = phase == 2 and requested == accepted != 0 and p.lx3ControlsAllowed
+  return p if idle or pending or enabled else None
+
+
+def lx3_permission_matches(panda, mode, generation, counter, accepted=False):
+  if panda is None or generation == 0:
+    return False
+  return (panda.lx3RequestGeneration == generation and panda.lx3PhysicalCounter == counter and
+          panda.lx3RequestedMode == int(mode) and
+          (panda.lx3PermissionPhase == 2 and panda.lx3ControlsAllowed and panda.lx3AcceptedMode == int(mode)
+           if accepted else panda.lx3PermissionPhase == 1 and not panda.lx3ControlsAllowed))
