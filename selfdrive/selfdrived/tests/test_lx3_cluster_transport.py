@@ -145,7 +145,14 @@ class TestLx3ClusterTransport(unittest.TestCase):
 
   def test_lateral_only_and_suspended_lateral_use_actual_active_state(self):
     self.assertFalse(self.cc.enabled)
-    self.assertEqual(self.decode(self.ccnc())['ADRV_0x161']['LFA_ICON'], 2)
+    values = self.decode(self.ccnc())['ADRV_0x161']
+    self.assertEqual(values['LFA_ICON'], 2)
+    # Preserve the inherited stock-availability ready indication. It is not
+    # combined permission: LAT-only must never show the active set-speed3.
+    self.assertTrue(self.cs.out.cruiseState.available)
+    self.assertEqual(values['SETSPEED'], 1)
+    self.assertEqual(values['SETSPEED_HUD'], 1)
+    self.assertEqual(values['HDA_ICON'], 1)
     self.new_publication()
     self.cc.latActive = False
     self.assertEqual(self.decode(self.ccnc())['ADRV_0x161']['LFA_ICON'], 1)

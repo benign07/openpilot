@@ -157,3 +157,9 @@ LFA 단독일 때는 False이므로 이 변경으로 SCC 활성 표시를 만들
 다른 차종은 이전 순정 availability 계약을 유지한다. 별도2개 회귀와 전체
 PC Python204개 검사가 통과했다. 차량 아이콘 enum의 실제 의미와 최초
 경고 해소를 이 표시 수정으로 입증했다고 주장하지 않는다.
+
+19차의 추가 반례는 순정 main latch가 True인 LFA-only에서 ready 표시1이
+남는 경우다. 이 ready 표시를 실제 combined 권한으로 바꾸지 않는다.
+해당 상태에서 SETSPEED/HUD/HDA가1이고 LFA가2인 기존 계약을 회귀로 고정했다.
+main latch를 삭제해 다른 기능까지 바꾸는 정책은 채택하지 않았다. gas override
+중 active SETSPEED3이 순정 계기판에서 갖는 의미도 차량 확인 전에는 미확정이다.
