@@ -299,10 +299,14 @@ class TestPhysicalParser(unittest.TestCase):
 class TestCameraHealthStartup(unittest.TestCase):
   def setUp(self):
     from types import SimpleNamespace as NS
+    from unittest.mock import patch
     clock = runpy.run_path(str(ROOT / 'selfdrive/carrot/tests/test_lx3_can_time.py'))
     self.env = clock['ENV']
-    self.parser = self.env['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[2]
-    self.fault = runpy.run_path(str(ROOT / 'opendbc_repo/opendbc/car/hyundai/lx3_state.py'))['lateral_fault']
+    # Production parser construction must use recorded time for startup grace.
+    with patch.object(self.env['time'], 'monotonic_ns', return_value=1_000_000_000):
+      self.parser = self.env['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[2]
+    state = runpy.run_path(str(ROOT / 'opendbc_repo/opendbc/car/hyundai/lx3_state.py'))
+    self.fault, self.fresh_values = state['lateral_fault'], state['fresh_camera_values']
     self.now = 1_000_000_000
 
   def feed(self, fault_bit=None, corrupt=False, bus=2):
@@ -348,6 +352,27 @@ class TestCameraHealthStartup(unittest.TestCase):
       self.feed(corrupt=True)
     self.assertEqual(self.parser.ts_nanos['CCNC_0x162']['FAULT_LSS'], stamp)
     self.assertTrue(self.current_fault())
+
+  def test_missing_bad_crc_and_timeout_never_publish_unreceived_object_cache(self):
+    def cached():
+      return self.fresh_values(self.parser.vl['CCNC_0x162'],
+                               self.parser.ts_nanos['CCNC_0x162']['FAULT_LSS'], self.now)
+    self.assertIsNone(cached())
+    self.feed(corrupt=True)
+    self.assertIsNone(cached())
+    self.feed()
+    self.assertIs(cached(), self.parser.vl['CCNC_0x162'])
+    self.now += 501_000_000
+    self.parser.update([[self.now, []]])
+    self.assertIsNone(cached())
+    self.assertTrue(self.current_fault())
+    self.assertFalse(self.parser.can_valid)
+
+  def test_missing_required_health_after_startup_grace_invalidates_can(self):
+    self.now = 3_100_000_000
+    self.parser.update([[self.now, [(0x161, bytes(32), 2)]]])
+    self.assertTrue(self.current_fault())
+    self.assertFalse(self.parser.can_valid)
 
 
 if __name__ == '__main__':

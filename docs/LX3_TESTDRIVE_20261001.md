@@ -135,3 +135,25 @@ cannot grant. That availability limitation is retained explicitly in a golden
 schedule, not reported as a successful retry. A held RES release after the OFF
 publication has a separately tested new-generation request path. Fixed ARM
 runtime and actual vehicle/cluster qualification remain unproven.
+
+Follow-up review also gates the LX3 CCNC display/object cache on a received,
+fresh timestamp: the pre-registered parser's zero dictionary is never treated
+as a received object. Health remains false on missing, bad-CRC or stale data.
+An isolated actual camera parser replay, with its construction clock set to the
+recorded route clock, reports all 66,786 observed CAN-event ticks valid, including
+startup. This measures the newly required CCNC health stream; it is not a
+complete dynamically discovered CarState canValid replay.
+
+The initial CI of 05caa42e failed two fixtures that manually registered CCNC
+again. Their registration assumptions have been updated to assert startup
+registration; checksum/freshness and forwarding assertions are retained. The
+native Linux UBSan physical/transport/legacy tests and 848 host/native schedules
+passed before that duplicate-registration fixture failure. The complete CI must
+be rerun on the final follow-up commit.
+
+Actual original-RX native replay uses 4,184,048 timestamp-ordered records and the
+single recorded Panda boot epoch, with no host ACK or actuator TX. It returns
+zero rejected RX, zero reordered records and zero accepted-control rows. The
+legacy uint16-address adapter excludes 132,490 extended-address frames; all
+18,169 physical button frames are included. Its timer uses pandad publication
+times, so it does not prove actual native wire-reception timing.

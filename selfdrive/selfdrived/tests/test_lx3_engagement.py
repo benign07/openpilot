@@ -684,7 +684,7 @@ class TestLx3CameraHealth(unittest.TestCase):
     clock = runpy.run_path(str(ROOT / 'selfdrive/carrot/tests/test_lx3_can_time.py'))
     env = clock['ENV']
     parser = env['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[2]
-    parser._add_message('CCNC_0x162')
+    self.assertIn(0x162, parser.addresses)  # Required health is registered at startup.
     data = bytearray(32)
     data[:2] = env['hkg_can_fd_checksum'](0x162, None, data).to_bytes(2, 'little')
     parser.update([[1_000_000_000, [(0x162, bytes(data), 2)]]])

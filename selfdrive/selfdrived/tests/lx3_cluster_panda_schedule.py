@@ -31,7 +31,7 @@ def run_case(lib, phase, jitter, old_cycle, can_delays=(0,), usb_delays=(0,), mi
   lib.lx3_test_display_timeout(timeout_ms * 1000)
   parser = ENV['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[2]
   parser._add_message('ADRV_0x161')
-  parser._add_message('CCNC_0x162')
+  assert 0x162 in parser.addresses  # Required health is registered at startup.
   case.cs.cp_cam = parser
   case.cs.adrv_0x161 = parser.vl['ADRV_0x161']
   case.cs.ccnc_0x162 = parser.vl['CCNC_0x162']

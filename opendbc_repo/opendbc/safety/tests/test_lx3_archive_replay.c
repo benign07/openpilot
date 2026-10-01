@@ -4,15 +4,26 @@
 #define main lx3_fixture_main
 #include "test_lx3_native.c"
 #undef main
+#include <stdlib.h>
 
 int main(int argc, char **argv) {
-  if ((argc != 3) && (argc != 4)) return 2;
+  if ((argc < 3) || (argc > 5)) return 2;
   FILE *input = fopen(argv[1], "rb");
   FILE *output = fopen(argv[2], "w");
   if ((input == NULL) || (output == NULL)) return 2;
   assert(set_safety_hooks(SAFETY_HYUNDAI_CANFD, lx3_param()) == 0);
   init_tests();
-  set_alternative_experience((argc == 4 && strcmp(argv[3], "1") == 0) ? ALT_EXP_DISABLE_DISENGAGE_ON_GAS : 0);
+  set_alternative_experience((argc >= 4 && strcmp(argv[3], "1") == 0) ? ALT_EXP_DISABLE_DISENGAGE_ON_GAS : 0);
+  // Optional recorded boot epoch reconstructs the host's initialization only.
+  // It does not send a heartbeat ACK or set controls_allowed. Legacy archives
+  // without this metadata retain their original unsealed-boot replay semantics.
+  if (argc == 5) {
+    char *end = NULL;
+    const uint64_t epoch = strtoull(argv[4], &end, 10);
+    if ((epoch == 0U) || (end == argv[4]) || (*end != '\0')) return 2;
+    assert(safety_lx3_set_transport_epoch(true, (uint16_t)(epoch >> 48U), (uint16_t)(epoch >> 32U)));
+    assert(safety_lx3_set_transport_epoch(false, (uint16_t)(epoch >> 16U), (uint16_t)epoch));
+  }
   uint8_t record[41];
   uint32_t last_us = 0U, tick_us = 0U;
   unsigned int rx_invalid = 0U, tx_accepted = 0U, tx_rejected = 0U;
@@ -58,7 +69,7 @@ int main(int argc, char **argv) {
   fclose(input); fclose(output);
   printf("ARCHIVE rx_rejected=%u tx_accepted=%u tx_rejected=%u reordered=%u active_without_permission=%u pending_rows=%u accepted_rows=%u active_requested=%u\n",
          rx_invalid, tx_accepted, tx_rejected, out_of_order, active_without_permission, pending_rows, accepted_rows, active_requested);
-  // These historical logs contain no version1 host ACK. Even real physical
+  // These historical logs contain no version2 host ACK. Even real physical
   // releases must not become accepted permission in this specific replay.
   return (bad || (active_without_permission != 0U) || (accepted_rows != 0U)) ? 1 : 0;
 }

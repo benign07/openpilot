@@ -9,7 +9,7 @@ from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
 from opendbc.car.hyundai.lx3_time import Lx3Clock, MESSAGE as LX3_TIME_MESSAGE
-from opendbc.car.hyundai.lx3_state import lateral_fault as lx3_lateral_fault
+from opendbc.car.hyundai.lx3_state import lateral_fault as lx3_lateral_fault, fresh_camera_values as lx3_camera_values
 from opendbc.car.hyundai.lx3_inputs import Lx3ButtonIntent
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, CAMERA_SCC_CAR, HyundaiExtFlags
 from opendbc.car.interfaces import CarStateBase
@@ -591,10 +591,11 @@ class CarState(CarStateBase):
     ret.steerFaultTemporary = cp.vl["MDPS"]["LKA_FAULT"] != 0 or cp.vl["MDPS"]["LFA2_FAULT"] != 0
     if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
       fault_ns = cp_cam.ts_nanos.get('CCNC_0x162', {}).get('FAULT_LSS', 0)
-      # Health is required from startup. The optional display cache is populated
-      # later by monitor_fingerprint after ControlsReady and must not manufacture
-      # a steering fault while fresh, CRC-valid camera health is already present.
-      ret.steerFaultTemporary |= lx3_lateral_fault(cp_cam.vl['CCNC_0x162'], fault_ns, cp_cam._last_update_nanos)
+      # Required health is independent of optional ControlsReady discovery.
+      # Pre-registration creates a zero dictionary before the first CAN frame:
+      # never expose that as received corner/object or display information.
+      self.ccnc_0x162 = lx3_camera_values(cp_cam.vl['CCNC_0x162'], fault_ns, cp_cam._last_update_nanos)
+      ret.steerFaultTemporary |= lx3_lateral_fault(self.ccnc_0x162, fault_ns, cp_cam._last_update_nanos)
     #ret.steerFaultTemporary = False
 
     blinkers_info = self.blinkers if self.blinkers is not None else self.blinkers_alt if self.blinkers_alt is not None else None
