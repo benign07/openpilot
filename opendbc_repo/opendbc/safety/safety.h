@@ -302,6 +302,13 @@ bool safety_rx_hook(const CANPacket_t *to_push) {
   if (valid) {
     current_hooks->rx(to_push);
   }
+#ifdef CANFD
+  else if (safety_lx3_guarded()) {
+    // A rejected required input invalidates the physical request as well as
+    // actuator permission, even if a valid replacement arrives before tick.
+    lx3_revoke_permission();
+  }
+#endif
 
   // reset mismatches on rising edge of controls_allowed to avoid rare race condition
   if (controls_allowed && !controls_allowed_prev) {

@@ -590,11 +590,22 @@ static void lx3_permission_maintenance(void) {
   }
 }
 
+static bool lx3_observed_rx_valid(void) {
+  // Read the latest dispatcher result without changing controls_allowed.
+  // Unseen inputs and lag retain the common policy's existing tick handling.
+  for (int i = 0; i < current_safety_config.rx_checks_len; i++) {
+    const RxStatus *status = &current_safety_config.rx_checks[i].status;
+    if (status->msg_seen && (!status->valid_checksum || !status->valid_quality_flag ||
+                            (status->wrong_counters >= MAX_WRONG_COUNTERS))) return false;
+  }
+  return true;
+}
+
 static bool lx3_request_context_valid(void) {
   return !lx3_generation_exhausted && (safety_lx3_transport_epoch() != 0U) &&
          hyundai_camera_scc && hyundai_canfd_hda2 && hyundai_hybrid_gas_signal && hyundai_longitudinal &&
          lx3_button_seen && lx3_button_ready && (microsecond_timer_get() - lx3_button_us <= 200000U) &&
-         lx3_angle_context_valid(0) && !safety_rx_checks_invalid && !relay_malfunction &&
+         lx3_angle_context_valid(0) && !safety_rx_checks_invalid && lx3_observed_rx_valid() && !relay_malfunction &&
          !brake_pressed && !regen_braking &&
          (!gas_pressed || (alternative_experience & ALT_EXP_DISABLE_DISENGAGE_ON_GAS));
 }

@@ -118,3 +118,43 @@ tick와추적되지않은생산파일확인반론을반영했다. 이전정책�
 brake50,782건과speed101,568건은24바이트였다. 이경계결함도당시
 계기판경고원인으로확정하지않는다. 새정확LinuxUBSan/H7/전체CI는
 커밋후별도검증하며차량설치·OTA는없다.
+
+## RX 거절과 인게이지 대기 요청의 연결
+
+정확 a540 정책에서 정상 all-RX와 실제 C tick 판정 뒤 LFA press/release로
+pending을 만들고, 정상24B TCS0x175의 CRC만 손상시켜 outer safety_rx_hook에
+넣었다. RX는거절/controls=false가되지만 pending/context는1로남고
+safety_rx_checks_invalid는다음1Hz tick전까지false였다. 첫탐색의press만
+넣은fixture실패는폐기하고release까지수신한경로만결함근거로사용했다.
+
+LX3요청context에서이미수신한감시입력의현재CRC/quality/counter상태를
+부작용없이확인한다. 아직수신하지않은입력과lag는기존공통tick처리를
+유지한다. unseen입력이모두검증됐다고주장하지않는다. 공통dispatcher가
+감시입력을거절하면 exact guarded LX3에서기존revoke함수를호출해
+pending/accepted권한과버튼재적격을함께폐기한다. 다른mode와다른차량은
+기존경로이며CRC예외/counter허용치/주기/상한은변경없다.
+
+Claude60은현재status를request에반영하는순수helper만제안했다.
+정상대체프레임이maintenance보다먼저도착하면status가회복돼oldpending이
+살아남는반례를제시했고61이인정했다. 실제같은test를 a540 safety.h와
+새helper header로컴파일한context-only비교에서 CRC거절→정상대체→
+old host heartbeat가controls=1/pending=0이되는실패를별도로재현했다.
+최종dispatcher수정후같은test가통과한다. baseline첫pending/context실패와
+context-only첫CRC수락실패뒤의하위항목도실패했다고확장해주장하지않는다.
+
+회귀는CRC/누적5wrongcounter즉시pending폐기, known-invalid상태의새gesture
+거절, 정상복구뒤oldidentity거절, 새neutral/gesture/generation의정상수락,
+accepted중거절시mode0, 0x105기존CRC예외와190legacy경로를포함한다.
+별도정상대체먼저순서의TCS/MDPS 각각CRC와counter4조합도검사한다.
+host heartbeat API는오프라인fixture이며실차ACK/물리버튼/ECU반응증거가
+아니다. 정확전후production2파일/testSHA/실패위치/전체로그SHA는
+can_inventory_work/lx3_rejected_rx_pending_validation_20261001.json에있다.
+
+감시대상한프레임의실제거절도재적격neutral3회와새gesture를요구하는
+가용성변화다. badcounter한번으로거절하지않으며기존MAX_WRONG_COUNTERS를
+유지한다. 현재fdcan 드라이버는forward/send뒤 safety_rx_hook를호출한다.
+따라서RX에서폐기한것을이미전송된프레임까지취소하는것으로표기하지않고,
+그RX이후의대기수락과권한유지를차단하는범위로한정한다. 새동시성문맥을
+만들지않고기존RX버튼revoke와같은함수를같은RX문맥에서쓴다.
+19시원본TCS/MDPS CRC는정상이므로이수정역시계기판경고원인/해결증거가
+아니다. 정확전체Linux/H7 CI는커밋후별도확인하며OTA/차량접속없음.

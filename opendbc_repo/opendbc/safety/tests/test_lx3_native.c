@@ -1444,8 +1444,116 @@ static void physical_input_health_timeout_regressions(void) {
   puts("PASS: malformed physical inputs cannot refresh RX health; tick revokes and fresh RX recovers without engagement");
 }
 
+static void rejected_rx_recovery_order_regression(void) {
+  const unsigned int addresses[] = {0x175U, 0xEAU};
+  for (unsigned int scenario = 0U; scenario < 4U; scenario++) {
+  const unsigned int target = scenario / 2U;
+  const bool counter_fault = (scenario % 2U) != 0U;
+  reset(lx3_param()); physical_baseline();
+  set_timer(microsecond_timer_get() + 10000U);
+  refresh_physical_rx_except(0U, 1U); safety_tick_current_safety_config();
+  physical_button(128U); physical_button(0U);
+  assert(lx3_pending && !controls_allowed);
+  const uint16_t generation = lx3_request_generation;
+  const uint16_t ack = LX3_HEARTBEAT_TAG | 1U | ((uint16_t)lx3_requested_mode << 1U) |
+                       ((uint16_t)lx3_request_counter << 8U);
+  CANPacket_t input = packet(addresses[target], 0U, 12U);
+  if (target == 1U) { input.data[10] = 0xFFU; input.data[11] = 0x0FU; }
+  bool rejected = false;
+  for (unsigned int sample = 0U; sample < (counter_fault ? 5U : 1U); sample++) {
+    set_timer(microsecond_timer_get() + 1000U);
+    hyundai_canfd_set_counter(&input, counter_fault ? 1U : 2U); hyundai_canfd_update_checksum(&input);
+    if (!counter_fault) input.data[0] ^= 1U;
+    rejected = !safety_rx_hook(&input);
+  }
+  assert(rejected);
+  // A valid replacement arrives before snapshot, heartbeat or an explicit
+  // maintenance call. Rejecting only the current context loses this history.
+  bool recovered = false;
+  for (uint8_t counter = counter_fault ? 2U : 3U; counter <= (counter_fault ? 7U : 3U); counter++) {
+    set_timer(microsecond_timer_get() + 1000U);
+    hyundai_canfd_set_counter(&input, counter); hyundai_canfd_update_checksum(&input);
+    recovered = safety_rx_hook(&input);
+  }
+  assert(recovered && !safety_rx_checks_invalid);
+  safety_host_heartbeat(ack, generation);  // Isolated API fixture, never CAN I/O.
+  if (controls_allowed || lx3_pending) {
+    printf("RX recovery ordering failure: controls=%d pending=%d\n", controls_allowed, lx3_pending); fflush(stdout);
+  }
+  assert(!controls_allowed && !lx3_pending && lx3_mode == 0);
+  }
+  puts("PASS: valid RX replacement before maintenance cannot revive the rejected LX3 request");
+}
+
+static void rejected_rx_pending_regressions(void) {
+  for (unsigned int counter_fault = 0U; counter_fault < 2U; counter_fault++) {
+    reset(lx3_param()); physical_baseline();
+    set_timer(microsecond_timer_get() + 10000U);
+    refresh_physical_rx_except(0U, 1U); safety_tick_current_safety_config();
+    assert(!safety_rx_checks_invalid && safety_config_valid());
+    physical_button(128U); physical_button(0U);
+    assert(lx3_pending && !controls_allowed && lx3_request_context_valid());
+    const uint16_t generation = lx3_request_generation;
+    const uint16_t ack = LX3_HEARTBEAT_TAG | 1U | ((uint16_t)lx3_requested_mode << 1U) |
+                         ((uint16_t)lx3_request_counter << 8U);
+    CANPacket_t invalid = packet(0x175U, 0U, 12U);
+    bool rejected = false;
+    for (unsigned int sample = 0U; sample < (counter_fault ? 5U : 1U); sample++) {
+      set_timer(microsecond_timer_get() + 1000U);
+      hyundai_canfd_set_counter(&invalid, counter_fault ? 1U : 2U);
+      hyundai_canfd_update_checksum(&invalid);
+      if (!counter_fault) invalid.data[0] ^= 1U;
+      rejected = !safety_rx_hook(&invalid);
+    }
+    assert(rejected && !safety_rx_checks_invalid);  // No intervening 1Hz tick.
+    if (lx3_pending || lx3_request_context_valid()) {
+      printf("RX pending invalidation failure: counter=%u pending=%d context=%d\n",
+             counter_fault, lx3_pending, lx3_request_context_valid()); fflush(stdout);
+    }
+    assert(!lx3_pending && !lx3_request_context_valid() && !controls_allowed);
+    // Existing host API fixture only; no CAN ACK, transport or real device.
+    safety_host_heartbeat(ack, generation);
+    assert(!controls_allowed && lx3_mode == 0);
+    // A new gesture while the known RX status is still invalid cannot request.
+    physical_baseline(); physical_button(128U); physical_button(0U);
+    assert(!lx3_pending && !controls_allowed);
+    for (uint8_t counter = 2U; counter <= 7U; counter++) {
+      set_timer(microsecond_timer_get() + 1000U);
+      hyundai_canfd_set_counter(&invalid, counter); hyundai_canfd_update_checksum(&invalid);
+      (void)safety_rx_hook(&invalid);
+    }
+    const int rx_index = get_addr_check_index(&invalid, current_safety_config.rx_checks, current_safety_config.rx_checks_len);
+    assert(rx_index >= 0 && current_safety_config.rx_checks[rx_index].status.valid_checksum &&
+           current_safety_config.rx_checks[rx_index].status.wrong_counters < MAX_WRONG_COUNTERS);
+    safety_host_heartbeat(ack, generation);  // Old identity cannot revive after recovery.
+    assert(!controls_allowed && !lx3_pending);
+    physical_baseline(); physical_button(128U); physical_button(0U);
+    assert(lx3_pending && lx3_request_generation != generation);
+    acknowledge_request();
+    // Accepted authority is also revoked by a rejected input, without tick.
+    hyundai_canfd_set_counter(&invalid, 8U); hyundai_canfd_update_checksum(&invalid);
+    invalid.data[0] ^= 1U;
+    assert(!safety_rx_hook(&invalid));
+    assert(!controls_allowed && !lx3_pending && lx3_mode == 0);
+  }
+  reset(lx3_param()); physical_baseline();
+  physical_button(128U); physical_button(0U);
+  assert(lx3_pending);  // Unseen RX keeps the existing common tick policy.
+  CANPacket_t hybrid = packet(0x105U, 0U, 13U);
+  hyundai_canfd_update_checksum(&hybrid); hybrid.data[0] ^= 1U;
+  assert(safety_rx_hook(&hybrid));
+  assert(lx3_pending && lx3_request_context_valid());  // Existing checksum exception.
+  reset(190U); grant_controls();
+  CANPacket_t legacy = packet(0x175U, 0U, 12U);
+  hyundai_canfd_update_checksum(&legacy); legacy.data[0] ^= 1U;
+  assert(!safety_rx_hook(&legacy) && !controls_allowed);
+  puts("PASS: rejected RX invalidates LX3 pending and old identity before tick; fresh gesture and legacy CRC policy preserved");
+}
+
 int main(int argc, char **argv) {
   if (argc == 2) {
+    if (strcmp(argv[1], "--rx-recovery-order") == 0) { rejected_rx_recovery_order_regression(); return 0; }
+    if (strcmp(argv[1], "--rx-pending") == 0) { rejected_rx_pending_regressions(); return 0; }
     if (strcmp(argv[1], "--physical-health") == 0) { physical_input_health_timeout_regressions(); return 0; }
     if (strcmp(argv[1], "--gas-boundary") == 0) { physical_input_receive_boundary_regressions(0x105U); return 0; }
     if (strcmp(argv[1], "--brake-boundary") == 0) { physical_input_receive_boundary_regressions(0x175U); return 0; }
@@ -1476,5 +1584,7 @@ int main(int argc, char **argv) {
   physical_input_receive_boundary_regressions(0xA0U);
   legacy_physical_input_receive_regressions();
   physical_input_health_timeout_regressions();
+  rejected_rx_pending_regressions();
+  rejected_rx_recovery_order_regression();
   return 0;
 }
