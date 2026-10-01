@@ -55,8 +55,33 @@ static void grant_controls(void) {
   set_controls_allowed(true);
 }
 
+static void seed_unseen_physical_fixture_inputs(void) {
+  // Existing button/state-machine fixtures assume a running, healthy vehicle.
+  // Supply that assumption through real RX, never by marking status valid.
+  // Missing-input startup regressions below deliberately do not use this helper.
+  for (int i = 0; i < current_safety_config.rx_checks_len; i++) {
+    const RxCheck *check = &current_safety_config.rx_checks[i];
+    if (check->status.msg_seen) continue;
+    const CanMsgCheck *msg = &check->msg[0];
+    if (hyundai_hybrid_gas_signal) {
+      for (unsigned int j = 0U; j < MAX_ADDR_CHECK_MSGS; j++) {
+        if (check->msg[j].addr == 0x105) msg = &check->msg[j];
+      }
+    }
+    unsigned int dlc = 0U;
+    while (dlc_to_len[dlc] != msg->len) { dlc++; assert(dlc < 16U); }
+    CANPacket_t input = packet((unsigned int)msg->addr, (unsigned int)msg->bus, dlc);
+    if (msg->addr == 0xEA) { input.data[10] = 0xFFU; input.data[11] = 0xFU; }
+    // 8-byte 1CF has its counter in byte1 and ignores checksum here; the
+    // common 16-bit CAN-FD checksum helper would overwrite that counter.
+    if (msg->len > 8) hyundai_canfd_update_checksum(&input);
+    assert(safety_rx_hook(&input));
+  }
+}
+
 static void physical_button(unsigned int raw) {
   set_timer(microsecond_timer_get() + 40000U);
+  seed_unseen_physical_fixture_inputs();
   fresh_mdps(0, 0);
   CANPacket_t p = packet(0x10B, 0, 10);
   p.data[2] = lx3_button_seen ? (uint8_t)(lx3_button_counter + 2U) : 250U;
@@ -1699,8 +1724,79 @@ static void latest_scc_warning_regressions(void) {
   puts("PASS: latest valid original SCC warning bits survive queued/reused LX3 commands; 8192 pairs/16384 deliveries and legacy/CRC qualification");
 }
 
+static void startup_rx_step(unsigned int missing, uint8_t step, unsigned int raw) {
+  set_timer(1000000U + (uint32_t)step * 40000U);
+  for (int i = 0; i < current_safety_config.rx_checks_len; i++) {
+    const CanMsgCheck *msg = &current_safety_config.rx_checks[i].msg[0];
+    if ((unsigned int)msg->addr == missing) continue;
+    unsigned int dlc = 0U;
+    while (dlc_to_len[dlc] != msg->len) { dlc++; assert(dlc < 16U); }
+    CANPacket_t input = packet((unsigned int)msg->addr, (unsigned int)msg->bus, dlc);
+    hyundai_canfd_set_counter(&input, step);
+    if (msg->addr == 0xEA) { input.data[10] = 0xFFU; input.data[11] = 0xFU; }
+    if (msg->len > 8) hyundai_canfd_update_checksum(&input);
+    assert(safety_rx_hook(&input));
+  }
+  CANPacket_t button = packet(0x10B, 0U, 10U);
+  button.data[2] = (uint8_t)(20U + step * 2U);
+  button.data[10] = raw;
+  hyundai_canfd_update_checksum(&button);
+  assert(safety_rx_hook(&button));
+}
+
+static void required_rx_startup_regressions(void) {
+  const uint16_t profiles[] = {1214U, 1182U};
+  for (unsigned int profile = 0U; profile < sizeof(profiles) / sizeof(profiles[0]); profile++) {
+    const unsigned int addresses[] = {0x105U, 0x175U, 0xA0U, profile == 0U ? 0x1AAU : 0x1CFU, 0xEAU};
+    for (uint8_t mode = 1U; mode <= 2U; mode++) {
+    const unsigned int press = mode == 1U ? 128U : 1U;
+    for (unsigned int missing = 0U; missing <= sizeof(addresses) / sizeof(addresses[0]); missing++) {
+      // Do not use reset/physical_button: they intentionally model already
+      // healthy RX. This starts the real dispatcher with every row unseen.
+      if (safety_lx3_transport_epoch() == 0U) {
+        assert(safety_lx3_set_transport_epoch(true, 0x1234U, 0x5678U));
+        assert(safety_lx3_set_transport_epoch(false, 0x9ABCU, 0xDEF0U));
+      }
+      assert(set_safety_hooks(SAFETY_HYUNDAI_CANFD, profiles[profile]) == 0);
+      init_tests();
+      assert(current_safety_config.rx_checks_len == 5);
+      const unsigned int omitted = missing < 5U ? addresses[missing] : 0U;
+      for (uint8_t step = 0U; step < 5U; step++) startup_rx_step(omitted, step, step == 3U ? press : 0U);
+      assert(lx3_button_ready && !controls_allowed && !safety_rx_checks_invalid);  // No 1Hz tick.
+      const uint16_t old_generation = lx3_request_generation;
+      const uint16_t old_ack = lx3_heartbeat_value(true, mode, old_generation, lx3_request_counter);
+      const bool pending = lx3_pending;
+      safety_host_heartbeat(old_ack, old_generation);  // Offline API fixture; not real host qualification.
+      if (omitted != 0U) {
+        if (pending || controls_allowed) {
+          printf("UNSEEN_RX_FAILURE profile=%u mode=%u missing=%03x pending=%d controls=%d\n",
+                 profiles[profile], mode, omitted, pending, controls_allowed); fflush(stdout);
+        }
+        assert(!pending && !controls_allowed && lx3_mode == 0);
+        CANPacket_t active = angle_command(true);
+        assert(!safety_tx_hook(&active));
+        // Receipt alone cannot revive the rejected request or its old ACK.
+        startup_rx_step(0U, 5U, 0U);
+        safety_host_heartbeat(old_ack, old_generation);
+        assert(!lx3_pending && !controls_allowed);
+        for (uint8_t step = 6U; step < 10U; step++) startup_rx_step(0U, step, step == 8U ? press : 0U);
+        assert(lx3_pending && !controls_allowed && lx3_request_generation != old_generation);
+        acknowledge_request();
+        assert(controls_allowed && lx3_mode == mode);
+      } else {
+        assert(pending && controls_allowed && lx3_mode == mode);
+      }
+      startup_rx_step(0U, omitted != 0U ? 10U : 5U, 4U);
+      assert(!controls_allowed && !lx3_pending);
+    }
+    }
+  }
+  puts("PASS: LX3 startup requires all five observed valid RX inputs before request/ACK; 20 missing-input and 4 complete LFA/combined profiles with recovery/cancel");
+}
+
 int main(int argc, char **argv) {
   if (argc == 2) {
+    if (strcmp(argv[1], "--required-rx-startup") == 0) { required_rx_startup_regressions(); return 0; }
     if (strcmp(argv[1], "--latest-scc-warning") == 0) { latest_scc_warning_regressions(); return 0; }
     if (strcmp(argv[1], "--hybrid-crc") == 0) { hybrid_crc_receive_regressions(); return 0; }
     if (strcmp(argv[1], "--rx-recovery-order") == 0) { rejected_rx_recovery_order_regression(); return 0; }
@@ -1739,5 +1835,6 @@ int main(int argc, char **argv) {
   rejected_rx_recovery_order_regression();
   hybrid_crc_receive_regressions();
   latest_scc_warning_regressions();
+  required_rx_startup_regressions();
   return 0;
 }

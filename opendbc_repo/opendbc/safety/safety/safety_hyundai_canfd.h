@@ -610,11 +610,13 @@ static void lx3_permission_maintenance(void) {
 
 static bool lx3_observed_rx_valid(void) {
   // Read the latest dispatcher result without changing controls_allowed.
-  // Unseen inputs and lag retain the common policy's existing tick handling.
+  // A physical request cannot treat default pedal/brake/speed values as real
+  // samples while waiting for the common 1Hz health tick. Keep common lag
+  // thresholds and other vehicle policies unchanged.
   for (int i = 0; i < current_safety_config.rx_checks_len; i++) {
     const RxStatus *status = &current_safety_config.rx_checks[i].status;
-    if (status->msg_seen && (!status->valid_checksum || !status->valid_quality_flag ||
-                            (status->wrong_counters >= MAX_WRONG_COUNTERS))) return false;
+    if (!status->msg_seen || !status->valid_checksum || !status->valid_quality_flag ||
+        (status->wrong_counters >= MAX_WRONG_COUNTERS)) return false;
   }
   return true;
 }
