@@ -72,6 +72,10 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: uv run --no-sync python -m unittest openpilot.selfdrive.selfdrived.tests.test_lx3_runtime_configuration -v
+      - name: Exact old CarState startup camera cache comparison
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run --no-sync python selfdrive/selfdrived/tests/check_lx3_camera_health_ab.py
       - name: Actual video encoder rotation and pre-fix negative A/B
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -104,6 +108,7 @@ jobs:
             lx3-logger-baseline-build.log
             lx3-logger-candidate-restored-build.log
             lx3-logger-rotation-ab.json
+            lx3-camera-health-source-ab.json
       - name: Record scope
         if: always()
         run: echo 'This builds the complete Linux x86_64 runtime graph using the repository lockfile. --minimal excludes extra tools/tests. Import checks are not a closed-loop IPC or in-vehicle test. No OTA or installation.' >> "$GITHUB_STEP_SUMMARY"
