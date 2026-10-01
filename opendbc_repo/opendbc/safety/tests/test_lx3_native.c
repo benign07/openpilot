@@ -1853,6 +1853,52 @@ static void legacy_steering_format_regressions(void) {
       }
     }
   }
+  // A nonzero advertised OEM torque cap is not itself a steering request.
+  // Keep host TX cap restrictions while retaining the existing display companion.
+  const unsigned int stock_caps[] = {0U, 16U, 255U};
+  for (unsigned int pi = 0U; pi < 2U; pi++) {
+    for (unsigned int ci = 0U; ci < 3U; ci++) {
+      reset(profiles[pi]); grant_controls();
+      CANPacket_t command = packet(0x12AU, 0U, 10U);
+      command.data[6] = 0x08U;  // zero torque, no request
+      command.data[3] = 0x30U;  // distinguish queued display from OEM template
+      hyundai_canfd_update_checksum(&command);
+      assert(safety_tx_hook(&command));
+      CanfdBufferedFwd *queue = canfd_bfwd_find(0x12A, 0);
+      assert(queue != NULL && queue->count == 1U);
+      CANPacket_t stock = packet(0x12AU, 2U, 10U);
+      stock.data[6] = 0x08U;
+      stock.data[12] = stock_caps[ci];
+      hyundai_canfd_set_counter(&stock, 43U);
+      hyundai_canfd_update_checksum(&stock);
+      assert(safety_fwd_hook(&stock) == 0);
+      if (stock.data[3] != command.data[3]) {
+        printf("OEM nonrequest companion skipped profile=%u cap=%u queue=%u\n", profiles[pi], stock_caps[ci], queue->count); fflush(stdout);
+      }
+      assert(stock.data[3] == command.data[3] && stock.data[12] == 0U);
+      assert(queue->count == 0U && stock.data[2] == 43U);
+      assert(hyundai_canfd_get_checksum(&stock) == hyundai_common_canfd_compute_checksum(&stock));
+    }
+  }
+  for (unsigned int pi = 0U; pi < 2U; pi++) {
+    for (unsigned int field = 0U; field < 3U; field++) {
+      reset(profiles[pi]); grant_controls();
+      CANPacket_t command = packet(0x12AU, 0U, 10U);
+      command.data[6] = 0x08U;
+      hyundai_canfd_update_checksum(&command);
+      assert(safety_tx_hook(&command));
+      CANPacket_t stock = command; stock.bus = 2U; stock.data[12] = 16U;
+      if (field == 0U) stock.data[6] |= 0x10U;  // STEER_REQ alone
+      if (field == 1U) stock.data[9] |= 0x10U;  // angle-active alone
+      if (field == 2U) stock.data[5] = 2U;      // torque +1 alone
+      hyundai_canfd_update_checksum(&stock);
+      const CANPacket_t saved = stock;
+      assert(safety_fwd_hook(&stock) == 0);
+      assert(memcmp(stock.data, saved.data, GET_LEN(&saved)) == 0);
+      assert(canfd_bfwd_find(0x12A, 0)->count == 1U);
+    }
+  }
+  puts("PASS: OEM nonrequest12A torque cap does not suppress passive companion; host cap restriction preserved");
   puts("PASS: LX3 rejects legacy050/110 and active12A steering; passive12A, original OEM steering and legacy190 preserved");
 }
 

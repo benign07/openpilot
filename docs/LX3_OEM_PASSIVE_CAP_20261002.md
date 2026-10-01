@@ -1,0 +1,7 @@
+# LX3 original LFA torque cap and passive companion
+
+Claude round69 identified that the 398be6de original-frame guard reused the stricter host TX predicate. An OEM 0x12A with zero torque, STEER_REQ=0 and ANGLE_ACTIVE=0 but advertised torque cap16 was therefore forwarded unchanged instead of receiving the existing passive display companion. The prior bounded original19h frame-shape report includes this nonrequest form. Aggregate input/output counts do not establish individual frame matches or the cause of the OEM dashboard warning.
+
+The same new native regression on the unchanged398 production policy failed first at profile1214/cap16 with queue1. The fixed policy separates actual request fields from host format restrictions. Original-frame classification ignores the advertised cap; host TX still requires cap0. Original STEER_REQ, angle activation or nonneutral torque each independently preserve the complete OEM frame and do not consume the queued companion. The normal 0xCB permission and steering limits remain unchanged, as do other vehicles.
+
+Desktop tests exercise both guarded profiles with cap0/16/255 and independent original request/angle/torque cases, plus the existing640 host format combinations and full native regression. These are isolated native fixtures, not physical button/authority or vehicle warning-resolution evidence. New exact Linux/H7 CI and device ARM/parked checks are required before deployment. The398 package is retained as superseded and must not be installed for this review.

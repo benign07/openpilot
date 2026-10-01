@@ -65,12 +65,18 @@ static bool hyundai_canfd_actuator_addr(int addr) {
   return (addr == 0xCB) || (addr == 0x12A) || (addr == 0x1A0);
 }
 
-static bool lx3_legacy_lfa_passive(const CANPacket_t *pkt) {
-  // Preserve Carrot's passive 0x12A companion format, including its -1024
-  // torque sentinel, but never use it as a second steering control path.
+static bool lx3_legacy_lfa_no_request(const CANPacket_t *pkt) {
+  // An OEM advertised torque cap is not a request: inspect actual request,
+  // angle activation and torque fields before replacing its display template.
   const int torque = (((GET_BYTE(pkt, 6) & 0xFU) << 7U) | (GET_BYTE(pkt, 5) >> 1U)) - 1024;
   return !GET_BIT(pkt, 52U) && (((GET_BYTE(pkt, 9) >> 4U) & 0x3U) == 0U) &&
-         (GET_BYTE(pkt, 12) == 0U) && ((torque == 0) || (torque == -1024));
+         ((torque == 0) || (torque == -1024));
+}
+
+static bool lx3_legacy_lfa_passive(const CANPacket_t *pkt) {
+  // Host TX must also carry zero cap. Keep Carrot's -1024 torque sentinel,
+  // without permitting a second steering control path.
+  return lx3_legacy_lfa_no_request(pkt) && (GET_BYTE(pkt, 12) == 0U);
 }
 
 static bool hyundai_canfd_lx3_display_addr(int addr) {
@@ -1171,7 +1177,7 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
       CANPacket_t buffered_pkt;
       // A queued passive companion may not overwrite an OEM steering request.
       // Keep the original bytes/counter/CRC and the existing queue deadline.
-      if (hyundai_canfd_lx3_guard && (addr == 0x12A) && !lx3_legacy_lfa_passive(to_send)) return bus_fwd;
+      if (hyundai_canfd_lx3_guard && (addr == 0x12A) && !lx3_legacy_lfa_no_request(to_send)) return bus_fwd;
       bool use_buffered = canfd_bfwd_pop(bfwd, &buffered_pkt);
 
       // queue�� ������� ������ ������ 1~2ȸ ����
