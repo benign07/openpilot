@@ -47,6 +47,7 @@ jobs:
             'openpilot.selfdrive.car.card',
             'openpilot.selfdrive.selfdrived.selfdrived',
             'openpilot.selfdrive.controls.controlsd',
+            'openpilot.selfdrive.controls.plannerd',
             'openpilot.selfdrive.carrot.can_diagnostics.automatic_runtime',
           ):
             importlib.import_module(name)
@@ -55,6 +56,8 @@ jobs:
           msg = log.SelfdriveState.new_message(enabled=True, lx3EngagementMode=1)
           assert msg.lx3EngagementMode == 1
           PY
+      - name: Relocated lateral and longitudinal MPC native runtime
+        run: uv run --no-sync python selfdrive/controls/tests/check_mpc_relocation.py
       - name: Real messaging and state-machine smoke check
         env:
           PYTHONPATH: ${{ github.workspace }}
