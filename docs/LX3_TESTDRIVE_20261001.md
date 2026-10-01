@@ -36,6 +36,23 @@ the import failure alone. Physical input/CAN/MDPS timing must be examined
 separately using the copied rlogs and automatic diagnostics. Qlog sampling can
 miss short button edges and permission handshakes.
 
+The full rlogs additionally confirm 77,773 carControl messages with neither
+axis active and no valid originating control identity. Original MDPS frames
+(0xEA, bus 0) all have `LKA_FAULT=0` and `LFA2_FAULT=0`; camera health frames
+(0x162, bus 2) all have the four decoded fault fields zero. Original camera
+steering commands and matching MDPS active states are present, consistent with
+stock lateral assistance rather than openpilot authority.
+
+Two short host temporary-fault episodes begin at boot-relative 342.248s and
+489.976s. At each, a valid neutral CAN frame after MAIN is followed by RES
+before the existing 300ms MAIN release qualification finishes. The host input
+code marks that sequence `ambiguous_gesture`, resets readiness and contributes
+to `steerFaultTemporary`. All 18,169 original physical-input frames have valid
+CRC. This input-ordering concern needs its own native/host regression and
+remedy; the MPC packaging fix does not resolve it. The absence of the decoded
+MDPS/camera fault flags does not prove the user's cluster warning was absent
+or identify its ECU source.
+
 ## Source remedy and verification gap
 
 The lateral SCons build now uses a named solver library, local library search
@@ -50,6 +67,14 @@ installation tree in fresh processes. The relocation check rejects absolute
 creates/resets and reads/writes both native solvers. It does not publish CAN or
 qualify vehicle behavior. Linux executable evidence and Claude review results
 must be recorded separately from this design description.
+
+Claude's source review confirmed the linking mechanism and challenged false
+passes through previously loaded/build-tree libraries. The stronger regression
+requires origin-relative loader entries and checks `/proc/self/maps` in each
+child process to prove vendored MPC/acados dependencies came from the copied
+tree. The ARM vendored dependency scan is static inspection, not execution of
+the corrected device MPC extension. Actual ARM build/relocation verification
+remains necessary at the next authorized device preparation.
 
 The earlier postboot verification checked source hashes, firmware signature,
 profile, CAN, error flags and process presence. A repeatedly restarted process

@@ -57,7 +57,9 @@ jobs:
           assert msg.lx3EngagementMode == 1
           PY
       - name: Relocated lateral and longitudinal MPC native runtime
-        run: uv run --no-sync python selfdrive/controls/tests/check_mpc_relocation.py
+        run: |
+          uv run --no-sync python selfdrive/controls/tests/check_mpc_relocation.py
+          uv run --no-sync python selfdrive/controls/tests/check_mpc_relocation.py --static-vendored-arch larch64
       - name: Real messaging and state-machine smoke check
         env:
           PYTHONPATH: ${{ github.workspace }}
