@@ -843,10 +843,15 @@ class CarState(CarStateBase):
       # The LX3 DBC filename does not opt into the generic checksum binding.
       # Restore checksum validation for copied camera actuator templates as
       # well as the clock/health/display inputs. Keep COUNTER informational:
-      # observed LX3 counters advance by +2, not the generic parser's +1.
+      # physical0x10B and copied camera streams include +2 counters, while
+      # observed MDPS/TCS use +1. Their native checks remain independent.
       # Original0x161 CRCs matched all10,161 samples in the onset comparison;
       # corrupt display/emergency indicators must not refresh the cache.
       pt_parser.dbc.name_to_msg[LX3_TIME_MESSAGE].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
+      for name in ('MDPS', 'TCS'):
+        # Restore original CAN-FD receive CRC validation on steering/brake
+        # feedback too. Rejected input must not refresh its value/timestamp.
+        pt_parser.dbc.name_to_msg[name].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
       cam_parser.dbc.name_to_msg['CCNC_0x162'].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
       cam_parser.dbc.name_to_msg['ADRV_0x161'].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
       for name in ('LFAHDA_CLUSTER', 'ADRV_0x1ea', 'ADRV_0x200', 'LFA', 'LFA_ALT', 'SCC_CONTROL'):

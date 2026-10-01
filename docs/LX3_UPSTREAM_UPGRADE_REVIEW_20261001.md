@@ -1,9 +1,32 @@
-# LX3 최신 당근 개선사항 반영
+# LX3 최신 당근 개선사항 검토 및 일부 반영
 
 원본 기준은 사용자가 지정한 ajouatom/openpilot Wiki의 carrot-wip,
 `abe1a232d81fd5b0f8db4b7212587952514e0274`이다. 순정 당근의 차량 목록과
 CAN 정의가 LX3 실차 검증을 대신하지 않는다. LX3 전용 DBC, 물리 버튼,
 정상 호스트/Panda 제어권한 경로를 유지하며 확인된 개선을 이식한다.
+
+## 사용자 Carrot HUD 앱 호환성
+
+사용자는 직접 만든 Carrot HUD와의 호환성 유지도 명시했다. 기준은
+앱1.0.27/f9ccfc4d이며, 최신 당근의 웹/서버로 통째 교체하지 않는다.
+현재 차량 설치 소스687e16f6 대비 서버, 웹, 설정 정의, 자동 진단,
+업데이트 서비스와 cereal 스키마의 차이를 확인한다. 앱은 장치의
+`/hud.html`을 WebView로 사용하며 다음 기존 계약을 유지한다.
+
+- `/api/heartbeat_status`, `/api/live_runtime`: HTTP 연결 가능 여부와
+  실제 CAN/서비스 유효성·수신 시각을 구분하고 기존 단위/키를 유지한다.
+- `/api/params_bulk`, `/api/param_set`: MyDrivingMode1..4 저장 확인과
+  실제 longitudinalPlan.myDrivingMode를 구분한다. 운행 중 모드 변경을 유지한다.
+- `/api/automatic_drive/chunks` 및 개별 다운로드: id/bytes/sha256,
+  압축 기록 형식과 휴대폰→PC 전송 무결성 계약을 유지한다.
+- `/api/hud_update/status`, `/api/hud_update/action`: schema1,
+  release_id/bundle_sha256, 인증과 기존 진행 상태를 유지한다.
+
+4b9137d8의 정확 CI36863500293은 서버/HUD/설정/진단108검사를 포함해
+각 Python 버전277검사가 통과했다. 앱 소스는 변경하지 않았으며 해당
+정확 f9ccfc4d CI36835805935의 JVM49검사 및 PC수신10검사 근거를 유지한다.
+이는 PC 수준 호환성 근거이며 새 후보를 휴대폰/차량에서 연동 시험한
+것으로 주장하지 않는다. 외부GPU 지원 여부도 앱 통신 계약과 구분한다.
 
 ## 반영한 표시 개선
 
@@ -27,6 +50,9 @@ LX3에서는 네 필드 모두 원본 카메라 값으로 함께 유지하도록
 따라서 CCNC의 가까운 대상 표시를 SCC의 다른 원본 객체에 적용하지
 않는다. 다른 차량의 기존 SCC HUD 처리는 유지한다. 최신 원본의
 `_apply_scc_lead` 전체와 횡위치 필터를 이식한 것으로 주장하지 않는다.
+이는999의planner기반HUD_LEAD_INFO덮어쓰기와동작이다르다. 카메라가
+대상을보고하지않으면SCC객체표시는없을수있고,CCNC는별도로유효한
+radarState대상을표시한다. 동일객체가아닌두출처를섞어표시하지않는다.
 
 생산 controlsd의 기존 블록에서 9검사 중 5실패를 재현했고, 새 블록과
 SCC payload 회귀의 10검사가 통과했다. Linux 실구성 검사는 실제
@@ -45,7 +71,7 @@ RadarState/CarControl 생성 스키마와 생산 블록의 직렬화도 확인�
 
 | 최신 당근 항목 | LX3 실기록/의존성 검토 |
 | --- | --- |
-| Group2 radar-native 상태와 Group3 object ID | 실제19시 bus1에는 0x3A5..0x3C4의24바이트32슬롯이 각각약20,293건 있다. Group3용0x400..0x41D24바이트 뱅크는 이 bus에 없다. 다른 bus의 같은 주소/다른 길이를 Group3로 취급하지 않는다. Group2 상태 전달은 별도 스키마/소비자까지 검토한다. |
+| 레이더 상태/identity 개선 후보 | 실제19시 bus1에는 0x3A5..0x3C4의24바이트32슬롯이 각각약20,293건 있다. 이는주소/길이관측이며최신Group2 payload레이아웃일치의증거는아니다. Group3용0x400..0x41D24바이트 뱅크는 이 bus에 없다. 다른 bus의 같은 주소/다른 길이를 Group3로 취급하지 않는다. 상태 전달은 별도 스키마/소비자까지 검토한다. |
 | CAN steering-touch/DM fallback | 이14구간의0x2AF는 관측되지 않았다. 기존 DBC의 주소만으로 터치 프로파일을 인정하지 않는다. 새 parser raw-cache, CRC helper, schema와 모니터 소비자가 필요하다. 운전자 카메라 부재만으로 원본의 interaction fallback을 불가능하다고 단정하지 않는다. |
 | 정지 준비/감속 유지/재시도 | ESP_STATUS의기존AUTO_HOLD bit는0이89,507건,1이12,060건이며CRC-valid101,567건이다. 이 분포는AVH_Sta/AVH_LAMP enum이나실제hold권한을증명하지 않는다. 실제정지interlock 정의를 검증하기 전 원본의감속/재시도 상태를 이식했다고 주장하지 않는다. |
 | steering_handover | 기존mode0/각도목표/운전자override/native토크상한을 유지해야 한다. source의capture/회복과실제native상한을같은입력으로대조하며 옵션을강제로0에묶거나권한을완화하는것을완료로판단하지 않는다. |

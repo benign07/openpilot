@@ -65,6 +65,11 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
       self.assertEqual(message.sigs['COUNTER'].type, 0)
       self.assertEqual(set(message.sigs), set(controller.packer.dbc.name_to_msg[name].sigs))
     self.assertIn('RAW_UNMAPPED_79', parser.dbc.name_to_msg['LFA'].sigs)
+    pt_parser = CarState.get_can_parsers_canfd(None, cp)[Bus.pt]
+    for name in ('MDPS', 'TCS'):
+      message = pt_parser.dbc.name_to_msg[name]
+      self.assertIsNotNone(message.sigs['CHECKSUM'].calc_checksum)
+      self.assertEqual(message.sigs['COUNTER'].type, 0)
 
   def test_actual_hud_schema_serializes_nearest_valid_display_lead(self):
     from openpilot.selfdrive.carrot.tests.test_lx3_hud_lead import TestLx3HudLead
