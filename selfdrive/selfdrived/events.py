@@ -753,6 +753,16 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOWEST, VisualAlert.none, AudibleAlert.none, .1, creation_delay=.3),
   },
 
+  EventName.lx3InputNotReady: {
+    ET.NO_ENTRY: NoEntryAlert("핸들 버튼 입력 준비 중"),
+    ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("핸들 버튼 입력 준비 중"),
+  },
+
+  EventName.lx3InputFault: {
+    ET.NO_ENTRY: NoEntryAlert("핸들 버튼 데이터 확인 필요"),
+    ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("핸들 버튼 데이터 확인 필요"),
+  },
+
   EventName.gasPressedOverride: {
     ET.OVERRIDE_LONGITUDINAL: Alert(
       "",

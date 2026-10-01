@@ -14,9 +14,12 @@ class Lx3ButtonInput:
     self.counter = None
     self.received_ns = 0
     self.last_observed_ns = 0
+    self.first_check_ns = None
     self.samples = 0
     self.ready = False
     self.reason = 'missing'
+    self.integrity_reason = None
+    self.requalifying = False
     self.cruise = 0
     self.lfa = False
 
@@ -24,6 +27,10 @@ class Lx3ButtonInput:
     self.ready = False
     self.samples = 0
     self.reason = reason
+    if reason == 'cancel':
+      self.requalifying = True
+    elif reason not in ('missing', 'warming_up', 'neutral_required') and self.integrity_reason is None:
+      self.integrity_reason = reason
     self.cruise = 0
     self.lfa = False
     return False
@@ -60,15 +67,33 @@ class Lx3ButtonInput:
       if cruise != 0 or lfa:
         return self.reject('neutral_required')
       self.ready = self.samples >= 3
+    if self.ready:
+      self.integrity_reason = None
+      self.requalifying = False
     self.reason = 'valid' if self.ready else 'warming_up'
     self.cruise, self.lfa = (cruise, lfa) if self.ready else (0, False)
     return self.ready
 
+  @property
+  def state(self):
+    if self.ready:
+      return 'ready'
+    if self.integrity_reason is not None:
+      return 'integrityFault'
+    return 'requalifying' if self.requalifying else 'warmingUp'
+
+  @property
+  def diagnostic_reason(self):
+    return self.integrity_reason or self.reason
+
   def fresh(self, now_ns):
+    if self.first_check_ns is None:
+      self.first_check_ns = now_ns
+    last_ns = self.received_ns if self.counter is not None else self.first_check_ns
+    if not 0 <= now_ns - last_ns <= self.TIMEOUT_NS:
+      return self.reject('stale')
     if not self.ready:
       return False  # Preserve neutral warmup progress between host update ticks.
-    if not 0 <= now_ns - self.received_ns <= self.TIMEOUT_NS:
-      return self.reject('stale')
     return True
 
 
@@ -101,7 +126,9 @@ class Lx3ButtonIntent:
       return []
     if raw == 4:
       self.reset_gesture()
-      self.button = 'cancel'
+      # Native cancellation revokes readiness and requires three new neutral
+      # frames. Do not turn a held/released cancel into a later enable gesture.
+      self.input.reject('cancel')
       return [('cancel', True)]  # Cancel wins over every simultaneous enable.
     events = []
     button = 'lfaButton' if lfa else self.NAMES.get(raw)
@@ -159,6 +186,6 @@ class Lx3ButtonIntent:
         events.extend(frame_events)
       if not self.input.ready:
         # Discard every potential enable after a later invalid frame, but keep
-        # an earlier CRC-valid explicit cancel. Not-ready also faults the host.
+        # an earlier CRC-valid explicit cancel. Input health is a separate gate.
         events[:] = [event for event in events if event[0] == 'cancel']
     return events, self.fresh(parser._last_update_nanos)

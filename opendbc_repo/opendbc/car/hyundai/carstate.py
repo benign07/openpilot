@@ -813,7 +813,10 @@ class CarState(CarStateBase):
       ret.buttonEvents = [structs.CarState.ButtonEvent(type=getattr(ButtonType, name), pressed=pressed,
                                                      lx3PhysicalCounter=counter, lx3PhysicalValid=True)
                           for name, pressed, counter in events]
-      ret.steerFaultTemporary |= not ready
+      ret.lx3InputState = intent.input.state
+      ret.lx3InputReason = intent.input.diagnostic_reason
+      ret.lx3PhysicalCounter = intent.input.counter or 0
+      ret.lx3PhysicalCounterValid = ready and intent.input.counter is not None
 
     self.paddle_button_prev = paddle_button
 

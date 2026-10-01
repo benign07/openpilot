@@ -141,6 +141,8 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     audioLaneChange @121;
     audioTurn @122;
     lx3PermissionPending @123;
+    lx3InputNotReady @124;
+    lx3InputFault @125;
     trafficSignGreen @100;
     trafficSignChanged @101;
     turningLeft @102;

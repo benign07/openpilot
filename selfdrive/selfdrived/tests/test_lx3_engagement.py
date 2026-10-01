@@ -76,7 +76,8 @@ ENV = dict(Events=Events, ET=ET, State=State, DT_CTRL=.01, SOFT_DISABLE_TIME=3,
            EventName=NS(**{name: name for name in EVENT_TYPES}), EngagementMode=Mode,
            time=NS(monotonic=lambda: 0.0, monotonic_ns=lambda: 0),
            lx3_pandas_ready=pandas_ready, lx3_permission_sample=MODULE['lx3_permission_sample'],
-           lx3_permission_matches=MODULE['lx3_permission_matches'], car=NS(CarParams=NS(SteerControlType=NS(angle='angle'))))
+           lx3_permission_matches=MODULE['lx3_permission_matches'], lx3_input_ready=MODULE['lx3_input_ready'],
+           car=NS(CarParams=NS(SteerControlType=NS(angle='angle'))))
 load_definitions(ROOT / 'selfdrive/selfdrived/state.py', ENV, {'StateMachine'})
 load_definitions(ROOT / 'selfdrive/selfdrived/selfdrived.py', ENV, {'update_lx3_state'})
 
@@ -111,7 +112,8 @@ class TestLx3Session(unittest.TestCase):
                         safetyConfigs=[NS(safetyModel='hyundaiCanfd', safetyParam=LX3_SAFETY_PARAM)]),
                   sm=SubMaster(pandaStates=[self.panda]), state_machine=ENV['StateMachine'](), enabled=False, active=False)
     self.ctx.sm.logMonoTime = {'pandaStates': 1_000_000_000}
-    self.cs = NS(canValid=True, steerFaultTemporary=False, steerFaultPermanent=False, buttonEvents=[])
+    self.cs = NS(canValid=True, steerFaultTemporary=False, steerFaultPermanent=False, buttonEvents=[],
+                 lx3InputState='ready', lx3PhysicalCounterValid=True, lx3PhysicalCounter=0)
     self.refresh_panda = True
 
   def step(self, *buttons, events=()):
@@ -161,6 +163,61 @@ class TestLx3Session(unittest.TestCase):
     self.assertEqual(self.ctx.state_machine.state, State.enabled)
     self.assertFalse(self.ctx.lx3_engagement.ack_valid)
     self.assertEqual(self.ctx.lx3_engagement.ack_generation, 0)
+
+  def test_input_health_blocks_entry_independently_of_healthy_eps(self):
+    for state, valid in (('notApplicable', False), ('warmingUp', False), ('requalifying', False),
+                         ('integrityFault', False), ('ready', False)):
+      with self.subTest(state=state, valid=valid):
+        self.setUp()
+        self.cs.lx3InputState, self.cs.lx3PhysicalCounterValid = state, valid
+        self.assertEqual(self.engage(), (False, False))
+        self.assertFalse(self.ctx.enabled)
+        self.assertIn('lx3InputFault' if state == 'integrityFault' else 'lx3InputNotReady', self.ctx.events.events)
+        self.assertNotIn('steerUnavailable', self.ctx.events.events)
+        self.assertFalse(self.ctx.lx3_engagement.ack_valid and self.ctx.lx3_engagement.ack_mode != Mode.OFF)
+
+  def test_old_carstate_producer_cannot_enable(self):
+    del self.cs.lx3InputState
+    del self.cs.lx3PhysicalCounterValid
+    self.assertEqual(self.engage(), (False, False))
+    self.assertIn('lx3InputNotReady', self.ctx.events.events)
+
+  def test_physical_cancel_uses_normal_cancel_alert_during_requalification(self):
+    self.assertEqual(self.engage(), (True, False))
+    self.cs.lx3InputState, self.cs.lx3PhysicalCounterValid = 'requalifying', False
+    self.assertEqual(self.step(button('cancel', pressed=True)), (False, False))
+    self.assertEqual(self.ctx.state_machine.current_alert_types, [ET.PERMANENT, ET.USER_DISABLE])
+    self.assertIn('buttonCancel', self.ctx.events.events)
+    self.assertNotIn('steerUnavailable', self.ctx.events.events)
+
+  def test_input_loss_disables_active_and_recovery_does_not_reengage(self):
+    self.assertEqual(self.engage(), (True, False))
+    self.cs.lx3InputState, self.cs.lx3PhysicalCounterValid = 'integrityFault', False
+    self.assertEqual(self.step(), (False, False))
+    self.assertFalse(self.ctx.enabled)
+    self.assertIn(ET.IMMEDIATE_DISABLE, self.ctx.state_machine.current_alert_types)
+    self.assertNotIn('steerUnavailable', self.ctx.events.events)
+    self.cs.lx3InputState, self.cs.lx3PhysicalCounterValid = 'ready', True
+    self.assertEqual(self.step(), (False, False))
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+
+  def test_input_loss_revokes_pending_ack_and_cannot_renew_on_recovery(self):
+    self.pending()
+    self.step(button('lfaButton'))
+    self.assertTrue(self.ctx.lx3_engagement.ack_valid)
+    self.cs.lx3InputState, self.cs.lx3PhysicalCounterValid = 'requalifying', False
+    self.step()
+    self.assertFalse(self.ctx.enabled)
+    self.assertEqual(self.ctx.lx3_engagement.ack_mode, Mode.OFF)
+    self.cs.lx3InputState, self.cs.lx3PhysicalCounterValid = 'ready', True
+    self.assertEqual(self.step(), (False, False))
+    self.assertEqual(self.ctx.lx3_engagement.ack_mode, Mode.OFF)
+
+  def test_genuine_eps_fault_retains_existing_alert_and_denies_entry(self):
+    self.cs.steerFaultTemporary = True
+    self.assertEqual(self.engage(), (False, False))
+    self.assertIn('steerUnavailable', self.ctx.events.events)
+    self.assertNotIn('lx3InputFault', self.ctx.events.events)
 
   def test_idle_without_permission_is_not_mismatch(self):
     self.assertEqual(self.step(), (False, False))

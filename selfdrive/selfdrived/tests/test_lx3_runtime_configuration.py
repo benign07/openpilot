@@ -12,6 +12,8 @@ from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.carcontroller import CarController
 from opendbc.car.hyundai.values import CAR, DBC
 from opendbc.car import Bus
+from opendbc.car.hyundai.hyundaicanfd import hkg_can_fd_checksum
+from cereal import car
 
 
 class TestLx3RuntimeConfiguration(unittest.TestCase):
@@ -20,7 +22,7 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
     self.addCleanup(directory.cleanup)
     self.params = Params(directory.name)
     self.params.put_int('CanfdHDA2', 2)
-    for module in ('interface', 'hyundaicanfd', 'carcontroller'):
+    for module in ('interface', 'hyundaicanfd', 'carcontroller', 'carstate'):
       patcher = patch(f'opendbc.car.hyundai.{module}.Params', return_value=self.params)
       patcher.start()
       self.addCleanup(patcher.stop)
@@ -57,6 +59,38 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
       self.assertIsNotNone(message.sigs['CHECKSUM'].calc_checksum)
       self.assertTrue(any(s.startswith('RAW_UNMAPPED_') for s in message.sigs))
       self.assertEqual(set(message.sigs), set(controller.packer.dbc.name_to_msg[name].sigs))
+
+  def test_real_carstate_producer_serializes_input_health_without_eps_fault(self):
+    cp = self.configuration()
+    state = CarState(cp)
+    parsers = state.get_can_parsers_canfd(cp)
+    ns = 1_000_000_000
+    def frame(address, length, counter=0, raw=0):
+      data = bytearray(length)
+      data[2] = counter
+      if address == 0x10B:
+        data[10] = raw
+      data[:2] = hkg_can_fd_checksum(address, None, data).to_bytes(2, 'little')
+      return bytes(data)
+    schedule = ((0, 0, 'warmingUp'), (2, 0, 'warmingUp'), (4, 0, 'ready'),
+                (6, 4, 'requalifying'), (8, 0, 'requalifying'), (10, 1, 'requalifying'),
+                (12, 0, 'requalifying'), (14, 0, 'requalifying'), (16, 0, 'ready'))
+    for counter, raw, expected in schedule:
+      ns += 40_000_000
+      parsers[Bus.pt].update([[ns, [(0x10B, frame(0x10B, 16, counter, raw), 0),
+                                  (0xEA, frame(0xEA, 24), 0)]]])
+      parsers[Bus.cam].update([[ns, [(0x162, frame(0x162, 32), 2)]]])
+      result = state.update_canfd(parsers)
+      # Exercise the actual dataclass -> Capnp publisher conversion used by card.
+      message = car.CarState.new_message(**result.to_dict())
+      with car.CarState.from_bytes(message.to_bytes()) as reader:
+        self.assertEqual(str(reader.lx3InputState), expected)
+        self.assertEqual(reader.lx3PhysicalCounter, counter)
+        self.assertEqual(reader.lx3PhysicalCounterValid, expected == 'ready')
+        self.assertFalse(reader.steerFaultTemporary)
+        self.assertFalse(reader.steerFaultPermanent)
+        self.assertFalse(any(str(event.type) in ('mainCruise', 'lfaButton', 'accelCruise') and not event.pressed
+                             for event in reader.buttonEvents))
 
 
 if __name__ == '__main__':

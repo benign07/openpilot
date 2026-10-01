@@ -9,7 +9,7 @@ from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager
-from openpilot.selfdrive.selfdrived.lx3_engagement import Lx3Engagement, lx3_control_permissions
+from openpilot.selfdrive.selfdrived.lx3_engagement import Lx3Engagement, lx3_control_permissions, lx3_input_ready
 from openpilot.selfdrive.selfdrived.lx3_transport import stamp_control_identity, prepare_sendcan
 from openpilot.selfdrive.pandad import can_list_to_can_capnp
 from openpilot.common.params import Params
@@ -56,12 +56,15 @@ def main():
     publish_panda(); sm.update(100)
     time.sleep(1 / SERVICE_LIST['pandaStates'].frequency)
   assert sm.all_checks(['pandaStates']), (sm.alive, sm.valid, sm.freq_ok)
-  def step(button=None, counter=0, event=None, physical_valid=True, door=False):
+  def step(button=None, counter=0, event=None, physical_valid=True, door=False, input_state='ready', input_counter_valid=True):
     nonlocal previous_cs
     time.sleep(1 / SERVICE_LIST['pandaStates'].frequency)
     publish_panda()
     msg = messaging.new_message('carState', valid=True)
     msg.carState.canValid = True
+    msg.carState.lx3InputState = input_state
+    msg.carState.lx3PhysicalCounter = counter
+    msg.carState.lx3PhysicalCounterValid = input_counter_valid
     msg.carState.gearShifter = 'drive'
     msg.carState.vEgo = 15
     msg.carState.vCruise = 50
@@ -93,10 +96,11 @@ def main():
     assert ss.lx3AckTransportEpoch == context.lx3_engagement.ack_epoch
     assert ss.lx3AcceptedGeneration == context.lx3_engagement.accepted_generation
     assert ss.lx3AcceptedTransportEpoch == context.lx3_engagement.accepted_epoch
-    permission = lx3_control_permissions(ss.lx3EngagementMode, ss.enabled, ss.active, True, True, True)
+    ready = lx3_input_ready(sm['carState'])
+    permission = lx3_control_permissions(ss.lx3EngagementMode, ss.enabled, ss.active, ready, True, True)
     control = messaging.new_message('carControl', valid=True)
     control.carControl.latActive, control.carControl.longActive = permission
-    stamp_control_identity(control.carControl, ss, True)
+    stamp_control_identity(control.carControl, ss, ready)
     pm.send('carControl', control)
     received_control = messaging.recv_one(control_output)
     assert received_control is not None
@@ -133,8 +137,9 @@ def main():
   assert permission == (True, True) and not ss.lx3AckValid
   ss, permission = step(event=log.OnroadEvent.EventName.gasPressedOverride)
   assert permission == (True, True) and context.events.contains(ET.OVERRIDE_LONGITUDINAL)
-  ss, permission = step('cancel')
+  ss, permission = step('cancel', input_state='requalifying', input_counter_valid=False)
   assert permission == (False, False) and not ss.enabled
+  assert ss.alertType == 'buttonCancel/userDisable'
   panda.update(version=0)
   ss, permission = step('lfaButton', 44)
   assert permission == (False, False) and not ss.enabled and not ss.lx3AckValid
@@ -156,6 +161,29 @@ def main():
   assert log.OnroadEvent.EventName.doorOpen in context.events.events
   assert not ss.enabled and permission == (False, False)
   assert ss.lx3AckValid and ss.lx3AckMode == 0 and ss.lx3AckGeneration == 6
+  for generation, state, counter_valid in ((7, 'notApplicable', False), (8, 'warmingUp', False),
+                                           (9, 'requalifying', False), (10, 'integrityFault', False),
+                                           (11, 'ready', False)):
+    panda.update(requested=1, accepted=0, counter=52 + generation, generation=generation, phase=1, allowed=False)
+    ss, permission = step('lfaButton', 52 + generation, input_state=state, input_counter_valid=counter_valid)
+    assert not ss.enabled and permission == (False, False)
+    assert not (ss.lx3AckValid and ss.lx3AckMode != 0)
+    assert log.OnroadEvent.EventName.steerUnavailable not in context.events.events
+    expected = log.OnroadEvent.EventName.lx3InputFault if state == 'integrityFault' else log.OnroadEvent.EventName.lx3InputNotReady
+    assert expected in context.events.events
+  panda.update(requested=1, accepted=0, counter=80, generation=12, phase=1, allowed=False)
+  ss, permission = step('lfaButton', 80)
+  assert ss.enabled and not ss.active and ss.lx3AckMode == 1
+  panda.update(accepted=1, phase=2, allowed=True)
+  ss, permission = step()
+  assert ss.active and permission == (True, False)
+  ss, permission = step(input_state='integrityFault', input_counter_valid=False)
+  assert not ss.enabled and permission == (False, False)
+  assert context.events.contains(ET.IMMEDIATE_DISABLE)
+  assert log.OnroadEvent.EventName.steerUnavailable not in context.events.events
+  assert ss.alertText2 == '핸들 버튼 데이터 확인 필요'
+  ss, permission = step()
+  assert not ss.enabled and permission == (False, False)
   # Exercise the real pending Alert creation delay in30 normal10ms frames,
   # separately from this smoke's deliberately10Hz transport sample steps.
   alert_events, manager = Events(), AlertManager()

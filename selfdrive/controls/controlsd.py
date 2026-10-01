@@ -30,7 +30,7 @@ from selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.selfdrive.carrot.carrot_controls import CarrotControls
-from openpilot.selfdrive.selfdrived.lx3_engagement import lx3_control_permissions
+from openpilot.selfdrive.selfdrived.lx3_engagement import lx3_control_permissions, lx3_input_ready
 from openpilot.selfdrive.selfdrived.lx3_transport import stamp_control_identity
 
 State = log.SelfdriveState.OpenpilotState
@@ -130,9 +130,10 @@ class Controls:
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
     if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
       ss = self.sm['selfdriveState']
+      input_valid = self.sm.all_checks(['selfdriveState', 'carState', 'modelV2', 'onroadEvents']) and lx3_input_ready(CS)
       lateral, longitudinal = lx3_control_permissions(
         ss.lx3EngagementMode, ss.enabled, ss.active,
-        self.sm.all_checks(['selfdriveState', 'carState', 'modelV2', 'onroadEvents']), driving_gear,
+        input_valid, driving_gear,
         not CS.steerFaultTemporary and not CS.steerFaultPermanent)
       CC.latActive = self.carrot_controls.lat_suspend_control(CS, lateral and not standstill)
       # Existing CarController/Carrot consumers interpret CC.enabled as ACC
@@ -140,7 +141,7 @@ class Controls:
       CC.enabled = longitudinal
       CC.longActive = longitudinal and self.CP.openpilotLongitudinalControl and not any(
         e.overrideLongitudinal for e in self.sm['onroadEvents'])
-      stamp_control_identity(CC, ss, self.sm.all_checks(['selfdriveState', 'carState', 'modelV2', 'onroadEvents']))
+      stamp_control_identity(CC, ss, input_valid)
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state

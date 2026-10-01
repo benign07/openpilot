@@ -261,6 +261,21 @@ struct CarState {
   rightRearLatDist @80 :Float32; # rear-right corner radar lateral distance
   trailerConnected @81 :Bool; # trailer connection state after disconnect debounce
 
+  # LX3 physical button health is independent of EPS faults. Old producers
+  # default to notApplicable/invalid, which cannot grant guarded LX3 control.
+  lx3InputState @82 :Lx3InputState;
+  lx3PhysicalCounter @83 :UInt8;
+  lx3PhysicalCounterValid @84 :Bool;
+  lx3InputReason @85 :Text;
+
+  enum Lx3InputState {
+    notApplicable @0;
+    warmingUp @1;
+    ready @2;
+    requalifying @3;
+    integrityFault @4;
+  }
+
   struct Tpms {
     fl @0 :Float32;
     fr @1 :Float32;

@@ -77,6 +77,38 @@ class TestPhysicalInputs(unittest.TestCase):
     self.assertFalse(self.input.fresh(self.now + 200_000_001))
     self.assertFalse(self.input.ready)
 
+  def test_integrity_cause_survives_recovery_until_three_neutral_frames(self):
+    self.assertEqual(self.input.state, 'warmingUp')
+    self.warmup()
+    self.assertEqual(self.input.state, 'ready')
+    self.feed(0, corrupt=True)
+    self.assertEqual(self.input.state, 'integrityFault')
+    self.assertEqual(self.input.diagnostic_reason, 'checksum')
+    self.feed(2)  # Sequence jump after rejected CRC does not overwrite its cause.
+    self.assertEqual(self.input.diagnostic_reason, 'checksum')
+    self.feed(4, raw=128)
+    self.assertEqual(self.input.reason, 'neutral_required')
+    for c in (6, 8):
+      self.feed(c)
+      self.assertEqual(self.input.state, 'integrityFault')
+      self.assertEqual(self.input.diagnostic_reason, 'checksum')
+    self.feed(10)
+    self.assertEqual(self.input.state, 'ready')
+    self.assertEqual(self.input.diagnostic_reason, 'valid')
+
+  def test_dead_stream_is_a_fault_even_before_warmup_finishes(self):
+    self.assertFalse(self.input.fresh(self.now))
+    self.assertEqual(self.input.state, 'warmingUp')
+    self.assertFalse(self.input.fresh(self.now + 200_000_001))
+    self.assertEqual((self.input.state, self.input.diagnostic_reason), ('integrityFault', 'stale'))
+    self.input = Input()
+    self.feed(0)
+    self.assertFalse(self.input.fresh(self.now + 100_000_000))
+    self.assertEqual(self.input.samples, 1)
+    self.assertFalse(self.input.fresh(self.now + 200_000_001))
+    self.assertEqual(self.input.samples, 0)
+    self.assertEqual((self.input.state, self.input.diagnostic_reason), ('integrityFault', 'stale'))
+
 
 class TestPhysicalGestures(unittest.TestCase):
   def setUp(self):
@@ -152,8 +184,29 @@ class TestPhysicalGestures(unittest.TestCase):
   def test_cancel_over_simultaneous_lfa_and_pending_main(self):
     self.feed(8)
     self.assertEqual(self.feed(132), [('cancel', True)])
-    self.assertEqual(self.feed(), [('cancel', False)])
+    self.assertEqual(self.intent.input.state, 'requalifying')
+    self.assertEqual(self.feed(), [])
     for _ in range(10): self.assertEqual(self.feed(), [])
+
+  def test_cancel_requalification_blocks_short_res_then_allows_new_release(self):
+    self.assertEqual(self.feed(4), [('cancel', True)])
+    self.assertFalse(self.intent.input.ready)
+    self.assertEqual(self.feed(), [])
+    self.assertEqual(self.feed(1), [])
+    self.assertEqual(self.intent.input.state, 'requalifying')
+    for _ in range(2):
+      self.assertEqual(self.feed(), [])
+      self.assertFalse(self.intent.input.ready)
+    self.assertEqual(self.feed(), [])
+    self.assertTrue(self.intent.input.ready)
+    self.assertEqual(self.feed(1), [('accelCruise', True)])
+    self.assertEqual(self.feed(), [('accelCruise', False)])
+
+  def test_dead_stream_after_cancel_is_stale_instead_of_waiting_forever(self):
+    self.feed(4)
+    self.assertEqual(self.intent.input.state, 'requalifying')
+    self.assertFalse(self.intent.fresh(self.now + 200_000_001))
+    self.assertEqual((self.intent.input.state, self.intent.input.diagnostic_reason), ('integrityFault', 'stale'))
 
   def test_corrupt_release_cannot_enable_after_recovery(self):
     self.feed(128)

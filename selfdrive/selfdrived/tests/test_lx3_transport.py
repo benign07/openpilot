@@ -135,5 +135,31 @@ class TestEpochSession(unittest.TestCase):
     self.assertEqual(self.case.engage(), (False, False))
 
 
+class TestInputHealthSchema(unittest.TestCase):
+  def test_additive_carstate_defaults_and_enum_roundtrip_are_recorded(self):
+    import capnp
+    capnp.remove_import_hook()
+    from selfdrive.carrot.can_diagnostics.automatic_runtime import selected_fields, FIELDS
+    with tempfile.TemporaryDirectory() as directory:
+      destination = Path(directory)
+      shutil.copyfile(ROOT / 'opendbc_repo/opendbc/car/car.capnp', destination / 'car.capnp')
+      shutil.copytree(ROOT / 'opendbc_repo/opendbc/car/include', destination / 'include')
+      schema = capnp.SchemaParser().load(str(destination / 'car.capnp'))
+    old = schema.CarState.new_message(canValid=True)
+    self.assertEqual(str(old.lx3InputState), 'notApplicable')
+    self.assertFalse(old.lx3PhysicalCounterValid)
+    self.assertFalse(host.MODULE['lx3_input_ready'](old))
+    for state in ('notApplicable', 'warmingUp', 'ready', 'requalifying', 'integrityFault'):
+      msg = schema.CarState.new_message(lx3InputState=state, lx3PhysicalCounter=254,
+                                        lx3PhysicalCounterValid=state == 'ready', lx3InputReason='checksum')
+      with schema.CarState.from_bytes(msg.to_bytes()) as parsed:
+        sample = selected_fields(parsed, FIELDS['carState'])
+        self.assertEqual(sample['lx3InputState'], state)
+        self.assertEqual(sample['lx3PhysicalCounter'], 254)
+        self.assertEqual(sample['lx3InputReason'], 'checksum')
+        self.assertEqual(sample['lx3PhysicalCounterValid'], state == 'ready')
+        self.assertEqual(host.MODULE['lx3_input_ready'](parsed), state == 'ready')
+
+
 if __name__ == '__main__':
   unittest.main()

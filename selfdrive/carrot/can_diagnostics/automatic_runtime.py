@@ -11,7 +11,8 @@ FIELDS = {
   'carState': ('vEgo', 'aEgo', 'standstill', 'gearShifter', 'canValid', 'canTimeout', 'brakePressed',
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'seatbeltUnlatched',
-               'steerFaultTemporary', 'steerFaultPermanent', 'latEnabled', 'buttonEvents', 'datetime'),
+               'steerFaultTemporary', 'steerFaultPermanent', 'latEnabled', 'buttonEvents', 'datetime',
+               'lx3InputState', 'lx3InputReason', 'lx3PhysicalCounter', 'lx3PhysicalCounterValid'),
   'carControl': ('enabled', 'latActive', 'longActive', 'actuators', 'lx3IdentityValid', 'lx3Generation',
                  'lx3PhysicalCounter', 'lx3Mode', 'lx3TransportEpoch'),
   'selfdriveState': ('enabled', 'active', 'state', 'lx3EngagementMode', 'lx3AckMode', 'lx3AckGeneration',
@@ -41,7 +42,7 @@ def selected_fields(reader, fields):
   result = {}
   for key in fields:
     value = getattr(reader, key, None)
-    if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'safetyModel') and value is not None:
+    if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'safetyModel', 'lx3InputState') and value is not None:
       value = str(value)
     elif key in ('speeds', 'accels') and value is not None:
       value = list(value)

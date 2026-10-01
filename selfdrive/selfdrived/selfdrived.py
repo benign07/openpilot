@@ -20,7 +20,8 @@ from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.lx3_engagement import (Lx3Engagement, EngagementMode, lx3_pandas_ready,
-                                                        lx3_disengage_on_gas, lx3_permission_sample, lx3_permission_matches)
+                                                        lx3_disengage_on_gas, lx3_permission_sample, lx3_permission_matches,
+                                                        lx3_input_ready)
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 from openpilot.selfdrive.controls.lib.latcontrol import MIN_LATERAL_CONTROL_SPEED
 
@@ -607,6 +608,9 @@ class SelfdriveD:
       candidate, requested = EngagementMode.OFF, True
     if CS.steerFaultTemporary or CS.steerFaultPermanent:
       self.events.add(EventName.steerUnavailable)
+    if not lx3_input_ready(CS):
+      self.events.add(EventName.lx3InputFault if str(getattr(CS, 'lx3InputState', 'notApplicable')) == 'integrityFault'
+                      else EventName.lx3InputNotReady)
 
     if candidate == EngagementMode.OFF:
       if requested or self.enabled:

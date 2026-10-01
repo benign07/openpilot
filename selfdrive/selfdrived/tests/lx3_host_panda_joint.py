@@ -81,6 +81,12 @@ def run_case(lib, spec):
     # companion has revoked the old host mode. No mismatched ACK may grant it.
     expected = 0 if (delay, batch, offset, order) == (30, 80, 0, 'host_first') else 2
   if scenario == 'cancel': buttons[640] = 4
+  if scenario == 'cancel_short_retry':
+    buttons.update({640: 4, 720: 1})
+    expected = 0
+  if scenario == 'cancel_qualified_retry':
+    buttons.update({640: 4, 800: 1})
+    expected = 2
   if scenario == 'quick_denied_retry': buttons.update({360: 128})
   if scenario == 'denied_then_retry': buttons.update({520: 128})
   if scenario == 'rapid_toggle': buttons.update({280: 128})
@@ -136,7 +142,9 @@ def run_case(lib, spec):
     for delivered, data in due:
       parser.raw_frames.append((0x10B, 0, data, 1_000_000_000 + delivered * 1_000_000))
     events, ready = intent.from_parser(parser, physical.checksum, with_counter=True)
-    case.cs.steerFaultTemporary = not ready
+    case.cs.lx3InputState = intent.input.state
+    case.cs.lx3PhysicalCounterValid = ready and intent.input.counter is not None
+    case.cs.lx3PhysicalCounter = intent.input.counter or 0
     case.now = 1 + ms / 1000
     host.ENV['time'] = NS(monotonic_ns=lambda: 1_000_000_000 + ms * 1_000_000)
     barriers = ()
@@ -262,7 +270,8 @@ def main():
   args = parser.parse_args()
   lib = library(args.library)
   specs = list(itertools.product((0, 30, 90), (0, 80), (0, 30, 90),
-                                 ('host_first', 'between', 'host_last'), ('lateral', 'combined', 'upgrade', 'cancel', 'brake')))
+                                 ('host_first', 'between', 'host_last'), ('lateral', 'combined', 'upgrade', 'cancel', 'brake',
+                                                                         'cancel_short_retry', 'cancel_qualified_retry')))
   # Denial/rapid-toggle deadlines require specified short CAN delivery latency;
   # long transport delays may intentionally reject or reinterpret a later
   # gesture, and are tested separately rather than assigned an invented mode.

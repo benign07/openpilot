@@ -174,3 +174,30 @@ DBC builder tests verify both the LX3 suppression and the default rewrite path.
 The later offline CI failure on57cffc8b was another two generic display-fixture
 loops attempting to re-register CCNC. Those fixtures now preserve the startup
 registration and continue testing all five CRC/header/unknown-bit round trips.
+
+PC candidate08ae5cc9 completed all five exact-commit CI jobs in run36818895063:
+full runtime/C++ schema build, relocated x86_64 lateral and longitudinal solver
+execution, real IPC smoke, actual C++/native transport, native UBSan/compatibility,
+H7 firmware build, and229 offline tests per Python3.11/3.12. ARM runtime on the
+device and OEM warning acceptance remain unverified.
+
+Further PC changes separate physical button readiness/integrity from EPS faults.
+CarState adds input state, retained integrity reason and per-tick physical
+counter/validity. Old/default producers read notApplicable/false and cannot grant
+guarded LX3 control. MDPS/CCNC faults retain their existing EPS barrier. Input
+loss has its own NO_ENTRY/IMMEDIATE_DISABLE event; controlsd denies both axes and
+identity immediately, and card independently removes all ten owned messages
+against its current input health. Neither path supplies an enable ACK on input
+loss. Other vehicles retain their original paths.
+
+Validated cancellation now matches native three-neutral requalification. A short
+RES attempt during this recovery cannot latch an enable or manufacture a release.
+The normal cancel alert takes priority, rather than reporting an EPS failure.
+Dead streams during startup/requalification are diagnosed as stale after200ms;
+integrity cause survives later neutral/warmup samples until full requalification.
+Local production Python tests232 and separate real schema serializer12 pass;
+actual C plus production host956 scheduling cases include cancel/short retry and
+qualified retry. Full build and real msgq/new-enum publishing must pass on this
+later exact commit before its CI is described as green. Old recorded LX3 logs
+have absent input fields and intentionally cannot grant in this new host path;
+raw CAN replay must regenerate input health, rather than infer it from defaults.

@@ -25,6 +25,12 @@ class EngagementMode(IntEnum):
   COMBINED = 2
 
 
+def lx3_input_ready(cs):
+  # Default/missing fields from an old producer must not enable the LX3 path.
+  return (str(getattr(cs, 'lx3InputState', 'notApplicable')) == 'ready' and
+          bool(getattr(cs, 'lx3PhysicalCounterValid', False)))
+
+
 class Lx3Engagement:
   def __init__(self):
     self.mode = EngagementMode.OFF
