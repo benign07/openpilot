@@ -1203,6 +1203,95 @@ static void angle_delivery_continuity_regressions(void) {
   puts("PASS: output FIFO, overflow, same-tick budget, OFF/OEM/gap boundaries and timer wrap");
 }
 
+static void mdps_receive_boundary_regressions(void) {
+  // Exercise the real outer RX dispatcher. Unlisted frame lengths may reach
+  // a mode RX hook, but must never replace a qualified LX3 driver sample.
+  for (int sign = -1; sign <= 1; sign += 2) {
+    reset(lx3_param());
+    CANPacket_t original = packet(0xEA, 0, 12);
+    const unsigned int encoded = (unsigned int)(4095 + sign * 450);
+    original.data[10] = encoded & 0xFFU;
+    original.data[11] = (encoded >> 8U) & 0x1FU;
+    for (unsigned int i = 0; i < 6U; i++) {
+      original.data[2] = (uint8_t)(20U + i);
+      hyundai_canfd_update_checksum(&original);
+      assert(safety_rx_hook(&original));
+    }
+    assert(!lx3_angle_context_valid(26));
+    const struct sample_t saved = torque_driver;
+    const uint32_t mdps_us = lx3_mdps_us;
+    // Start with 12 bytes: both torque bytes really exist on this wire shape,
+    // so the before-fix failure does not depend on memory beyond GET_LEN.
+    const unsigned int malformed_dlcs[] = {9U, 0U, 1U, 2U, 3U, 4U, 5U, 6U,
+                                          7U, 8U, 10U, 11U, 13U, 14U, 15U};
+    for (unsigned int j = 0U; j < sizeof(malformed_dlcs) / sizeof(malformed_dlcs[0]); j++) {
+      CANPacket_t malformed = packet(0xEA, 0, malformed_dlcs[j]);
+      malformed.data[10] = 0xFFU;  // Encodes zero driver torque, when read.
+      malformed.data[11] = 0x0FU;
+      for (unsigned int i = 0; i < 6U; i++) {
+        (void)safety_rx_hook(&malformed);
+      }
+      if (memcmp(&torque_driver, &saved, sizeof(saved)) != 0) {
+        fprintf(stderr, "MDPS boundary failure: len=%u driver_min=%d driver_max=%d context26=%d\n",
+                GET_LEN(&malformed), torque_driver.min, torque_driver.max, lx3_angle_context_valid(26));
+      }
+      assert(memcmp(&torque_driver, &saved, sizeof(saved)) == 0);
+      assert(lx3_mdps_us == mdps_us);
+      assert(!lx3_angle_context_valid(26));
+      if (GET_LEN(&malformed) >= 2U) {
+        // The wrong length is rejected even with a checksum correct for that
+        // length; this separately tests shape and CRC qualification.
+        hyundai_canfd_update_checksum(&malformed);
+        assert(hyundai_canfd_get_checksum(&malformed) == hyundai_common_canfd_compute_checksum(&malformed));
+        for (unsigned int i = 0; i < 6U; i++) {
+          (void)safety_rx_hook(&malformed);
+        }
+        assert(memcmp(&torque_driver, &saved, sizeof(saved)) == 0);
+        assert(lx3_mdps_us == mdps_us);
+        assert(!lx3_angle_context_valid(26));
+      }
+    }
+    // A CRC failure at the correct length is also rejected by the dispatcher.
+    CANPacket_t corrupt = original;
+    corrupt.data[10] ^= 1U;
+    assert(!safety_rx_hook(&corrupt));
+    assert(memcmp(&torque_driver, &saved, sizeof(saved)) == 0);
+    // The same local qualification protects direct-hook callers as well.
+    hyundai_canfd_rx_hook(&corrupt);
+    assert(memcmp(&torque_driver, &saved, sizeof(saved)) == 0);
+    assert(lx3_mdps_us == mdps_us);
+    set_timer(mdps_us + 50001U);
+    assert(!lx3_angle_context_valid(0));
+    CANPacket_t stale = packet(0xEA, 0, 9);
+    stale.data[10] = 0xFFU;
+    stale.data[11] = 0x0FU;
+    hyundai_canfd_update_checksum(&stale);
+    (void)safety_rx_hook(&stale);
+    assert(lx3_mdps_us == mdps_us && !lx3_angle_context_valid(0));
+    // Fresh, correctly shaped, CRC-valid originals can replace the sample.
+    original.data[10] = 0xFFU;
+    original.data[11] = 0x0FU;
+    set_timer(mdps_us + 60000U);
+    for (unsigned int i = 0; i < 6U; i++) {
+      original.data[2] = (uint8_t)(26U + i);
+      hyundai_canfd_update_checksum(&original);
+      assert(safety_rx_hook(&original));
+      assert(lx3_angle_context_valid(26) == (i == 5U));
+    }
+    assert(torque_driver.min == 0 && torque_driver.max == 0);
+    assert(lx3_mdps_us == mdps_us + 60000U);
+    assert(lx3_angle_context_valid(26));
+  }
+  // Preserve the explicitly non-LX3 Carrot receive behavior.
+  reset(190U);
+  CANPacket_t legacy = packet(0xEA, 0, 9);
+  legacy.data[10] = (4095U + 300U) & 0xFFU;
+  legacy.data[11] = ((4095U + 300U) >> 8U) & 0x1FU;
+  for (unsigned int i = 0; i < 6U; i++) (void)safety_rx_hook(&legacy);
+  assert(torque_driver.min == 300 && torque_driver.max == 300);
+  puts("PASS: LX3 driver torque ignores all malformed MDPS lengths and CRC errors, valid RX recovers");
+}
+
 int main(int argc, char **argv) {
   if (argc == 2 && strcmp(argv[1], "--release-audit") == 0) {
     release_audit(lx3_param());
@@ -1223,5 +1312,6 @@ int main(int argc, char **argv) {
   display_session_permission_regressions();
   angle_buffer_delivery_rate_regressions();
   angle_delivery_continuity_regressions();
+  mdps_receive_boundary_regressions();
   return 0;
 }

@@ -829,12 +829,16 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
 
   if (bus == pt_bus) {
     // driver torque
-    if (addr == 0xea) {
+    // Unknown frame lengths are not covered by the outer RX checksum table.
+    // Keep LX3 torque history and measured EPS context on the same qualified
+    // 24-byte original; malformed input cannot erase a driver override.
+    if ((addr == 0xea) && (!hyundai_canfd_lx3_guard ||
+        ((GET_LEN(to_push) == 24U) &&
+         (hyundai_canfd_get_checksum(to_push) == hyundai_common_canfd_compute_checksum(to_push))))) {
       int torque_driver_new = ((GET_BYTE(to_push, 11) & 0x1fU) << 8U) | GET_BYTE(to_push, 10);
       torque_driver_new -= 4095;
       update_sample(&torque_driver, torque_driver_new);
-      if (hyundai_canfd_lx3_guard && (GET_LEN(to_push) == 24U) &&
-          (hyundai_canfd_get_checksum(to_push) == hyundai_common_canfd_compute_checksum(to_push))) {
+      if (hyundai_canfd_lx3_guard) {
         // Host uses STEERING_ANGLE_2 with its DBC sign inverted: raw * +0.1 deg.
         lx3_measured_angle = to_signed(GET_BYTES(to_push, 16, 2), 16);
         lx3_mdps_fault = GET_BIT(to_push, 54U) || GET_BIT(to_push, 149U);

@@ -46,3 +46,29 @@ CHECKSUM 수신 시각을 갱신하는 1FAIL을 재현했다. 기존 LX3 패턴�
 유지하고 실제native수신counter/CRC검사를완화하지않는다. Native의
 주소/bus/24바이트일치RX검사는그검사대상범위에한정되며, 다른길이의
 0xEA를동일하게검사한다거나이코드리뷰로ECU응답을증명한다고하지않는다.
+
+## Native MDPS 길이 경계 수정
+
+실제 outer `safety_rx_hook`은 RX 표에 없는 길이도 mode hook으로 넘긴다.
+이때 기존 LX3 hook은 각도/고장/시각을 검증하나 driver torque는 먼저
+갱신했다. 정확43b1cb10 정책과 새 동일 C 검사로, 정상24바이트의
+운전자토크450 이력 뒤12바이트의중립토크6개가 min/max를0으로지워
+`lx3_angle_context_valid(26)`을true로만드는실패를재현했다.12바이트에는
+토크바이트10/11이실제로있어길이밖메모리를가정한실패가아니다.
+
+LX3 guard에서만 토크도 동일24바이트+CRC 조건 안에서 갱신한다.
+권한을 우회하거나 요청/ACK/토크상한을 완화하지 않는다. 다른차량의
+guardfalse 경로는그대로다. outerRX가unknown길이에true를반환하는
+공통정책전체를바꾼것이아니며 LX3 상태갱신만거부한다.
+
+양부호/15가지잘못된DLC, 그중CRC헤더를담을수있는13가지의자기길이
+CRC정상프레임, 정상길이불량CRC outer/direct hook,50ms초과시각,
+정상수신1..5개override유지/6번째복구, non-LX3기존토크수신 회귀가
+기존native검사와함께통과했다. Claude56의길이와CRC를독립검증하라는
+반론을반영했다. Linux undefined-behavior 검사와 H7 전체빌드는
+새정확commit CI에서별도확인해야한다.
+
+원본19시 bus0 MDPS101,563건과 bus2 MDPS680건은모두24바이트였다.
+이경계결함은실차에서관측한원인을확정한것이아니며OEMownership 및
+계기판경고 인과관계는여전히미해결이다. PC파일만사용했고실차CAN
+전송·설치·OTA는없다.
