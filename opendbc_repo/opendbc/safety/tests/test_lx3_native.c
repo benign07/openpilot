@@ -1292,7 +1292,165 @@ static void mdps_receive_boundary_regressions(void) {
   puts("PASS: LX3 driver torque ignores all malformed MDPS lengths and CRC errors, valid RX recovers");
 }
 
+static void physical_input_receive_boundary_regressions(unsigned int addr) {
+  reset(lx3_param());
+  physical_baseline();
+  const bool gas = addr == 0x105U;
+  const bool brake = addr == 0x175U;
+  const unsigned int expected_dlc = gas ? 13U : 12U;
+  CANPacket_t original = packet(addr, 0U, expected_dlc);
+  original.data[2] = 9U;
+  if (gas) original.data[13] = 1U;
+  else if (brake) original.data[10] = 2U;
+  else original.data[8] = 100U;
+  hyundai_canfd_update_checksum(&original);
+  assert(safety_rx_hook(&original));
+  assert(gas ? gas_pressed : (brake ? brake_pressed : vehicle_moving));
+  const struct sample_t speed = vehicle_speed;
+  const bool context = lx3_request_context_valid();
+  if (gas || brake) assert(!context);
+  // First use 16 bytes: the actual brake/pedal/wheel bytes fit in this shape.
+  const unsigned int bad_dlcs[] = {10U, 0U, 1U, 2U, 3U, 4U, 5U, 6U,
+                                  7U, 8U, 9U, 11U, 12U, 13U, 14U, 15U};
+  for (unsigned int j = 0U; j < sizeof(bad_dlcs) / sizeof(bad_dlcs[0]); j++) {
+    if (bad_dlcs[j] == expected_dlc) continue;
+    CANPacket_t malformed = packet(addr, 0U, bad_dlcs[j]);
+    if (GET_LEN(&malformed) >= 2U) hyundai_canfd_update_checksum(&malformed);
+    (void)safety_rx_hook(&malformed);
+    const bool retained = gas ? gas_pressed : (brake ? brake_pressed : vehicle_moving);
+    if (!retained) {
+      fprintf(stderr, "Physical input boundary failure: addr=%x len=%u context=%d\n",
+              addr, GET_LEN(&malformed), lx3_request_context_valid());
+    }
+    assert(retained);
+    assert(memcmp(&vehicle_speed, &speed, sizeof(speed)) == 0);
+    assert(lx3_request_context_valid() == context);
+  }
+  if (!gas) {
+    CANPacket_t corrupt = original;
+    if (brake) corrupt.data[10] = 0U;
+    else corrupt.data[8] = 0U;
+    assert(!safety_rx_hook(&corrupt));
+    hyundai_canfd_rx_hook(&corrupt);
+    assert(brake ? brake_pressed : vehicle_moving);
+    assert(memcmp(&vehicle_speed, &speed, sizeof(speed)) == 0);
+  }
+  // Correctly shaped input can release the pedal/brake or update real speed.
+  original.data[2] = 10U;
+  if (gas) original.data[13] = 0U;
+  else if (brake) original.data[10] = 0U;
+  else original.data[8] = 0U;
+  hyundai_canfd_update_checksum(&original);
+  if (gas) {
+    // Native Carrot deliberately ignores the hybrid0x105 checksum. Preserve
+    // that known policy; do not invent a new checksum requirement here.
+    original.data[0] ^= 1U;
+  }
+  assert(safety_rx_hook(&original));
+  assert(!(gas ? gas_pressed : (brake ? brake_pressed : vehicle_moving)));
+  const struct sample_t released_speed = vehicle_speed;
+  CANPacket_t spurious = packet(addr, 0U, 10U);
+  if (gas) spurious.data[13] = 1U;
+  else if (brake) spurious.data[10] = 2U;
+  else spurious.data[8] = 100U;
+  hyundai_canfd_update_checksum(&spurious);
+  (void)safety_rx_hook(&spurious);
+  assert(!(gas ? gas_pressed : (brake ? brake_pressed : vehicle_moving)));
+  assert(memcmp(&vehicle_speed, &released_speed, sizeof(released_speed)) == 0);
+  spurious.data_len_code = expected_dlc;
+  spurious.bus = 1U;  // The actual LX3 physical input is ECAN bus0.
+  hyundai_canfd_update_checksum(&spurious);
+  (void)safety_rx_hook(&spurious);
+  assert(!(gas ? gas_pressed : (brake ? brake_pressed : vehicle_moving)));
+  assert(memcmp(&vehicle_speed, &released_speed, sizeof(released_speed)) == 0);
+  printf("PASS: LX3 physical input%03x shape boundary, CRC policy and valid release\n", addr);
+}
+
+static void legacy_physical_input_receive_regressions(void) {
+  const unsigned int addresses[] = {0x105U, 0x175U, 0xA0U};
+  for (unsigned int i = 0U; i < sizeof(addresses) / sizeof(addresses[0]); i++) {
+    reset(190U);
+    CANPacket_t input = packet(addresses[i], 0U, 10U);
+    if (i == 0U) input.data[13] = 1U;
+    else if (i == 1U) input.data[10] = 2U;
+    else input.data[8] = 100U;
+    (void)safety_rx_hook(&input);
+    assert(i == 0U ? gas_pressed : (i == 1U ? brake_pressed : vehicle_moving));
+  }
+  puts("PASS: non-LX3 physical input receive behavior preserved");
+}
+
+static void refresh_physical_rx_except(unsigned int missing, uint8_t counter) {
+  for (int i = 0; i < current_safety_config.rx_checks_len; i++) {
+    RxCheck *check = &current_safety_config.rx_checks[i];
+    unsigned int index = check->status.msg_seen ? check->status.index : 0U;
+    if (!check->status.msg_seen && (check->msg[0].addr == 0x35)) index = 2U;  // Actual hybrid0x105.
+    const unsigned int addr = check->msg[index].addr;
+    if (addr == missing) continue;
+    unsigned int dlc = 0U;
+    while (dlc_to_len[dlc] != check->msg[index].len) { dlc++; assert(dlc < 16U); }
+    CANPacket_t input = packet(addr, (unsigned int)check->msg[index].bus, dlc);
+    hyundai_canfd_set_counter(&input, counter);
+    if (addr == 0xEAU) { input.data[10] = 0xFFU; input.data[11] = 0x0FU; }
+    hyundai_canfd_update_checksum(&input);
+    assert(safety_rx_hook(&input));
+  }
+  // A neutral physical stream maintains the existing button lease, without
+  // asking for a new session or creating any host ACK/control TX.
+  CANPacket_t neutral = packet(0x10B, 0U, 10U);
+  neutral.data[2] = (uint8_t)(lx3_button_counter + 2U);
+  hyundai_canfd_update_checksum(&neutral);
+  assert(safety_rx_hook(&neutral));
+}
+
+static void physical_input_health_timeout_regressions(void) {
+  const unsigned int addresses[] = {0x105U, 0x175U, 0xA0U};
+  for (unsigned int i = 0U; i < sizeof(addresses) / sizeof(addresses[0]); i++) {
+    reset(lx3_param());
+    physical_baseline();
+    set_timer(microsecond_timer_get() + 10000U);
+    refresh_physical_rx_except(0U, 1U);
+    safety_tick_current_safety_config();
+    assert(safety_config_valid() && !safety_rx_checks_invalid);
+    assert(lx3_button_ready);
+    // Isolated permission fixture solely to observe real tick revocation.
+    grant_controls();
+    const uint32_t start = microsecond_timer_get();
+    const int target = get_addr_check_index(&(CANPacket_t){.addr=addresses[i], .bus=0U,
+      .data_len_code=addresses[i] == 0x105U ? 13U : 12U}, current_safety_config.rx_checks, current_safety_config.rx_checks_len);
+    assert(target >= 0);
+    for (unsigned int step = 1U; step <= 101U; step++) {
+      set_timer(start + step * 10000U);
+      refresh_physical_rx_except(addresses[i], (uint8_t)(step + 1U));
+      CANPacket_t malformed = packet(addresses[i], 0U, 10U);
+      hyundai_canfd_update_checksum(&malformed);
+      (void)safety_rx_hook(&malformed);
+      assert(current_safety_config.rx_checks[target].status.last_timestamp == start);
+    }
+    assert(controls_allowed && !safety_rx_checks_invalid && lx3_mode == 2);
+    safety_tick_current_safety_config();
+    assert(current_safety_config.rx_checks[target].status.lagging);
+    assert(safety_rx_checks_invalid && !controls_allowed);
+    lx3_permission_maintenance();
+    assert(lx3_mode == 0);
+    for (unsigned int step = 102U; step <= 104U; step++) {
+      set_timer(start + step * 10000U);
+      refresh_physical_rx_except(0U, (uint8_t)(step + 1U));
+    }
+    safety_tick_current_safety_config();
+    assert(safety_config_valid() && !safety_rx_checks_invalid);
+    assert(!controls_allowed && lx3_mode == 0);  // Recovery never self-engages.
+  }
+  puts("PASS: malformed physical inputs cannot refresh RX health; tick revokes and fresh RX recovers without engagement");
+}
+
 int main(int argc, char **argv) {
+  if (argc == 2) {
+    if (strcmp(argv[1], "--physical-health") == 0) { physical_input_health_timeout_regressions(); return 0; }
+    if (strcmp(argv[1], "--gas-boundary") == 0) { physical_input_receive_boundary_regressions(0x105U); return 0; }
+    if (strcmp(argv[1], "--brake-boundary") == 0) { physical_input_receive_boundary_regressions(0x175U); return 0; }
+    if (strcmp(argv[1], "--speed-boundary") == 0) { physical_input_receive_boundary_regressions(0xA0U); return 0; }
+  }
   if (argc == 2 && strcmp(argv[1], "--release-audit") == 0) {
     release_audit(lx3_param());
     return blockers == 0U ? 0 : 1;
@@ -1313,5 +1471,10 @@ int main(int argc, char **argv) {
   angle_buffer_delivery_rate_regressions();
   angle_delivery_continuity_regressions();
   mdps_receive_boundary_regressions();
+  physical_input_receive_boundary_regressions(0x105U);
+  physical_input_receive_boundary_regressions(0x175U);
+  physical_input_receive_boundary_regressions(0xA0U);
+  legacy_physical_input_receive_regressions();
+  physical_input_health_timeout_regressions();
   return 0;
 }

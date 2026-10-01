@@ -72,3 +72,49 @@ CRC정상프레임, 정상길이불량CRC outer/direct hook,50ms초과시각,
 이경계결함은실차에서관측한원인을확정한것이아니며OEMownership 및
 계기판경고 인과관계는여전히미해결이다. PC파일만사용했고실차CAN
 전송·설치·OTA는없다.
+
+## 추가 물리 입력 길이 경계
+
+같은 outer RX 경계가0x105(가속),0x175(브레이크),0xA0(차속)에도
+남아 있었다. 정확aab 정책을 같은 새 C 검사로 각각 실행하면 정상
+입력 뒤16바이트 해제/정차 입력이상태를덮어썼다. 가속·브레이크는
+요청context까지false에서true로바뀌었고 차속은vehicle_moving 및
+vehicle_speed 이력이바뀌었다. LX3각도상한이차속기반이라는주장은
+하지않는다. 읽는각signal byte는첫실패의16바이트안에있다.
+
+LX3 전용 입력 helper로 각값을읽기전에기존 native RX표와같은
+길이·CRC조건을확인한다. MDPS의앞선조건을동일helper로정리했다.
+
+| 입력 | LX3 적용 조건 |
+| --- | --- |
+| MDPS/브레이크/차속 |24바이트 및 기존 CAN-FD CRC |
+| EV/ICE 가속 분기 |32바이트 및 기존 CAN-FD CRC; 이 분기로 LX3 미지원 조합을 지원했다고 주장하지 않는다 |
+| 실제 LX3 하이브리드0x105 |32바이트; 기존 ignore_checksum/ignore_counter 정책 유지 |
+
+0x105의CRC예외는기존정책이며해당차량의32바이트에CRC가없다는
+실차증명이아니다. 이를임의로새CRC필수조건으로바꾸지않는다.
+다른차량의guardfalse는즉시통과해기존수신동작을유지한다.
+버튼/ACK/nativecounter/권한상한/공통generic RX 판정은바꾸지않았다.
+
+각15wrongDLC에서pressed/moving이유지되고, 정상길이badCRC의
+outer/direct판독거부,정상해제,가짜pressed/moving,wrongbus,
+non-LX3기존수신 회귀가통과했다. 별도실제safety_tick검사는다른RX와
+중립물리스트림을갱신하면서한입력만wronglength로유지한다.
+원본timestamp는갱신되지않고1.01초후호출한tick에서해당입력lagging,
+RX무효/권한회수를확인했다. 이후정상RX로건강판정은회복하지만
+자동재인게이지하지않는다. 생산tick은1Hz이고기존lag기준은최소1초라
+실제즉시차단또는정확1.01초주기라고주장하지않는다.
+이timeout검사는이전정책과새정책모두에서통과하는기존기간상한
+회귀이며수정효과의증거는앞선세개의16바이트실패대조다.
+Claude59가첫중립스트림의동일시각입력과tick전권한단언누락을
+지적해첫refresh전10ms진행/button_ready유지와tick직전mode2·권한
+활성·RX정상단언을추가했다. 강제permission fixture가lease오류를
+가려통과하는것으로판정하지않는다.
+
+Claude58은생산분기의상호배타성/0x105예외/다른차호환을검토했고,
+tick와추적되지않은생산파일확인반론을반영했다. 이전정책의세별도
+실행은각첫16바이트단언에서중단됐으므로뒤하위검사도모두이전에서
+실패한것처럼표기하지않는다. 원본19시의gas50,781건은32바이트,
+brake50,782건과speed101,568건은24바이트였다. 이경계결함도당시
+계기판경고원인으로확정하지않는다. 새정확LinuxUBSan/H7/전체CI는
+커밋후별도검증하며차량설치·OTA는없다.

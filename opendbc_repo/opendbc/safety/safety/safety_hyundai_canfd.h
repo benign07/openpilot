@@ -814,6 +814,14 @@ static bool canfd_bfwd_reuse_last(CanfdBufferedFwd* st, CANPacket_t* pkt) {
 
 
 
+static bool lx3_physical_input_valid(const CANPacket_t *pkt, unsigned int expected_len, bool checksum) {
+  // Unknown lengths bypass the outer RX table. Qualify each LX3 physical
+  // state before reading it, without changing other vehicles or0x105's
+  // deliberately checksum-exempt hybrid policy.
+  return !hyundai_canfd_lx3_guard || ((GET_LEN(pkt) == expected_len) &&
+         (!checksum || (hyundai_canfd_get_checksum(pkt) == hyundai_common_canfd_compute_checksum(pkt))));
+}
+
 static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
   int bus = GET_BUS(to_push);
   int addr = GET_ADDR(to_push);
@@ -832,9 +840,7 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
     // Unknown frame lengths are not covered by the outer RX checksum table.
     // Keep LX3 torque history and measured EPS context on the same qualified
     // 24-byte original; malformed input cannot erase a driver override.
-    if ((addr == 0xea) && (!hyundai_canfd_lx3_guard ||
-        ((GET_LEN(to_push) == 24U) &&
-         (hyundai_canfd_get_checksum(to_push) == hyundai_common_canfd_compute_checksum(to_push))))) {
+    if ((addr == 0xea) && lx3_physical_input_valid(to_push, 24U, true)) {
       int torque_driver_new = ((GET_BYTE(to_push, 11) & 0x1fU) << 8U) | GET_BYTE(to_push, 10);
       torque_driver_new -= 4095;
       update_sample(&torque_driver, torque_driver_new);
@@ -868,22 +874,22 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
     }
 
     // gas press, different for EV, hybrid, and ICE models
-    if ((addr == 0x35) && hyundai_ev_gas_signal) {
+    if ((addr == 0x35) && hyundai_ev_gas_signal && lx3_physical_input_valid(to_push, 32U, true)) {
       gas_pressed = GET_BYTE(to_push, 5) != 0U;
-    } else if ((addr == 0x105) && hyundai_hybrid_gas_signal) {
+    } else if ((addr == 0x105) && hyundai_hybrid_gas_signal && lx3_physical_input_valid(to_push, 32U, false)) {
       gas_pressed = GET_BIT(to_push, 103U) || (GET_BYTE(to_push, 13) != 0U) || GET_BIT(to_push, 112U);
-    } else if ((addr == 0x100) && !hyundai_ev_gas_signal && !hyundai_hybrid_gas_signal) {
+    } else if ((addr == 0x100) && !hyundai_ev_gas_signal && !hyundai_hybrid_gas_signal && lx3_physical_input_valid(to_push, 32U, true)) {
       gas_pressed = GET_BIT(to_push, 176U);
     } else {
     }
 
     // brake press
-    if (addr == 0x175) {
+    if ((addr == 0x175) && lx3_physical_input_valid(to_push, 24U, true)) {
       brake_pressed = GET_BIT(to_push, 81U);
     }
 
     // vehicle moving
-    if (addr == 0xa0) {
+    if ((addr == 0xa0) && lx3_physical_input_valid(to_push, 24U, true)) {
       uint32_t fl = (GET_BYTES(to_push, 8, 2)) & 0x3FFFU;
       uint32_t fr = (GET_BYTES(to_push, 10, 2)) & 0x3FFFU;
       uint32_t rl = (GET_BYTES(to_push, 12, 2)) & 0x3FFFU;
