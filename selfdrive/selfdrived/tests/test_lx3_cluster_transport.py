@@ -15,6 +15,49 @@ Lx3ClusterTransport = runpy.run_path(str(ROOT / 'opendbc_repo/opendbc/car/hyunda
 
 
 class TestLx3ClusterTransport(unittest.TestCase):
+  def scc_warning_message(self, warning, guarded, enabled, stopping, override):
+    definitions(ROOT / 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py', self.env, {'create_acc_control_scc2'})
+    self.cs.scc_control = dict.fromkeys(self.packer.dbc.name_to_msg['SCC_CONTROL'].sigs, 0)
+    self.cs.scc_control.update(zip(('SysFailState', 'TakeOverReq', 'DriverAlert'), warning))
+    self.cs.scc_control['COUNTER'] = 19
+    self.cs.out.gasPressed, self.cs.out.vEgo, self.cs.out.aEgo = override, 20.0, -1.0
+    original = self.cs.scc_control.copy()
+    message = self.env['create_acc_control_scc2'](
+      self.env['CANPacker'](str(DBC_FILE)), self.can, enabled, -.9, -1., stopping, override, 80,
+      self.hud, NS(carrot_cruise=0, jerk_u=3., jerk_l=3.), self.cs, lx3_guard=guarded)
+    self.assertEqual(self.cs.scc_control, original)
+    return message[1]
+
+  def test_lx3_scc_preserves_original_fault_takeover_and_driver_alert_bits(self):
+    # Test every raw two-bit state, including reserved values, without guessing
+    # OEM meanings. Use the actual production builder, DBC and CAN packer.
+    import itertools
+    for warning in itertools.product(range(4), repeat=3):
+      for enabled, stopping, override in itertools.product((True, False), repeat=3):
+        raw = self.scc_warning_message(warning, True, enabled, stopping, override)
+        for name, expected in zip(('SysFailState', 'TakeOverReq', 'DriverAlert'), warning):
+          signal = self.packer.dbc.name_to_msg['SCC_CONTROL'].sigs[name]
+          self.assertEqual(self.env['get_raw_value'](raw, signal), expected,
+                           (name, warning, enabled, stopping, override))
+
+  def test_lx3_scc_each_original_warning_survives_active_request(self):
+    for index, name in enumerate(('SysFailState', 'TakeOverReq', 'DriverAlert')):
+      for value in (1, 2, 3):
+        with self.subTest(field=name, value=value):
+          warning = [0, 0, 0]
+          warning[index] = value
+          raw = self.scc_warning_message(warning, True, True, False, False)
+          signal = self.packer.dbc.name_to_msg['SCC_CONTROL'].sigs[name]
+          self.assertEqual(self.env['get_raw_value'](raw, signal), value)
+
+  def test_non_lx3_scc_retains_existing_warning_encoding(self):
+    import itertools
+    for warning in itertools.product(range(4), repeat=3):
+      raw = self.scc_warning_message(warning, False, True, False, False)
+      for name in ('SysFailState', 'TakeOverReq', 'DriverAlert'):
+        signal = self.packer.dbc.name_to_msg['SCC_CONTROL'].sigs[name]
+        self.assertEqual(self.env['get_raw_value'](raw, signal), 0)
+
   def setUp(self):
     self.errors = []
     self.env = dict(ENV, copy=copy, math=math,

@@ -1166,8 +1166,19 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
 
       if (use_buffered) {
         uint8_t counter = hyundai_canfd_get_counter(to_send);
+        // The host's SCC template can predate this camera publication. Keep
+        // LX3's SysFailState, TakeOverReq and DriverAlert from the CRC/length-
+        // qualified original, including when reusing a buffered OP command.
+        // Do not infer permission from these raw bits or change other cars.
+        const bool preserve_scc_warnings = hyundai_canfd_lx3_guard && (addr == 0x1A0);
+        const uint8_t scc_warning8 = preserve_scc_warnings ? (GET_BYTE(to_send, 8) & 0x03U) : 0U;
+        const uint8_t scc_warning9 = preserve_scc_warnings ? (GET_BYTE(to_send, 9) & 0x63U) : 0U;
 
         canfd_copy_packet(to_send, &buffered_pkt);
+        if (preserve_scc_warnings) {
+          to_send->data[8] = (to_send->data[8] & 0xFCU) | scc_warning8;
+          to_send->data[9] = (to_send->data[9] & 0x9CU) | scc_warning9;
+        }
         canfd_apply_counter_and_update_checksum(to_send, counter);
 
         if (hyundai_canfd_lx3_guard && (addr == 0xCB)) {

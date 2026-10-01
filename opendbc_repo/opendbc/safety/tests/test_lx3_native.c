@@ -1635,8 +1635,73 @@ static void hybrid_crc_receive_regressions(void) {
   puts("PASS: LX3 hybrid pedal CRC rejects corrupt press and release, revokes requests, and preserves header/legacy policy");
 }
 
+static void set_scc_warning_bits(CANPacket_t *pkt, unsigned int warning) {
+  pkt->data[8] = (pkt->data[8] & 0xFCU) | (warning & 3U);
+  pkt->data[9] = (pkt->data[9] & 0x9CU) | ((warning >> 2U) & 3U) | (((warning >> 4U) & 3U) << 5U);
+}
+
+static unsigned int get_scc_warning_bits(const CANPacket_t *pkt) {
+  return (pkt->data[8] & 3U) | ((pkt->data[9] & 3U) << 2U) | (((pkt->data[9] >> 5U) & 3U) << 4U);
+}
+
+static void latest_scc_warning_regressions(void) {
+  // Isolated forwarding/payload qualification, not a host/physical grant test.
+  for (unsigned int guarded = 0U; guarded < 2U; guarded++) {
+    for (unsigned int requested_warning = 0U; requested_warning < 64U; requested_warning++) {
+      for (unsigned int original_warning = 0U; original_warning < 64U; original_warning++) {
+        reset(guarded ? lx3_param() : 190U);
+        grant_controls();
+        CANPacket_t command = accel_command();
+        // Make the host request distinguishable from the stock zero-accel
+        // packet: passing originals through must not satisfy this regression.
+        set_accel(&command, -100, -100);
+        set_scc_warning_bits(&command, requested_warning);
+        assert(safety_tx_hook(&command));
+        for (unsigned int repeat = 0U; repeat < 2U; repeat++) {
+          // The second delivery uses the cached OP command but a NEW stock
+          // publication with opposite warning bits, exercising reuse too.
+          const unsigned int fresh_warning = repeat ? (63U - original_warning) : original_warning;
+          CANPacket_t stock = accel_command(); stock.bus = 2U;
+          set_scc_warning_bits(&stock, fresh_warning);
+          hyundai_canfd_set_counter(&stock, 37U + repeat);
+          hyundai_canfd_update_checksum(&stock);
+          assert(safety_fwd_hook(&stock) == 0);
+          const unsigned int expected = guarded ? fresh_warning : requested_warning;
+          if (get_scc_warning_bits(&stock) != expected) {
+            printf("SCC warning delivery failure guarded=%u queued=%u fresh=%u output=%u reuse=%u\n",
+                   guarded, requested_warning, fresh_warning, get_scc_warning_bits(&stock), repeat);
+            fflush(stdout);
+          }
+          assert(get_scc_warning_bits(&stock) == expected);
+          assert(stock.data[2] == 37U + repeat);
+          assert(hyundai_canfd_get_checksum(&stock) == hyundai_common_canfd_compute_checksum(&stock));
+          for (unsigned int i = 3U; i < 32U; i++) {
+            const unsigned int mask = (i == 8U) ? 0xFCU : ((i == 9U) ? 0x9CU : 0xFFU);
+            assert((stock.data[i] & mask) == (command.data[i] & mask));
+          }
+        }
+      }
+    }
+  }
+  reset(lx3_param()); grant_controls();
+  CANPacket_t command = accel_command(); assert(safety_tx_hook(&command));
+  CANPacket_t corrupt = accel_command(); corrupt.bus = 2U;
+  set_scc_warning_bits(&corrupt, 63U);
+  hyundai_canfd_update_checksum(&corrupt); corrupt.data[0] ^= 1U;
+  CANPacket_t before = corrupt;
+  CanfdBufferedFwd *queue = canfd_bfwd_find(0x1A0, 0);
+  assert(queue != NULL && queue->count == 1U);
+  assert(safety_fwd_hook(&corrupt) == 0);
+  assert(memcmp(corrupt.data, before.data, 32U) == 0 && queue->count == 1U);
+  hyundai_canfd_update_checksum(&corrupt);
+  assert(safety_fwd_hook(&corrupt) == 0);
+  assert(get_scc_warning_bits(&corrupt) == 63U && queue->count == 0U);
+  puts("PASS: latest valid original SCC warning bits survive queued/reused LX3 commands; 8192 pairs/16384 deliveries and legacy/CRC qualification");
+}
+
 int main(int argc, char **argv) {
   if (argc == 2) {
+    if (strcmp(argv[1], "--latest-scc-warning") == 0) { latest_scc_warning_regressions(); return 0; }
     if (strcmp(argv[1], "--hybrid-crc") == 0) { hybrid_crc_receive_regressions(); return 0; }
     if (strcmp(argv[1], "--rx-recovery-order") == 0) { rejected_rx_recovery_order_regression(); return 0; }
     if (strcmp(argv[1], "--rx-pending") == 0) { rejected_rx_pending_regressions(); return 0; }
@@ -1673,5 +1738,6 @@ int main(int argc, char **argv) {
   rejected_rx_pending_regressions();
   rejected_rx_recovery_order_regression();
   hybrid_crc_receive_regressions();
+  latest_scc_warning_regressions();
   return 0;
 }

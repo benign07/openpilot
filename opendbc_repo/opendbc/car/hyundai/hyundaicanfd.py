@@ -394,7 +394,11 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, g
   # Keep its matching HUD status too; a radar-selected CCNC display target
   # must not enable a different camera object or a no-object sentinel.
 
-  values["DriverAlert"] = 0   # 1: SCC Disengaged, 2: No SCC Engage condition, 3: SCC Disenganed when the vehicle stops
+  # Preserve the original camera's raw warning/request fields on LX3. An OP
+  # request must not rewrite an OEM fault or takeover request into "no fault".
+  # Other platforms retain their existing camera-SCC ownership contract.
+  if not lx3_guard:
+    values["DriverAlert"] = 0   # 1: SCC Disengaged, 2: No SCC Engage condition, 3: SCC Disenganed when the vehicle stops
 
   values["TARGET_DISTANCE"] = CS.out.vEgo * 1.0 + 4.0
 
@@ -404,10 +408,12 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, g
   if values["InfoDisplay"] != 5: #5: Front Car Departure Notice
     values["InfoDisplay"] = 4 if stopping and CS.out.aEgo > -0.3 else 0  # 1: SCC Mode, 2: Convention Cruise Mode, 3: Object disappered at low speed, 4: Available to resume acceleration control, 5: Front vehicle departure notice, 6: Reserved, 7: Invalid
 
-  values["TakeOverReq"] = 0    # 1: Takeover request, 2: Not used, 3: Error indicator , 이것이 켜지면 가속을 안하는듯함.
+  if not lx3_guard:
+    values["TakeOverReq"] = 0    # 1: Takeover request, 2: Not used, 3: Error indicator
   #values["NEW_SIGNAL_4"] = 9 if hud_control.leadVisible else 0
   # AccelLimitBandUpper, Lower
-  values["SysFailState"] = 0    # 1: Performance degredation, 2: system temporairy unavailble, 3: SCC Service required , 눈이 묻어 레이더오류시... 2가 됨. 이때 가속을 안함...
+  if not lx3_guard:
+    values["SysFailState"] = 0    # 1: Performance degradation, 2: temporarily unavailable, 3: SCC service required
 
   values["AccelLimitBandUpper"] = 0.0   # 이값이 1.26일때 가속을 안하는 증상이 보임..
   values["AccelLimitBandLower"] = 0.0
