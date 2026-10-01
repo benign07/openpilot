@@ -62,6 +62,24 @@ def run_case(lib, spec):
   if scenario == 'upgrade':
     buttons = {200: 128, 600: 8}
     expected = 2
+  if scenario in ('main_res_fast', 'main_set_fast', 'main_gap_fast', 'main_lfa_fast'):
+    next_button = {'main_res_fast': 1, 'main_set_fast': 2, 'main_gap_fast': 3, 'main_lfa_fast': 128}[scenario]
+    buttons = {200: 8, 360: next_button}
+    expected = 0 if scenario == 'main_lfa_fast' else 2
+  if scenario in ('res_set_direct', 'lfa_res_direct', 'res_main_direct'):
+    buttons = {200: 128 if scenario == 'lfa_res_direct' else 1,
+               240: 8 if scenario == 'res_main_direct' else (1 if scenario == 'lfa_res_direct' else 2)}
+    expected = 2
+  if scenario == 'combined_main_off_res':
+    # Hold RES across the OFF companion publication. A release delivered with
+    # the earlier OFF in one host batch is a separate fail-closed retry case.
+    buttons = {200: 8, 800: 8, **{ms: 1 for ms in range(960, 1200, 40)}}
+    expected = 2
+  if scenario == 'combined_main_off_res_short':
+    buttons = {200: 8, 800: 8, 960: 1}
+    # Golden OFF/RES identity race: delayed batched MAIN OFF arrives after the
+    # companion has revoked the old host mode. No mismatched ACK may grant it.
+    expected = 0 if (delay, batch, offset, order) == (30, 80, 0, 'host_first') else 2
   if scenario == 'cancel': buttons[640] = 4
   if scenario == 'quick_denied_retry': buttons.update({360: 128})
   if scenario == 'denied_then_retry': buttons.update({520: 128})
@@ -253,6 +271,12 @@ def main():
                                    'no_entry_before_ack', 'no_entry_after_ack')))
   specs.extend(itertools.product((0, 30, 90), (0, 80), (0, 30, 90),
                                   ('host_first', 'between', 'host_last'), ('angle_delivery_revoke',)))
+  specs.extend(itertools.product((0, 30, 90), (0, 80), (0, 30, 90),
+                                  ('host_first', 'between', 'host_last'),
+                                  ('main_res_fast', 'main_set_fast', 'main_gap_fast', 'main_lfa_fast',
+                                   'res_set_direct', 'lfa_res_direct', 'res_main_direct', 'combined_main_off_res')))
+  specs.extend([(0, 0, 0, 'host_first', 'combined_main_off_res_short'),
+                (30, 80, 0, 'host_first', 'combined_main_off_res_short')])
   results = [run_case(lib, spec) for spec in specs]
   total = Counter()
   for result in results: total.update(result['counts'])

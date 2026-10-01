@@ -87,3 +87,51 @@ readiness for driving. A missing planner must retain the engagement refusal.
 Vehicle software is not changed again during this collection/PC task. Any
 follow-up installation requires the completed candidate build and a fresh
 parked/inactive deployment opportunity. No new OTA release is published.
+
+# Additional PC review — 2026-10-01 afternoon
+
+All ten copied rlogs contain 67,682 carState samples, including 767 temporary
+steering-fault samples. A replay ordered by logMonoTime (logger subscriber file
+order is not time order) attributes 40 driving-period samples (22 and 18 in the
+two episodes) to ambiguous-gesture/neutral-requalification/warm-up. Another 12
+startup samples have sequence/warm-up contributions. No driving-period
+CCNC stale/fault or MDPS fault contribution appears in that replay. Exact card
+consumption batches are not recorded, so this is input/health attribution rather
+than an executable reproduction of the installed complete CarState process.
+
+All 727 startup samples are at 79.736–87.125 seconds; 715 have no raw-health or
+input contribution in the upfront-parser model. Raw healthy camera
+and MDPS data is already available. CarState previously read its optional
+`ccnc_0x162` display cache for health; that cache is populated only after
+ControlsReady and fingerprint-monitor count122. Missing that cache therefore
+reported a steering fault even with valid received camera health. The PC fix
+registers required CCNC health from parser creation and reads its live parsed
+values for the health check; the optional display cache and other vehicle paths
+retain their existing initialization. Missing/stale data and invalid CRC continue
+to deny health. The cache defect is reproduced independently; the installed
+cache's exact registration time has not been pinned from logs, so its attribution
+to all 715 samples remains an inference. This does not establish the cause of the
+OEM cluster warning.
+
+The gesture fix instead completes MAIN on a distinct supported physical button
+after a validated fully neutral frame, before processing the new press. It
+preserves MAIN's toggle and first-neutral counter, including OFF, and retains
+the 300ms debounce for MAIN/neutral flicker alone. An initial proposal to discard
+unfinished MAIN was rejected because it could lose OFF. Direct MAIN→other with
+no neutral and damaged/stale/ambiguous-bit input still revoke. The enum cannot
+prove that two mechanical buttons were pressed simultaneously.
+
+Host RES/SET/LFA release events now require fully neutral physical input, matching
+native; direct button changes no longer manufacture release identity. Replaying
+18,169 actual original button frames changes only four event frames in the two
+MAIN→RES episodes; the other gestures, including the slow MAIN→LFA cases, stay
+unchanged. Both ambiguous-gesture episodes disappear in the candidate input
+replay; observed installed carState/control logs are not rewritten.
+
+Local production-host/native tests cover the new gestures and transport batching.
+A very short MAIN OFF→RES retry delivered in a delayed batch can still be denied
+when native OFF precedes host consumption of MAIN; the mismatched counter/mode
+cannot grant. That availability limitation is retained explicitly in a golden
+schedule, not reported as a successful retry. A held RES release after the OFF
+publication has a separately tested new-generation request path. Fixed ARM
+runtime and actual vehicle/cluster qualification remain unproven.

@@ -513,7 +513,46 @@ static void physical_permission_regressions(void) {
   assert_rejected_without_side_effects(&angle);
   angle.data[3] = 0x10U;
   assert(safety_tx_hook(&angle));  // Host's inactive keepalive remains allowed.
-  puts("PASS: physical CRC/counter/gestures, LFA-only authority, cancel, held recovery, stale and zero-force active rejection");
+  // Real MAIN-neutral-RES input from route172 used to revoke a healthy stream.
+  // The neutral witness confirms MAIN's release; preserve its toggle identity.
+  for (unsigned int next = 1U; next <= 3U; next++) {
+    reset(lx3_param()); physical_baseline(); physical_button(8);
+    physical_button(0);
+    const uint8_t main_counter = lx3_button_counter;
+    physical_button(next);
+    assert(lx3_button_ready && lx3_pending && lx3_requested_mode == 2);
+    assert(lx3_request_counter == main_counter && !controls_allowed);
+    const uint16_t generation = lx3_request_generation;
+    physical_button(0);
+    assert(lx3_pending && lx3_request_generation == generation);
+    acknowledge_request(); assert(controls_allowed && lx3_mode == 2);
+  }
+  reset(lx3_param()); physical_baseline(); physical_button(8);
+  physical_button(0); physical_button(128);
+  assert(lx3_pending && lx3_requested_mode == 2 && lx3_button_ready);
+  physical_button(0);
+  assert(!controls_allowed && !lx3_pending && lx3_button_ready);
+
+  reset(lx3_param()); physical_baseline(); physical_button(1); physical_button(0);
+  acknowledge_request(); assert(controls_allowed && lx3_mode == 2);
+  physical_button(8); physical_button(0);
+  physical_button(1);
+  assert(!controls_allowed && !lx3_pending && lx3_button_ready);  // MAIN OFF is never discarded.
+  const uint16_t off_generation = lx3_request_generation;
+  physical_button(0);
+  assert(!controls_allowed && lx3_pending && lx3_request_generation != off_generation);
+  acknowledge_request(); assert(controls_allowed && lx3_mode == 2);  // New RES needs a new ACK.
+
+  reset(lx3_param()); physical_baseline(); physical_button(8); physical_button(1);
+  assert(!lx3_button_ready && !lx3_pending && !controls_allowed);
+  reset(lx3_param()); physical_baseline(); physical_button(8); physical_button(0);
+  physical_button(8); physical_button(1);
+  assert(!lx3_button_ready && !lx3_pending && !controls_allowed);
+  reset(lx3_param()); physical_baseline(); physical_button(1); physical_button(2);
+  assert(!lx3_pending && !controls_allowed);
+  physical_button(0);
+  assert(lx3_pending && lx3_request_counter == lx3_button_counter);
+  puts("PASS: physical CRC/counter/gestures, MAIN neutral witness, OFF priority, LFA-only authority, cancel, held recovery, stale and zero-force active rejection");
 }
 
 static uint16_t ack_value(unsigned int mode, bool enabled, uint8_t counter) {

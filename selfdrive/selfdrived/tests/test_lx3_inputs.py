@@ -108,6 +108,47 @@ class TestPhysicalGestures(unittest.TestCase):
     for _ in range(7): self.assertEqual(self.feed(), [])
     self.assertEqual(self.feed(), [('mainCruise', False)])
 
+  def test_main_neutral_then_new_button_confirms_release_in_physical_order(self):
+    for raw, name in ((1, 'accelCruise'), (2, 'decelCruise'), (3, 'gapAdjustCruise'), (128, 'lfaButton')):
+      with self.subTest(raw=raw):
+        self.setUp()
+        self.assertEqual(self.feed(8), [('mainCruise', True)])
+        self.assertEqual(self.feed(), [])
+        anchor = self.counter
+        self.assertEqual(self.feed(raw), [('mainCruise', False), (name, True)])
+        self.assertEqual(self.intent.main_release_counter, anchor)
+        self.assertTrue(self.intent.input.ready)
+        self.assertEqual(self.feed(), [(name, False)])
+
+  def test_direct_button_changes_do_not_manufacture_release(self):
+    for first, second, name in ((1, 2, 'decelCruise'), (128, 1, 'accelCruise'), (1, 8, 'mainCruise')):
+      with self.subTest(first=first, second=second):
+        self.setUp()
+        self.feed(first)
+        self.assertEqual(self.feed(second), [(name, True)])
+        if second != 8:
+          self.assertEqual(self.feed(), [(name, False)])
+
+  def test_main_without_neutral_or_with_damaged_witness_cannot_complete(self):
+    self.feed(8)
+    self.assertEqual(self.feed(1), [])
+    self.assertEqual(self.intent.input.reason, 'ambiguous_gesture')
+    self.setUp()
+    self.feed(8)
+    self.feed()
+    self.assertEqual(self.feed(1, corrupt=True), [])
+    self.feed()  # Counter recovery after the CRC-rejected frame is not warmup.
+    for _ in range(3): self.feed()
+    self.assertTrue(self.intent.input.ready)
+    self.assertEqual(self.feed(), [])
+
+  def test_new_main_clears_earlier_neutral_witness(self):
+    self.feed(8)
+    self.feed()
+    self.feed(8)
+    self.assertEqual(self.feed(1), [])
+    self.assertEqual(self.intent.input.reason, 'ambiguous_gesture')
+
   def test_cancel_over_simultaneous_lfa_and_pending_main(self):
     self.feed(8)
     self.assertEqual(self.feed(132), [('cancel', True)])
@@ -217,6 +258,15 @@ class TestPhysicalParser(unittest.TestCase):
     self.parser.update([[press[0], press[1] + press[1]]])
     self.assertEqual(self.intent.from_parser(self.parser, checksum, with_counter=True), ([], False))
 
+  def test_forced_main_release_keeps_each_counter_in_shared_batch(self):
+    self.warmup()
+    frames = [self.frame(8), self.frame(), self.frame(1), self.frame()]
+    self.parser.update([[frames[-1][0], [f for frame in frames for f in frame[1]]]])
+    events, ready = self.intent.from_parser(self.parser, checksum, with_counter=True)
+    self.assertTrue(ready)
+    self.assertEqual(events, [('mainCruise', True, 0), ('mainCruise', False, 2),
+                              ('accelCruise', True, 4), ('accelCruise', False, 6)])
+
   def test_bad_frame_after_release_clears_batch_enable(self):
     self.warmup()
     events, ready = self.feed(self.frame(128), self.frame(), self.frame(corrupt=True))
@@ -244,6 +294,60 @@ class TestPhysicalParser(unittest.TestCase):
     self.parser.raw_capture = {0x10B}
     self.feed(self.frame(128, bus=130))
     self.assertFalse(self.parser.raw_frames)
+
+
+class TestCameraHealthStartup(unittest.TestCase):
+  def setUp(self):
+    from types import SimpleNamespace as NS
+    clock = runpy.run_path(str(ROOT / 'selfdrive/carrot/tests/test_lx3_can_time.py'))
+    self.env = clock['ENV']
+    self.parser = self.env['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[2]
+    self.fault = runpy.run_path(str(ROOT / 'opendbc_repo/opendbc/car/hyundai/lx3_state.py'))['lateral_fault']
+    self.now = 1_000_000_000
+
+  def feed(self, fault_bit=None, corrupt=False, bus=2):
+    self.now += 50_000_000
+    data = bytearray(32)
+    if fault_bit is not None:
+      data[fault_bit // 8] |= 1 << (fault_bit % 8)
+    data[:2] = checksum(0x162, None, data).to_bytes(2, 'little')
+    if corrupt:
+      data[0] ^= 1
+    self.parser.update([[self.now, [(0x162, bytes(data), bus)]]])
+
+  def current_fault(self, now=None):
+    return self.fault(self.parser.vl['CCNC_0x162'],
+                      self.parser.ts_nanos['CCNC_0x162']['FAULT_LSS'], self.now if now is None else now)
+
+  def test_fresh_health_is_available_before_controls_ready_and_display_cache(self):
+    self.assertFalse(self.parser.controls_ready)
+    self.assertIn(0x162, self.parser.addresses)
+    self.assertTrue(self.current_fault())  # Missing data never implies health.
+    self.feed()
+    self.assertFalse(self.current_fault())
+    self.assertFalse(self.parser.controls_ready)
+    self.assertTrue(self.current_fault(self.now + 250_000_001))
+
+  def test_fault_and_crc_rejection_preserve_entry_barrier(self):
+    bit = self.parser.dbc.name_to_msg['CCNC_0x162'].sigs['FAULT_LSS'].lsb
+    self.feed(fault_bit=bit)
+    self.assertTrue(self.current_fault())
+    stamp = self.parser.ts_nanos['CCNC_0x162']['FAULT_LSS']
+    self.feed(corrupt=True)
+    self.assertEqual(self.parser.ts_nanos['CCNC_0x162']['FAULT_LSS'], stamp)
+    self.assertTrue(self.current_fault())
+    self.feed()
+    self.assertFalse(self.current_fault())
+
+  def test_forwarded_echo_does_not_establish_camera_health(self):
+    self.feed(bus=130)
+    self.assertTrue(self.current_fault())
+    self.feed()
+    stamp = self.parser.ts_nanos['CCNC_0x162']['FAULT_LSS']
+    for _ in range(6):
+      self.feed(corrupt=True)
+    self.assertEqual(self.parser.ts_nanos['CCNC_0x162']['FAULT_LSS'], stamp)
+    self.assertTrue(self.current_fault())
 
 
 if __name__ == '__main__':

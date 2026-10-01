@@ -36,6 +36,7 @@ static uint8_t lx3_button_counter = 0U;
 static uint32_t lx3_button_us = 0U;
 static unsigned int lx3_neutral_samples = 0U;
 static bool lx3_main_held = false;
+static bool lx3_main_neutral_seen = false;
 static uint32_t lx3_main_us = 0U;
 static uint8_t lx3_main_release_counter = 0U;
 static int lx3_button_prev = 0;
@@ -570,6 +571,7 @@ static void lx3_revoke_permission(void) {
   lx3_button_ready = false;
   lx3_neutral_samples = 0U;
   lx3_main_held = false;
+  lx3_main_neutral_seen = false;
   lx3_button_prev = 0;
   canfd_bfwd_revoke_actuators();
 }
@@ -707,15 +709,24 @@ static void lx3_physical_buttons_rx(const CANPacket_t *pkt) {
   const int button = lfa ? 16 : raw;
   if (raw == 8) {
     lx3_main_held = true;
+    lx3_main_neutral_seen = false;
     lx3_main_us = now;
     // Stable byte identity independent of USB batching and the 300ms decision.
     lx3_main_release_counter = (uint8_t)(counter + 2U);
-  } else if (lx3_main_held && (button != 0)) {
-    lx3_revoke_permission();
-    return;
-  } else if (lx3_main_held && (now - lx3_main_us >= 300000U)) {
-    lx3_main_held = false;
-    lx3_request_mode((lx3_pending || (controls_allowed && (lx3_mode == 2))) ? 0 : 2, lx3_main_release_counter);
+  } else if (lx3_main_held) {
+    if (button == 0) lx3_main_neutral_seen = true;
+    if ((button != 0) && !lx3_main_neutral_seen) {
+      lx3_revoke_permission();
+      return;
+    }
+    // A valid neutral followed by a distinct physical button confirms MAIN's
+    // release. Preserve its OFF/COMBINED toggle before the subsequent gesture;
+    // MAIN/neutral flicker alone still requires the existing debounce interval.
+    if ((button != 0) || (now - lx3_main_us >= 300000U)) {
+      lx3_main_held = false;
+      lx3_main_neutral_seen = false;
+      lx3_request_mode((lx3_pending || (controls_allowed && (lx3_mode == 2))) ? 0 : 2, lx3_main_release_counter);
+    }
   }
   if ((button == 0) && (lx3_button_prev == 16)) {
     lx3_request_mode((lx3_pending || controls_allowed) ? 0 : 1, counter);
@@ -1189,6 +1200,7 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   lx3_button_us = 0U;
   lx3_neutral_samples = 0U;
   lx3_main_held = false;
+  lx3_main_neutral_seen = false;
   lx3_main_us = 0U;
   lx3_main_release_counter = 0U;
   lx3_button_prev = 0;

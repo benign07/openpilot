@@ -591,7 +591,10 @@ class CarState(CarStateBase):
     ret.steerFaultTemporary = cp.vl["MDPS"]["LKA_FAULT"] != 0 or cp.vl["MDPS"]["LFA2_FAULT"] != 0
     if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
       fault_ns = cp_cam.ts_nanos.get('CCNC_0x162', {}).get('FAULT_LSS', 0)
-      ret.steerFaultTemporary |= lx3_lateral_fault(self.ccnc_0x162, fault_ns, cp_cam._last_update_nanos)
+      # Health is required from startup. The optional display cache is populated
+      # later by monitor_fingerprint after ControlsReady and must not manufacture
+      # a steering fault while fresh, CRC-valid camera health is already present.
+      ret.steerFaultTemporary |= lx3_lateral_fault(cp_cam.vl['CCNC_0x162'], fault_ns, cp_cam._last_update_nanos)
     #ret.steerFaultTemporary = False
 
     blinkers_info = self.blinkers if self.blinkers is not None else self.blinkers_alt if self.blinkers_alt is not None else None
@@ -823,7 +826,8 @@ class CarState(CarStateBase):
       ]
 
     pt_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN)
-    cam_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM)
+    cam_msgs = [('CCNC_0x162', 20)] if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV else []
+    cam_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], cam_msgs, CanBus(CP).CAM)
     if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV:
       pt_parser.raw_capture = {0x10B}
       # The LX3 DBC filename does not opt into the generic checksum binding.

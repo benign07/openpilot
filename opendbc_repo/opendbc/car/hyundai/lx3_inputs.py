@@ -85,6 +85,7 @@ class Lx3ButtonIntent:
     self.main = False
     self.main_last_ns = 0
     self.main_release_counter = 0
+    self.main_neutral_seen = False
     self.button = None
 
   def update(self, addr, bus, data, received_ns, now_ns, checksum):
@@ -103,21 +104,32 @@ class Lx3ButtonIntent:
       self.button = 'cancel'
       return [('cancel', True)]  # Cancel wins over every simultaneous enable.
     events = []
+    button = 'lfaButton' if lfa else self.NAMES.get(raw)
     if raw == 8:
       if not self.main:
         events.append(('mainCruise', True))
       self.main, self.main_last_ns = True, received_ns
       self.main_release_counter = (self.input.counter + 2) % 256
-    elif self.main and raw == 0 and received_ns - self.main_last_ns >= self.MAIN_RELEASE_NS:
-      self.main = False
-      events.append(('mainCruise', False))
-    button = 'lfaButton' if lfa else self.NAMES.get(raw)
-    if self.main and button is not None:
-      self.input.reject('ambiguous_gesture')
-      self.reset_gesture()
-      return []
+      self.main_neutral_seen = False
+    elif self.main:
+      if raw == 0 and not lfa:
+        self.main_neutral_seen = True
+      if button is not None and not self.main_neutral_seen:
+        self.input.reject('ambiguous_gesture')
+        self.reset_gesture()
+        return []
+      # A different supported button after a real neutral frame confirms the
+      # earlier MAIN release. Preserve MAIN's toggle (including explicit OFF),
+      # then process the new gesture normally. Plain MAIN/neutral flicker keeps
+      # the existing 300ms debounce. No icon/host mode determines this evidence.
+      if button is not None or received_ns - self.main_last_ns >= self.MAIN_RELEASE_NS:
+        self.main = False
+        self.main_neutral_seen = False
+        events.append(('mainCruise', False))
     if button != self.button:
-      if self.button is not None:
+      # Native releases RES/SET/LFA only on fully neutral physical input.
+      # Direct B->C (or B->MAIN) discards B without manufacturing its release.
+      if self.button is not None and raw == 0 and not lfa:
         events.append((self.button, False))
       if button is not None:
         events.append((button, True))
