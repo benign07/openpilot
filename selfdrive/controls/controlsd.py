@@ -30,7 +30,7 @@ from selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.selfdrive.carrot.carrot_controls import CarrotControls
-from openpilot.selfdrive.selfdrived.lx3_engagement import lx3_control_permissions, lx3_input_ready
+from openpilot.selfdrive.selfdrived.lx3_engagement import lx3_control_permissions, lx3_control_inputs_valid
 from openpilot.selfdrive.selfdrived.lx3_transport import stamp_control_identity
 
 State = log.SelfdriveState.OpenpilotState
@@ -130,7 +130,7 @@ class Controls:
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
     if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
       ss = self.sm['selfdriveState']
-      input_valid = self.sm.all_checks(['selfdriveState', 'carState', 'modelV2', 'onroadEvents']) and lx3_input_ready(CS)
+      input_valid = lx3_control_inputs_valid(self.sm, CS)
       lateral, longitudinal = lx3_control_permissions(
         ss.lx3EngagementMode, ss.enabled, ss.active,
         input_valid, driving_gear,

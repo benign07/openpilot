@@ -27,11 +27,13 @@ class TestInputHealthConsumers(unittest.TestCase):
     branch = next(node for node in ast.walk(tree) if isinstance(node, ast.If) and
                   ast.unparse(node.test) == "self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV'")
     sm = host.SubMaster(selfdriveState=self.ss, onroadEvents=[])
+    sm.all_alive = sm.all_checks
+    sm.all_valid = sm.all_checks
     cc = NS()
     context = NS(CP=NS(carFingerprint='HYUNDAI_PALISADE_LX3_HEV', openpilotLongitudinalControl=True),
                  sm=sm, carrot_controls=NS(lat_suspend_control=lambda cs, active: active))
     env = dict(self=context, CC=cc, CS=self.cs, driving_gear=True, standstill=False,
-               lx3_input_ready=READY, lx3_control_permissions=host.permissions,
+               lx3_control_inputs_valid=host.MODULE['lx3_control_inputs_valid'], lx3_control_permissions=host.permissions,
                stamp_control_identity=TRANSPORT['stamp_control_identity'])
     exec(compile(ast.Module(body=[branch], type_ignores=[]), str(path), 'exec'), env)
     return cc

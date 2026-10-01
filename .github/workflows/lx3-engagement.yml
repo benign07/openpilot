@@ -72,6 +72,10 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: uv run --no-sync python -m unittest openpilot.selfdrive.selfdrived.tests.test_lx3_runtime_configuration -v
+      - name: LX3 event health using actual messaging
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run --no-sync python -m unittest openpilot.selfdrive.selfdrived.tests.test_lx3_event_health -v
       - name: Exact old CarState startup camera cache comparison
         env:
           PYTHONPATH: ${{ github.workspace }}

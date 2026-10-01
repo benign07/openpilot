@@ -31,6 +31,15 @@ def lx3_input_ready(cs):
           bool(getattr(cs, 'lx3PhysicalCounterValid', False)))
 
 
+def lx3_control_inputs_valid(sm, cs):
+  # onroadEvents is sent periodically AND immediately on event changes.
+  # A legitimate burst must not suspend both axes; missing/invalid events
+  # still block control, as do health failures of every periodic input.
+  return (sm.all_checks(['selfdriveState', 'carState', 'modelV2']) and
+          sm.all_alive(['onroadEvents']) and sm.all_valid(['onroadEvents']) and
+          lx3_input_ready(cs))
+
+
 class Lx3Engagement:
   def __init__(self):
     self.mode = EngagementMode.OFF
