@@ -94,6 +94,56 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
         self.assertFalse(any(str(event.type) in ('mainCruise', 'lfaButton', 'accelCruise') and not event.pressed
                              for event in reader.buttonEvents))
 
+  def test_required_camera_health_survives_optional_startup_discovery(self):
+    # Noon rlog had healthy raw CCNC while the old optional cache was None.
+    # Run the real monitor/update path, including count 122 cache assignment;
+    # no ControlsReady or unrelated missing parser can imply native authority.
+    cp = self.configuration()
+    state = CarState(cp)
+    parsers = state.get_can_parsers_canfd(cp)
+    ns = 1_000_000_000
+    counter = 0
+
+    def frame(address, length, corrupt=False):
+      data = bytearray(length)
+      if address == 0x10B:
+        data[2] = counter
+      data[:2] = hkg_can_fd_checksum(address, None, data).to_bytes(2, 'little')
+      if corrupt:
+        data[0] ^= 1
+      return bytes(data)
+
+    def tick(camera=True, corrupt=False):
+      nonlocal ns, counter
+      ns += 40_000_000
+      counter = (counter + 2) & 0xff
+      parsers[Bus.pt].update([[ns, [(0x10B, frame(0x10B, 16), 0),
+                                  (0xEA, frame(0xEA, 24), 0)]]])
+      parsers[Bus.cam].update([[ns, [(0x162, frame(0x162, 32, corrupt), 2)] if camera else []]])
+      return state.update(parsers)
+
+    self.params.put_bool('ControlsReady', False)
+    self.assertIsNone(state.ccnc_0x162)
+    self.assertTrue(tick(camera=False).steerFaultTemporary)
+    for _ in range(3):
+      result = tick()
+      self.assertFalse(result.steerFaultTemporary)
+      self.assertEqual(state.controls_ready_count, 0)
+    self.params.put_bool('ControlsReady', True)
+    for expected_count in range(1, 124):
+      result = tick()
+      self.assertFalse(result.steerFaultTemporary)
+      self.assertEqual(state.controls_ready_count, expected_count)
+    received = parsers[Bus.cam].ts_nanos['CCNC_0x162']['FAULT_LSS']
+    # Invalid CAN must never extend the last-good frame's health lifetime.
+    for _ in range(6):
+      self.assertFalse(tick(corrupt=True).steerFaultTemporary)
+      self.assertEqual(parsers[Bus.cam].ts_nanos['CCNC_0x162']['FAULT_LSS'], received)
+    self.assertTrue(tick(corrupt=True).steerFaultTemporary)
+    self.assertIsNone(state.ccnc_0x162)
+    self.assertFalse(tick().steerFaultTemporary)
+    self.assertIsNotNone(state.ccnc_0x162)
+
 
 if __name__ == '__main__':
   unittest.main()
