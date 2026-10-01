@@ -1618,13 +1618,17 @@ static void hybrid_crc_receive_regressions(void) {
   reset(lx3_param());
   assert(!current_safety_config.rx_checks[0].status.msg_seen);
   assert(!safety_rx_hook(&gas));
-#ifdef HYUNDAI_CANFD_LX3_PHYSICAL_RX_CHECKS
+#ifndef LX3_EXACT_6714_FIXTURE
   const uint16_t required_flags[] = {1024U, 16U, 8U, 4U, 2U};  // Guard/HDA2/camera/long/hybrid.
   for (unsigned int i = 0U; i < sizeof(required_flags) / sizeof(required_flags[0]); i++) {
     reset(lx3_param() & (uint16_t)~required_flags[i]);
     assert(!lx3_hybrid_crc_required);
     assert(current_safety_config.rx_checks != hyundai_canfd_lx3_rx_checks);
     assert(current_safety_config.rx_checks != hyundai_canfd_lx3_alt_buttons_rx_checks);
+    // Unsupported configurations need not arm the LX3 neutral detector.
+    for (unsigned int neutral = 0U; neutral < 3U; neutral++) physical_button(0U);
+    physical_button(128U); physical_button(0U);
+    assert(!lx3_pending);
   }
   reset(lx3_param()); assert(lx3_hybrid_crc_required);
 #endif
