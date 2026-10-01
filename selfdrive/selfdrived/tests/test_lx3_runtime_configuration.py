@@ -71,6 +71,12 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
       self.assertIsNotNone(message.sigs['CHECKSUM'].calc_checksum)
       self.assertEqual(message.sigs['COUNTER'].type, 0)
 
+    gas = pt_parser.dbc.name_to_msg['ACCELERATOR_ALT']
+    self.assertIsNotNone(gas.sigs['CHECKSUM'].calc_checksum)
+    self.assertNotIn('COUNTER', gas.sigs)
+    # Parser and packer share the cached DBC; CRC callback must remain RX-only.
+    self.assertEqual(gas.sigs['CHECKSUM'].type, 0)
+
   def test_actual_hud_schema_serializes_nearest_valid_display_lead(self):
     from openpilot.selfdrive.carrot.tests.test_lx3_hud_lead import TestLx3HudLead
     cp = self.configuration()

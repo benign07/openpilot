@@ -848,9 +848,9 @@ class CarState(CarStateBase):
       # Original0x161 CRCs matched all10,161 samples in the onset comparison;
       # corrupt display/emergency indicators must not refresh the cache.
       pt_parser.dbc.name_to_msg[LX3_TIME_MESSAGE].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
-      for name in ('MDPS', 'TCS', 'WHEEL_SPEEDS'):
-        # Restore original CAN-FD receive CRC validation on steering/brake
-        # feedback and wheel speeds. Rejected input must not refresh its value/timestamp.
+      for name in ('MDPS', 'TCS', 'WHEEL_SPEEDS', 'ACCELERATOR_ALT'):
+        # Restore original CAN-FD receive CRC validation on steering/brake,
+        # wheel speed and hybrid pedal inputs; rejected frames cannot refresh them.
         pt_parser.dbc.name_to_msg[name].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
       cam_parser.dbc.name_to_msg['CCNC_0x162'].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
       cam_parser.dbc.name_to_msg['ADRV_0x161'].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum

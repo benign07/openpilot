@@ -422,5 +422,41 @@ class TestLx3ClusterTransport(unittest.TestCase):
       self.assertEqual(msg.sigs['COUNTER'].type, 0, name)
 
 
+  def test_lx3_hybrid_pedal_rejects_crc_corruption_and_recovers_without_counter_validation(self):
+    parser = ENV['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[0]
+    parser._add_message('ACCELERATOR_ALT')
+    name = 'ACCELERATOR_ALT'
+    msg = parser.dbc.name_to_msg[name]
+    raw = bytearray(32)
+    raw[2] = 42
+    raw[:2] = self.env['hkg_can_fd_checksum'](msg.address, None, raw).to_bytes(2, 'little')
+    parser.update([[self.clock, [(msg.address, bytes(raw), 0)]]])
+    self.assertEqual(parser.vl[name]['ACCELERATOR_PEDAL'], 0)
+    corrupt = bytearray(raw)
+    corrupt[12] ^= 0x80  # Actual little-endian pedal bit103, not bit80.
+    parser.update([[self.clock + 10_000_000, [(msg.address, bytes(corrupt), 0)]]])
+    self.assertEqual(parser.vl[name]['ACCELERATOR_PEDAL'], 0)
+    self.assertEqual(parser.ts_nanos[name]['ACCELERATOR_PEDAL'], self.clock)
+    raw[12] = 0x80
+    for step, counter in enumerate((44, 48), 2):  # Observed header increments +2/+4.
+      raw[2] = counter
+      raw[:2] = self.env['hkg_can_fd_checksum'](msg.address, None, raw).to_bytes(2, 'little')
+      parser.update([[self.clock + step * 10_000_000, [(msg.address, bytes(raw), 0)]]])
+      self.assertEqual(parser.vl[name]['ACCELERATOR_PEDAL'], 0.25)
+      self.assertEqual(parser.ts_nanos[name]['ACCELERATOR_PEDAL'], self.clock + step * 10_000_000)
+    self.assertNotIn('COUNTER', msg.sigs)  # Header byte2 semantics stay unclaimed.
+    self.assertIsNotNone(msg.sigs['CHECKSUM'].calc_checksum)
+    corrupt_release = bytearray(raw)
+    corrupt_release[12] = 0
+    parser.update([[self.clock + 40_000_000, [(msg.address, bytes(corrupt_release), 0)]]])
+    self.assertEqual(parser.vl[name]['ACCELERATOR_PEDAL'], 0.25)
+    self.assertEqual(parser.ts_nanos[name]['ACCELERATOR_PEDAL'], self.clock + 30_000_000)
+    raw[12] = 0
+    raw[:2] = self.env['hkg_can_fd_checksum'](msg.address, None, raw).to_bytes(2, 'little')
+    parser.update([[self.clock + 50_000_000, [(msg.address, bytes(raw), 0)]]])
+    self.assertEqual(parser.vl[name]['ACCELERATOR_PEDAL'], 0)
+    self.assertEqual(parser.ts_nanos[name]['ACCELERATOR_PEDAL'], self.clock + 50_000_000)
+
+
 if __name__ == '__main__':
   unittest.main()

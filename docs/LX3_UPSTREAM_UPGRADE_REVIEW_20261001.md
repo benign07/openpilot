@@ -84,3 +84,52 @@ RadarState/CarControl 생성 스키마와 생산 블록의 직렬화도 확인�
 Claude Code 동일 쟁점 검토는 읽기 전용이며 독립 테스트 실행과 구별한다.
 최신 소스를 가져왔다는 이유로 실차 정상 ownership 인계/OEM 경고 해결이
 증명되는 것은 아니다. 차량 설치·재부팅·CAN 명령·OTA 게시를 하지 않았다.
+
+## LX3 물리 입력 CRC 확인과 호환성 범위
+
+추가 원본 감사 `wheel_and_hybrid_crc_1900_20261001.json`은 14개 rlog의
+원본 SHA를 확인하고 bus0 WHEEL_SPEEDS 101,568건(24B) 및 하이브리드
+ACCELERATOR_ALT 50,781건(32B)의 공통 CAN-FD CRC가 모두 일치함을
+확인했다. 기존 하이브리드 CRC 예외는 다른 차량을 위한 정책이며 LX3의
+CRC 부재를 뜻하지 않는다. 관측은 차량 한 대/이 주행 기록의 근거다.
+
+LX3 전용 host DBC에 ACCELERATOR_ALT의 CHECKSUM0|16만 추가하고
+기존 LX3 수신 callback에 연결한다. 페달103|10/scale0.25는 유지한다.
+byte2의 증가분은 +2가50,777건/+4가3건이나 의미를 확정하지 않으며
+COUNTER 신호나 엄격 counter 검증을 추가하지 않는다. CHECKSUM type은
+DEFAULT로 유지되어 parser callback만 사용하고 packer의 자동 CRC 송신
+동작을 새로 만들지 않는다. parser와 packer는 캐시된 동일 DBC를 공유하므로
+두 신호 집합의 단순 비교를 독립 검증 근거로 삼지 않는다.
+
+Panda는 guard+HDA2+camera-SCC+long+hybrid 조합에서만 별도 RX 배열을
+선택한다. gas 그룹은 이 기록에서 확인된 bus0/32B/0x105만 CRC 필수로
+검증하고 counter 예외는 유지한다. TCS/wheel/MDPS와 기존1AA/1CF 버튼
+검사는 원래 메타데이터와 같다. 공통 매크로/배열, 다른 차량과 미지원
+guard 조합은 기존 정책을 유지한다. 선택한 배열 자신의 길이를 사용하고
+매 init flag와 RX 상태를 초기화한다. 원래100Hz 설정은 변경하지 않았으며
+실제 관측 페달 주기는 약50Hz다. 공통 lag 하한1초는 동일하다.
+
+정확6714 소스와 같은 최종 테스트로 host의 CRC 불변 페달bit103 손상이
+0.25로 반영되는 실패, native가 불량 프레임을 수용하고 gas를 바꾸는
+실패를 먼저 재현했다. 이전 native pending은 가짜 페달 상승으로 이미
+취소됐으므로 권한 우회/불량 CRC grant를 입증한 것으로 주장하지 않는다.
+수정 후 host press/release의 값·시각 보존 및 정상 복구, native의 outer와
+direct hook 거부, pending/accepted 권한 해제, 새 조작 후 복구, +2/+4
+header 예외, private 두 배열 및 기존190/미지원1210 경로를 확인한다.
+정확 근거는 `lx3_hybrid_crc_validation_20261001.json`과 전후 로그다.
+추가 배열/flag 단언은 이전 소스에 정의가 없어 전처리 조건으로 제외하며,
+핵심 전후 손상 입력 검사는 양쪽에서 동일하게 실행한다.
+
+CRC 실패 한 번으로 native 권한이 해제되면 기존 중립3회와 새 물리 조작이
+필요하다. host의 한 프레임 거부가 즉시 can_valid=False를 뜻하지 않으며
+초기 동적 주기 학습 전 timeout도 그대로다. native 공통 RX 건강 판정과
+정상 권한 거래를 완화하지 않는다. 당시 원본 CRC는 모두 정상이므로 이
+보완을 오후7시 OEM 경고 원인이나 해결 증거로 취급하지 않는다.
+
+Claude64의 배열 길이/공유 DBC 비교/host 불량 release 반론을 반영했다.
+테스트가 부족한 초기 fixture의 CRC0 실패와 비교용 이전 header에 새 flag를
+직접 참조해 생긴 컴파일 실패는 fixture를 수정한 과정이며 생산 결함의
+전후 실패 증거와 구분한다. 전체 Linux/H7/IPC/양MPC/actual C 검증은 새
+커밋의 정확 CI 결과를 사용한다. 이 workflow는 범용 safety pytest 전체나
+MISRA/cppcheck를 수행한 것으로 주장하지 않는다. 다른 차량 호환성 근거는
+실행한 실제 C 구성/전달 회귀와 공통 코드 불변 범위다.

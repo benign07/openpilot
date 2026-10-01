@@ -367,6 +367,7 @@ static void physical_permission_regressions(void) {
     set_alternative_experience(alternative);
     CANPacket_t gas = packet(0x105, 0, 13);
     gas.data[12] = 0x80U;
+    hyundai_canfd_update_checksum(&gas);
     assert(safety_rx_hook(&gas));
     physical_baseline();
     physical_button(8);
@@ -1326,13 +1327,14 @@ static void physical_input_receive_boundary_regressions(unsigned int addr) {
     assert(memcmp(&vehicle_speed, &speed, sizeof(speed)) == 0);
     assert(lx3_request_context_valid() == context);
   }
-  if (!gas) {
+  {
     CANPacket_t corrupt = original;
-    if (brake) corrupt.data[10] = 0U;
+    if (gas) corrupt.data[13] = 0U;
+    else if (brake) corrupt.data[10] = 0U;
     else corrupt.data[8] = 0U;
     assert(!safety_rx_hook(&corrupt));
     hyundai_canfd_rx_hook(&corrupt);
-    assert(brake ? brake_pressed : vehicle_moving);
+    assert(gas ? gas_pressed : (brake ? brake_pressed : vehicle_moving));
     assert(memcmp(&vehicle_speed, &speed, sizeof(speed)) == 0);
   }
   // Correctly shaped input can release the pedal/brake or update real speed.
@@ -1341,11 +1343,6 @@ static void physical_input_receive_boundary_regressions(unsigned int addr) {
   else if (brake) original.data[10] = 0U;
   else original.data[8] = 0U;
   hyundai_canfd_update_checksum(&original);
-  if (gas) {
-    // Native Carrot deliberately ignores the hybrid0x105 checksum. Preserve
-    // that known policy; do not invent a new checksum requirement here.
-    original.data[0] ^= 1U;
-  }
   assert(safety_rx_hook(&original));
   assert(!(gas ? gas_pressed : (brake ? brake_pressed : vehicle_moving)));
   const struct sample_t released_speed = vehicle_speed;
@@ -1541,8 +1538,8 @@ static void rejected_rx_pending_regressions(void) {
   assert(lx3_pending);  // Unseen RX keeps the existing common tick policy.
   CANPacket_t hybrid = packet(0x105U, 0U, 13U);
   hyundai_canfd_update_checksum(&hybrid); hybrid.data[0] ^= 1U;
-  assert(safety_rx_hook(&hybrid));
-  assert(lx3_pending && lx3_request_context_valid());  // Existing checksum exception.
+  assert(!safety_rx_hook(&hybrid));
+  assert(!lx3_pending && !lx3_request_context_valid());  // Qualified LX3 CRC requirement.
   reset(190U); grant_controls();
   CANPacket_t legacy = packet(0x175U, 0U, 12U);
   hyundai_canfd_update_checksum(&legacy); legacy.data[0] ^= 1U;
@@ -1550,8 +1547,93 @@ static void rejected_rx_pending_regressions(void) {
   puts("PASS: rejected RX invalidates LX3 pending and old identity before tick; fresh gesture and legacy CRC policy preserved");
 }
 
+static void hybrid_crc_receive_regressions(void) {
+  reset(lx3_param()); physical_baseline();
+  set_timer(microsecond_timer_get() + 10000U);
+  refresh_physical_rx_except(0U, 1U); safety_tick_current_safety_config();
+  physical_button(128U); physical_button(0U);
+  assert(lx3_pending && !controls_allowed);
+  CANPacket_t gas = packet(0x105U, 0U, 13U);
+  gas.data[2] = 3U; gas.data[12] = 0x80U;
+  hyundai_canfd_update_checksum(&gas); gas.data[0] ^= 1U;
+  const bool accepted = safety_rx_hook(&gas);
+  if (accepted) {
+    printf("LX3 hybrid CRC failure: accepted=%d gas=%d pending=%d\n", accepted, gas_pressed, lx3_pending); fflush(stdout);
+  }
+  assert(!accepted && !gas_pressed && !lx3_pending && !controls_allowed);
+  // A direct mode-hook call must enforce the same integrity boundary.
+  hyundai_canfd_rx_hook(&gas); assert(!gas_pressed);
+  const int index = get_addr_check_index(&gas, current_safety_config.rx_checks, current_safety_config.rx_checks_len);
+  assert(index >= 0 && !current_safety_config.rx_checks[index].status.valid_checksum);
+  for (uint8_t header = 5U; header <= 13U; header += 4U) {
+    gas.data[2] = header; hyundai_canfd_update_checksum(&gas);
+    assert(safety_rx_hook(&gas) && gas_pressed);
+    assert(current_safety_config.rx_checks[index].status.wrong_counters == 0);
+  }
+  gas.data[12] = 0U;  // Corrupt release cannot clear a pressed pedal.
+  assert(!safety_rx_hook(&gas) && gas_pressed);
+  hyundai_canfd_rx_hook(&gas); assert(gas_pressed);
+  hyundai_canfd_update_checksum(&gas);
+  assert(safety_rx_hook(&gas) && !gas_pressed && !controls_allowed && !lx3_pending);
+  physical_baseline(); physical_button(128U); physical_button(0U);
+  assert(lx3_pending); acknowledge_request();
+  gas.data[0] ^= 1U;
+  assert(!safety_rx_hook(&gas) && !controls_allowed && lx3_mode == 0);
+
+  for (unsigned int alt = 0U; alt < 2U; alt++) {
+    reset(lx3_param() - (alt ? 0U : 32U));
+    assert(current_safety_config.rx_checks_len == 5);
+    const CanMsgCheck *pedal = &current_safety_config.rx_checks[0].msg[0];
+    assert(pedal->addr == 0x105 && pedal->bus == 0 && pedal->len == 32);
+    assert(!pedal->ignore_checksum && pedal->ignore_counter && pedal->max_counter == 0U);
+    assert(current_safety_config.rx_checks[0].msg[1].addr == 0);
+    assert(current_safety_config.rx_checks[4].msg[0].addr == (alt ? 0x1AA : 0x1CF));
+    for (int group = 1; group < 4; group++) {
+      const CanMsgCheck *selected = &current_safety_config.rx_checks[group].msg[0];
+      const CanMsgCheck *original = &hyundai_canfd_hda2_long_alt_buttons_rx_checks_scc2[group].msg[0];
+      assert(selected->addr == original->addr && selected->bus == original->bus && selected->len == original->len);
+      assert(selected->ignore_checksum == original->ignore_checksum && selected->ignore_counter == original->ignore_counter);
+      assert(selected->max_counter == original->max_counter && selected->quality_flag == original->quality_flag);
+      assert(selected->frequency == original->frequency);
+    }
+    assert(!current_safety_config.rx_checks[0].status.msg_seen);
+    CANPacket_t other = packet(0x35U, 0U, 13U); hyundai_canfd_update_checksum(&other);
+    assert(safety_rx_hook(&other));
+    other.addr = 0x100U; hyundai_canfd_update_checksum(&other);
+    assert(safety_rx_hook(&other));
+    assert(!current_safety_config.rx_checks[0].status.msg_seen);
+    gas.data[12] = 0U; hyundai_canfd_update_checksum(&gas);
+    assert(safety_rx_hook(&gas));
+    assert(current_safety_config.rx_checks[0].status.msg_seen && current_safety_config.rx_checks[0].status.index == 0);
+  }
+  // Switching away from LX3 must not leak CRC metadata through shared arrays.
+  const uint16_t legacy_params[] = {190U, 1210U};
+  for (unsigned int i = 0U; i < 2U; i++) {
+    reset(legacy_params[i]);
+    gas.data[12] = 0x80U; hyundai_canfd_update_checksum(&gas); gas.data[0] ^= 1U;
+    assert(safety_rx_hook(&gas) && gas_pressed);
+    assert(current_safety_config.rx_checks[0].msg[2].ignore_checksum);
+    assert(current_safety_config.rx_checks[0].msg[2].ignore_counter);
+  }
+  reset(lx3_param());
+  assert(!current_safety_config.rx_checks[0].status.msg_seen);
+  assert(!safety_rx_hook(&gas));
+#ifdef HYUNDAI_CANFD_LX3_PHYSICAL_RX_CHECKS
+  const uint16_t required_flags[] = {1024U, 16U, 8U, 4U, 2U};  // Guard/HDA2/camera/long/hybrid.
+  for (unsigned int i = 0U; i < sizeof(required_flags) / sizeof(required_flags[0]); i++) {
+    reset(lx3_param() & (uint16_t)~required_flags[i]);
+    assert(!lx3_hybrid_crc_required);
+    assert(current_safety_config.rx_checks != hyundai_canfd_lx3_rx_checks);
+    assert(current_safety_config.rx_checks != hyundai_canfd_lx3_alt_buttons_rx_checks);
+  }
+  reset(lx3_param()); assert(lx3_hybrid_crc_required);
+#endif
+  puts("PASS: LX3 hybrid pedal CRC rejects corrupt press and release, revokes requests, and preserves header/legacy policy");
+}
+
 int main(int argc, char **argv) {
   if (argc == 2) {
+    if (strcmp(argv[1], "--hybrid-crc") == 0) { hybrid_crc_receive_regressions(); return 0; }
     if (strcmp(argv[1], "--rx-recovery-order") == 0) { rejected_rx_recovery_order_regression(); return 0; }
     if (strcmp(argv[1], "--rx-pending") == 0) { rejected_rx_pending_regressions(); return 0; }
     if (strcmp(argv[1], "--physical-health") == 0) { physical_input_health_timeout_regressions(); return 0; }
@@ -1586,5 +1668,6 @@ int main(int argc, char **argv) {
   physical_input_health_timeout_regressions();
   rejected_rx_pending_regressions();
   rejected_rx_recovery_order_regression();
+  hybrid_crc_receive_regressions();
   return 0;
 }

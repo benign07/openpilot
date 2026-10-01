@@ -10,6 +10,7 @@ const uint16_t HYUNDAI_PARAM_LX3_ENGAGEMENT_GUARD = 1024U;
 const int HYUNDAI_LX3_MAX_ANGLE = 1750;
 const int HYUNDAI_LX3_MAX_TORQUE = 250;
 static bool hyundai_canfd_lx3_guard = false;
+static bool lx3_hybrid_crc_required = false;
 static bool lx3_mdps_seen = false;
 static bool lx3_mdps_fault = false;
 static uint32_t lx3_mdps_us = 0U;
@@ -307,6 +308,23 @@ RxCheck hyundai_canfd_hda2_long_alt_buttons_rx_checks[] = {
 };
 RxCheck hyundai_canfd_hda2_long_alt_buttons_rx_checks_scc2[] = {
   HYUNDAI_CANFD_COMMON_RX_CHECKS(0)
+  HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(0)
+};
+
+// LX3 originals qualify the standard CRC on hybrid0x105. Keep the generic
+// hybrid exception untouched, and retain the existing header-counter policy.
+#define HYUNDAI_CANFD_LX3_PHYSICAL_RX_CHECKS \
+  {.msg = {{0x105, 0, 32, .max_counter = 0U, .frequency = 100U, .ignore_counter = true}, {0}, {0}}}, \
+  {.msg = {{0x175, 0, 24, .max_counter = 0xffU, .frequency = 50U}, {0}, {0}}}, \
+  {.msg = {{0xA0, 0, 24, .max_counter = 0xffU, .frequency = 100U}, {0}, {0}}}, \
+  {.msg = {{0xEA, 0, 24, .max_counter = 0xffU, .frequency = 100U}, {0}, {0}}},
+
+static RxCheck hyundai_canfd_lx3_rx_checks[] = {
+  HYUNDAI_CANFD_LX3_PHYSICAL_RX_CHECKS
+  HYUNDAI_CANFD_BUTTONS_ADDR_CHECK(0)
+};
+static RxCheck hyundai_canfd_lx3_alt_buttons_rx_checks[] = {
+  HYUNDAI_CANFD_LX3_PHYSICAL_RX_CHECKS
   HYUNDAI_CANFD_ALT_BUTTONS_ADDR_CHECK(0)
 };
 
@@ -827,8 +845,8 @@ static bool canfd_bfwd_reuse_last(CanfdBufferedFwd* st, CANPacket_t* pkt) {
 
 static bool lx3_physical_input_valid(const CANPacket_t *pkt, unsigned int expected_len, bool checksum) {
   // Unknown lengths bypass the outer RX table. Qualify each LX3 physical
-  // state before reading it, without changing other vehicles or0x105's
-  // deliberately checksum-exempt hybrid policy.
+  // state before reading it. The selected RX profile owns the hybrid CRC
+  // requirement; every non-LX3 profile retains its existing policy.
   return !hyundai_canfd_lx3_guard || ((GET_LEN(pkt) == expected_len) &&
          (!checksum || (hyundai_canfd_get_checksum(pkt) == hyundai_common_canfd_compute_checksum(pkt))));
 }
@@ -887,7 +905,7 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
     // gas press, different for EV, hybrid, and ICE models
     if ((addr == 0x35) && hyundai_ev_gas_signal && lx3_physical_input_valid(to_push, 32U, true)) {
       gas_pressed = GET_BYTE(to_push, 5) != 0U;
-    } else if ((addr == 0x105) && hyundai_hybrid_gas_signal && lx3_physical_input_valid(to_push, 32U, false)) {
+    } else if ((addr == 0x105) && hyundai_hybrid_gas_signal && lx3_physical_input_valid(to_push, 32U, lx3_hybrid_crc_required)) {
       gas_pressed = GET_BIT(to_push, 103U) || (GET_BYTE(to_push, 13) != 0U) || GET_BIT(to_push, 112U);
     } else if ((addr == 0x100) && !hyundai_ev_gas_signal && !hyundai_hybrid_gas_signal && lx3_physical_input_valid(to_push, 32U, true)) {
       gas_pressed = GET_BIT(to_push, 176U);
@@ -1229,6 +1247,8 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   gen_crc_lookup_table_16(0x1021, hyundai_canfd_crc_lut);
   hyundai_canfd_alt_buttons = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ALT_BUTTONS);
   hyundai_canfd_hda2_alt_steering = GET_FLAG(param, HYUNDAI_PARAM_CANFD_HDA2_ALT_STEERING);
+  lx3_hybrid_crc_required = hyundai_canfd_lx3_guard && hyundai_canfd_hda2 &&
+                            hyundai_camera_scc && hyundai_longitudinal && hyundai_hybrid_gas_signal;
   hyundai_canfd_buffered_fwd = hyundai_camera_scc;
 
   // no long for radar-SCC HDA1 yet
@@ -1316,6 +1336,15 @@ static safety_config hyundai_canfd_init(uint16_t param) {
     }
   }
 
+  if (lx3_hybrid_crc_required) {
+    if (hyundai_canfd_alt_buttons) {
+      ret.rx_checks = hyundai_canfd_lx3_alt_buttons_rx_checks;
+      ret.rx_checks_len = sizeof(hyundai_canfd_lx3_alt_buttons_rx_checks) / sizeof(hyundai_canfd_lx3_alt_buttons_rx_checks[0]);
+    } else {
+      ret.rx_checks = hyundai_canfd_lx3_rx_checks;
+      ret.rx_checks_len = sizeof(hyundai_canfd_lx3_rx_checks) / sizeof(hyundai_canfd_lx3_rx_checks[0]);
+    }
+  }
   return ret;
 }
 
