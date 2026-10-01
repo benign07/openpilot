@@ -651,7 +651,12 @@ class CarState(CarStateBase):
 
     speed_limit_cam = False
     corner = False
-    corner_infos = [info for info in (self.adrv_0x1ea, self.ccnc_0x162) if info is not None]
+    adrv_corner = self.adrv_0x1ea
+    if self.CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV:
+      # Do not let a frozen optional ADRV object override live CCNC distances.
+      adrv_ns = cp_cam.ts_nanos.get('ADRV_0x1ea', {}).get('CHECKSUM', 0)
+      adrv_corner = lx3_camera_values(adrv_corner, adrv_ns, cp_cam._last_update_nanos)
+    corner_infos = [info for info in (adrv_corner, self.ccnc_0x162) if info is not None]
     if corner_infos:
       def corner_max(signal):
         return max(info[signal] for info in corner_infos)

@@ -471,7 +471,8 @@ class CarController(CarControllerBase):
                                                              lx3_guard=self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV')
             if scc2_msg is not None:  # scc_control may be None at startup/intermittently
               can_sends.append(scc2_msg)
-            can_sends.extend(hyundaicanfd.create_tcs_messages(self.packer, self.CAN, CS)) # for sorento SCC radar...
+            can_sends.extend(hyundaicanfd.create_tcs_messages(
+              self.packer, self.CAN, CS, lx3_guard=self.CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV))
           else:
             can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
                                                              set_speed_in_units, hud_control, self.hyundai_jerk.jerk_u, self.hyundai_jerk.jerk_l, CS))

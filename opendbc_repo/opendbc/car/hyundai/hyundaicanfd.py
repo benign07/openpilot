@@ -487,7 +487,11 @@ def create_fca_warning_light(CP, packer, CAN, frame):
     ret.append(packer.make_can_msg("ADRV_0x160", CAN.ECAN, values))
   return ret
 
-def create_tcs_messages(packer, CAN, CS):
+def create_tcs_messages(packer, CAN, CS, lx3_guard=False):
+  if lx3_guard:
+    # LX3 native policy rejects synthesized driver/brake feedback. Do not flood
+    # its blocked-TX diagnostics with the legacy Sorento radar workaround.
+    return []
   ret = []
   if CS.tcs is not None:
     values = copy.copy(CS.tcs)

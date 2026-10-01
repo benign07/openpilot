@@ -23,7 +23,7 @@ class TestLx3ClusterTransport(unittest.TestCase):
                     HyundaiFlags=NS(CAMERA_SCC=NS(value=1)), CV=NS(MS_TO_KPH=3.6, MS_TO_MPH=2.236936),
                     _get_desire_and_lane_changing=lambda _: (0, 0))
     definitions(ROOT / 'opendbc_repo/opendbc/can/packer.py', self.env)
-    names = {'create_suppress_lfa', 'create_lfahda_cluster', 'create_lfa_icon_non_camera_scc', 'create_ccnc_messages', '_make_ccnc_cluster_msg',
+    names = {'create_tcs_messages', 'create_suppress_lfa', 'create_lfahda_cluster', 'create_lfa_icon_non_camera_scc', 'create_ccnc_messages', '_make_ccnc_cluster_msg',
              '_make_ccnc_values', '_suppress_trailer_mode_warning', '_apply_radar_blink'}
     definitions(ROOT / 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py', self.env, names)
     self.packer = self.env['CANPacker'](str(DBC_FILE))
@@ -217,11 +217,33 @@ class TestLx3ClusterTransport(unittest.TestCase):
     self.cs.adrv_0x161 = copy.copy(self.cs.adrv_0x161)
     self.assertEqual([m[0] for m in self.ccnc()], [0x162])
 
+  def test_guarded_lx3_has_no_tcs_feedback_rewrite_producer(self):
+    self.cs.tcs = dict.fromkeys(self.packer.dbc.name_to_msg['TCS'].sigs, 0)
+    self.cs.tcs['DriverBraking'] = 1
+    before = dict(self.cs.tcs)
+    self.assertEqual(self.env['create_tcs_messages'](self.packer, self.can, self.cs, lx3_guard=True), [])
+    self.assertEqual(self.cs.tcs, before)
+
+  def test_legacy_camera_scc_tcs_workaround_keeps_default_behavior(self):
+    self.cs.tcs = dict.fromkeys(self.packer.dbc.name_to_msg['TCS'].sigs, 0)
+    self.cs.tcs.update(DriverBraking=1, DriverBrakingLowSens=1, ACC_REQ=1, COUNTER=42)
+    before = dict(self.cs.tcs)
+    messages = self.env['create_tcs_messages'](self.packer, self.can, self.cs)
+    self.assertEqual(messages, self.env['create_tcs_messages'](self.packer, self.can, self.cs, lx3_guard=False))
+    self.assertEqual([(addr, bus) for addr, _, bus in messages], [(0x175, 2)])
+    parser = self.env['CANParser'](str(DBC_FILE), [('TCS', 50)], 2)
+    parser.update([[self.clock, messages]])
+    self.assertEqual(parser.vl['TCS']['DriverBraking'], 0)
+    self.assertEqual(parser.vl['TCS']['DriverBrakingLowSens'], 0)
+    self.assertEqual(self.cs.tcs, before)
+
   def test_all_five_display_headers_validate_and_corruption_does_not_refresh_source(self):
     names = Lx3ClusterTransport.SOURCES
     parser = ENV['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[2]
+    self.assertIn(0x162, parser.addresses)
     for name in names:
-      parser._add_message(name)
+      if parser.dbc.name_to_msg[name].address not in parser.addresses:
+        parser._add_message(name)
       self.assertEqual(parser.dbc.name_to_msg[name].sigs['COUNTER'].type, 0)
       values = dict.fromkeys(self.packer.dbc.name_to_msg[name].sigs, 0)
       values['COUNTER'] = 42
@@ -243,8 +265,10 @@ class TestLx3ClusterTransport(unittest.TestCase):
     # Whole-byte equality also covers signed/scaled and Motorola signals.
     rng = random.Random(161162)
     parser = ENV['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[2]
+    self.assertIn(0x162, parser.addresses)
     for name in Lx3ClusterTransport.SOURCES:
-      parser._add_message(name)
+      if parser.dbc.name_to_msg[name].address not in parser.addresses:
+        parser._add_message(name)
       msg = self.packer.dbc.name_to_msg[name]
       for seq in range(100):
         raw = bytearray(rng.randbytes(msg.size))

@@ -157,3 +157,20 @@ zero rejected RX, zero reordered records and zero accepted-control rows. The
 legacy uint16-address adapter excludes 132,490 extended-address frames; all
 18,169 physical button frames are included. Its timer uses pandad publication
 times, so it does not prove actual native wire-reception timing.
+
+Pinned 354b1764 policy and the candidate were replayed through the same recorded
+RX/epoch adapter. In addition to the two MAIN→RES request edges, the native
+comparison adds MAIN/LFA-OFF edges near519s, where the host already completed
+MAIN but the older native timer had not. This is a timing-dependent divergence
+fix in the publication-timestamp model; it is not proof of installed wire timing.
+Retained physical counters and additional requests shift subsequent companion
+rows, so row differences are not counted as separate gesture defects.
+
+LX3 corner fusion now also ignores stale optional ADRV0x1EA data, rather than
+allowing it to override fresh CCNC distances. The legacy TCS0x175 rewrite
+producer returns no frames for LX3; its Sorento/default CAMERA_SCC behavior is
+retained and native rejection of synthesized feedback remains unchanged. Real
+DBC builder tests verify both the LX3 suppression and the default rewrite path.
+The later offline CI failure on57cffc8b was another two generic display-fixture
+loops attempting to re-register CCNC. Those fixtures now preserve the startup
+registration and continue testing all five CRC/header/unknown-bit round trips.
