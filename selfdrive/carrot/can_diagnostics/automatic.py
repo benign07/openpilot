@@ -395,8 +395,8 @@ class AutoRecorder:
                        'event_valid': event_valid,
                        'bus': bus, 'address': address, 'dlc': len(data), 'data': data.hex()}, now)
 
-  def close(self):
-    self.store.seal('server_shutdown')
+  def close(self, reason='server_shutdown'):
+    self.store.seal(reason)
     self.state = 'stopped'
 
   def status(self):

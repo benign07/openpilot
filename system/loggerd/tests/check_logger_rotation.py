@@ -1,4 +1,4 @@
-"""Run real encoderd/loggerd rotation with road-only and full camera topology.
+"""Run real encoderd/loggerd rotation with absent-driver and full camera topology.
 
 Uses synthetic VisionIPC frames in isolated PC prefixes, no vehicle or CAN I/O.
 Missing-driver cases keep RecordFront both on and off: recording preference
@@ -12,7 +12,7 @@ from openpilot.system.loggerd.tests.test_loggerd import TestLoggerd
 from openpilot.system.manager.process_config import managed_processes
 
 assert PC, 'Run only on an isolated PC runner'
-for include_driver, record_front in ((False, True), (False, False), (True, True)):
+for include_driver, record_front in ((False, True), (False, False), (True, True), (True, False)):
   with OpenpilotPrefix():
     params = Params()
     params.put('RecordRoadCam', 2)
@@ -21,7 +21,7 @@ for include_driver, record_front in ((False, True), (False, False), (True, True)
     try:
       # Existing test verifies sealed rlog/qlog plus videos for every segment;
       # LOGGERD_TEST disables timeout rotation, exposing missing participants.
-      TestLoggerd().test_rotation(include_driver=include_driver)
+      TestLoggerd().test_rotation(include_driver=include_driver, record_front=record_front)
       print(json.dumps(dict(driver_available=include_driver, record_front=record_front,
                             actual_encoder_rotation_passed=True)), flush=True)
     finally:

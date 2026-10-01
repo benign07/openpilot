@@ -111,6 +111,20 @@ class RuntimeTests(unittest.TestCase):
     self.assertEqual(waits, [5, 10, 20, 40, 60, 60])
     self.assertEqual(controller.restart_count, 6)
 
+  def test_stable_worker_run_resets_backoff_and_labels_retry_closure(self):
+    controller = AutomaticController('unused-fixture-root')
+    reasons, waits = [], []
+    controller.recorder = NS(close=lambda reason: reasons.append(reason))
+    controller.live_loop = lambda: (_ for _ in ()).throw(OSError('retry'))
+    def retry_wait(seconds):
+      waits.append(seconds)
+      return len(waits) == 3
+    with patch('selfdrive.carrot.can_diagnostics.automatic_runtime.time.monotonic', side_effect=[0, 1, 2, 3, 4, 65]), \
+         patch.object(controller.shutdown, 'wait', side_effect=retry_wait):
+      controller.run()
+    self.assertEqual(waits, [5, 10, 5])
+    self.assertEqual(reasons, ['recorder_restart'] * 3)
+
   def test_guarded_missing_companion_is_unknown_not_legacy_health(self):
     sample = services()
     panda = {'safetyModel': 'hyundaiCanfd', 'safetyParam': 1214, 'controlsAllowed': True}

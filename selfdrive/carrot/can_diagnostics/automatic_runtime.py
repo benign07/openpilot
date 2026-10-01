@@ -97,9 +97,14 @@ class AutomaticController:
   def run(self):
     delay = 5
     while not self.shutdown.is_set():
+      attempt_started = time.monotonic()
+      failed = False
       try:
         self.live_loop()
       except Exception as exc:
+        failed = True
+        if time.monotonic() - attempt_started >= 60:
+          delay = 5  # A stable minute resets previous transient-failure backoff.
         with self.lock:
           self.error = f'{type(exc).__name__}: {str(exc)[:160]}'
           self.restart_count += 1
@@ -108,7 +113,7 @@ class AutomaticController:
         with self.lock:
           if self.recorder:
             try:
-              self.recorder.close()
+              self.recorder.close("recorder_restart" if failed else "server_shutdown")
             except Exception as exc:
               self.error = f'close: {type(exc).__name__}: {str(exc)[:160]}'
               try:

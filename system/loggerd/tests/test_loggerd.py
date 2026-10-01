@@ -190,13 +190,13 @@ class TestLoggerd:
       assert logged_params[param_key].decode() == v
 
   @pytest.mark.xdist_group("camera_encoder_tests")  # setting xdist group ensures tests are run in same worker, prevents encoderd from crashing
-  @pytest.mark.parametrize("include_driver", [True, False])
-  def test_rotation(self, include_driver):
-    Params().put("RecordFront", True)
+  @pytest.mark.parametrize("include_driver,record_front", [(True, True), (True, False), (False, True), (False, False)])
+  def test_rotation(self, include_driver, record_front):
+    Params().put("RecordFront", record_front)
 
     expected_files = {"rlog.zst", "qlog.zst", "qcamera.ts", "fcamera.hevc", "dcamera.hevc", "ecamera.hevc"}
 
-    if not include_driver:
+    if not include_driver or not record_front:
       expected_files.remove("dcamera.hevc")
 
     num_segs = random.randint(2, 3)

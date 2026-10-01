@@ -10,10 +10,12 @@
 - 전화HUD에서는 stale속도가현재값처럼보이거나서버HTTP503·폰저장오류가차량offline으로보일수있었습니다. 별도전화후보는서버reachable/freshcarState/각서비스age를구분하고실서버compact vCruiseCluster km/h 및legacy cruise m/s단위를맞춥니다.
 
 ## 검증
-- localautomaticdiagnostics41검사PASS(깨진partial복구/invalidraw유지/재시도/무결성다운로드/쿼터포함).
+- localautomaticdiagnostics42검사PASS(깨진partial복구/invalidraw유지/재시도/무결성다운로드/쿼터포함).
 - 전화PC receiver10검사PASS. 전화JVM/APK및Linux전체빌드결과는정확candidate CI에서확인해야합니다.
-- full-runtime-build에실제encoderd/loggerd+VisionIPC로missingDRIVER/RecordFronttrue,false및전체카메라3경우를추가합니다. LOGGERD_TEST로timeoutfallback이꺼진상태에서정상rotation/영상파일+sealedqlog/rlog를검사하므로timeout만으로통과할수없습니다.
+- full-runtime-build에실제encoderd/loggerd+VisionIPC로missingDRIVER/RecordFronttrue,false및전체카메라4경우를추가합니다. LOGGERD_TEST로timeoutfallback이꺼진상태에서정상rotation/영상파일+sealedqlog/rlog를검사하므로timeout만으로통과할수없습니다.
 - 기존인게이지/Panda C·host/다른차량호환성/msgq/양MPCrelocation/H7전체5CI를유지합니다. 이후정확commit과job로그를외부PC보고서에보존합니다.
 
 ## 남은 관측 한계
 실제SCC/LFA 버튼인게이지, 조향명령의EPS수락, OEM경고원인은PC검사로완료주장하지않습니다. /data/stats는10000파일quota에도달하여통계저장이멈췄으며원본삭제없이별도보관정책을검토해야합니다. startupUDS response에서invalid consecutive frameindex1회가있지만차량인식성공/CANhealthy/프로세스지속과구분합니다.
+
+Claude Opus5.5/high 동일세션35의반론을반영: 테스트가RecordFront를True로덮어쓰던허점수정,driver유무×RecordFront전체4케이스. 자동worker60초이상정상유지후백오프5초초기화와재시작봉인사유구분. 전화후보후진시유한signedspeed는절댓값표시. source-only리뷰이며새Linux/JVM실행증거와구분합니다.
