@@ -56,7 +56,8 @@ def main():
     publish_panda(); sm.update(100)
     time.sleep(1 / SERVICE_LIST['pandaStates'].frequency)
   assert sm.all_checks(['pandaStates']), (sm.alive, sm.valid, sm.freq_ok)
-  def step(button=None, counter=0, event=None, physical_valid=True, door=False, input_state='ready', input_counter_valid=True):
+  def step(button=None, counter=0, event=None, physical_valid=True, door=False, input_state='ready',
+           input_counter_valid=True, buttons=None, reset_count=1):
     nonlocal previous_cs
     time.sleep(1 / SERVICE_LIST['pandaStates'].frequency)
     publish_panda()
@@ -65,6 +66,7 @@ def main():
     msg.carState.lx3InputState = input_state
     msg.carState.lx3PhysicalCounter = counter
     msg.carState.lx3PhysicalCounterValid = input_counter_valid
+    msg.carState.lx3InputResetCount = reset_count
     msg.carState.gearShifter = 'drive'
     msg.carState.vEgo = 15
     msg.carState.vCruise = 50
@@ -73,6 +75,9 @@ def main():
     msg.carState.cruiseState.available = False
     msg.carState.buttonEvents = [] if button is None else [dict(type=button, pressed=False,
                                       lx3PhysicalCounter=counter, lx3PhysicalValid=physical_valid)]
+    if buttons is not None:
+      msg.carState.buttonEvents = [dict(type=name, pressed=pressed, lx3PhysicalCounter=physical_counter,
+                                       lx3PhysicalValid=True) for name, pressed, physical_counter in buttons]
     pm.send('carState', msg); sm.update(100)
     assert sm.all_checks(['pandaStates']), (sm.alive, sm.valid, sm.freq_ok)
     context.events.clear()
@@ -184,6 +189,29 @@ def main():
   assert ss.alertText2 == '핸들 버튼 데이터 확인 필요'
   ss, permission = step()
   assert not ss.enabled and permission == (False, False)
+  # A delayed MAIN-OFF/RES batch must enter a new generation from disabled.
+  # Real schema/IPC carry reset serials, individual release anchors and final
+  # consumed counters separately; no Panda mode is used as driver intent.
+  panda.update(requested=2, accepted=0, counter=6, generation=13, phase=1, allowed=False)
+  ss, permission = step('mainCruise', 6)
+  assert ss.state == 'preEnabled' and ss.lx3AckGeneration == 13
+  panda.update(accepted=2, phase=2, allowed=True)
+  ss, permission = step()
+  assert permission == (True, True)
+  ss, permission = step(counter=34, buttons=[('mainCruise', True, 34)])
+  assert permission == (True, True)
+  panda.update(requested=2, accepted=0, counter=44, generation=15, phase=1, allowed=False)
+  ss, permission = step(counter=40)
+  assert not ss.enabled and permission == (False, False)
+  assert context.lx3_engagement.replay_base is not None
+  ss, permission = step(counter=44, buttons=[('mainCruise', False, 36),
+                                           ('accelCruise', True, 42), ('accelCruise', False, 44)])
+  assert ss.state == 'preEnabled' and not ss.active and permission == (False, False)
+  assert ss.lx3AckValid and ss.lx3AckGeneration == 15 and ss.lx3AckPhysicalCounter == 44
+  assert ss.lx3AcceptedGeneration == 0
+  panda.update(accepted=2, phase=2, allowed=True)
+  ss, permission = step(counter=44)
+  assert permission == (True, True) and ss.lx3AcceptedGeneration == 15
   # Exercise the real pending Alert creation delay in30 normal10ms frames,
   # separately from this smoke's deliberately10Hz transport sample steps.
   alert_events, manager = Events(), AlertManager()
@@ -197,7 +225,7 @@ def main():
   assert manager.current_alert.alert_text_1 == '주행보조 준비 중'
   assert manager.current_alert.alert_type == 'lx3PermissionPending/preEnable'
   directory.cleanup()
-  print('PASS real msgq/Capnp/production host publisher, CarSpecificEvents and AlertManager: stock SCC unavailable LAT/COMB, door barrier, request ACK, PRE_ENABLE, upgrade alert, denial, cancel, old firmware/default producer; immutable accepted identity through carControl/sendcan IPC')
+  print('PASS real msgq/Capnp/production host publisher, CarSpecificEvents and AlertManager: stock SCC unavailable LAT/COMB, door barrier, request ACK, PRE_ENABLE, upgrade alert, denial, cancel, old firmware/default producer, delayed MAIN OFF/RES with reset serial; immutable accepted identity through carControl/sendcan IPC')
 
 
 if __name__ == '__main__':

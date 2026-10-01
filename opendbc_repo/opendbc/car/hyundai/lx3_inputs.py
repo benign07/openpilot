@@ -20,10 +20,12 @@ class Lx3ButtonInput:
     self.reason = 'missing'
     self.integrity_reason = None
     self.requalifying = False
+    self.reset_count = 1  # Zero is reserved for old/default CarState producers.
     self.cruise = 0
     self.lfa = False
 
   def reject(self, reason):
+    self.reset_count = (self.reset_count + 1) % (2**32) or 1
     self.ready = False
     self.samples = 0
     self.reason = reason

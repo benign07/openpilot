@@ -201,3 +201,31 @@ qualified retry. Full build and real msgq/new-enum publishing must pass on this
 later exact commit before its CI is described as green. Old recorded LX3 logs
 have absent input fields and intentionally cannot grant in this new host path;
 raw CAN replay must regenerate input health, rather than infer it from defaults.
+
+The preceding input-health commit1586ff1a passed all five jobs in run36820553496,
+including244 offline tests per Python version and956 joint schedules. The C++
+transport executable reports8483 assertions, not the previously reported8489.
+
+The next PC candidate preserves a bounded interpretation window for delayed
+physical releases after native permission changes. It retains only the host's
+own previous accepted intent, physical consumption counter, reset serial and
+epoch. It never imports a requested mode from Panda or restores an accepted ACK.
+A real released event must produce a candidate which matches a fresh native
+mode/counter/generation/epoch and enters the normal PRE_ENABLE transition.
+All barriers, input resets, epoch changes and500ms expiry discard the window.
+CarState's new reset serial also detects a fault and requalification which both
+occur inside a single published batch; old producers default to zero and cannot
+use this window. An independent same-batch OFF/retry defect is fixed by recording
+whether a session existed before interpreting buttons, forcing disable before
+the new PRE_ENABLE/ACK. The native permission policy is unchanged.
+
+Local evidence is258 Python/schema tests and1116 actual-C/production-host joint
+schedules, including54 schedules each for MAIN-OFF/short-RES, MAIN-OFF/short-LFA
+and LFA-OFF/short-RES. Claude Opus5.5/high round33 found no authority defect in
+source review; it did not execute these tests. Broad NO_ENTRY barriers deliberately
+reduce replay availability. Native-only sub10ms revocation is outside the fixed
+25Hz joint schedules; a candidate without a matching native request still cannot
+obtain authority. Capturing a changed native identity retains the existing
+controlsMismatch alert; this does not establish an OEM warning fix. Exact-commit
+full build and extended real msgq IPC are pending for this next candidate.
+Vehicle ARM execution, EPS acceptance and OEM cluster warnings remain unverified.

@@ -113,7 +113,7 @@ class TestLx3Session(unittest.TestCase):
                   sm=SubMaster(pandaStates=[self.panda]), state_machine=ENV['StateMachine'](), enabled=False, active=False)
     self.ctx.sm.logMonoTime = {'pandaStates': 1_000_000_000}
     self.cs = NS(canValid=True, steerFaultTemporary=False, steerFaultPermanent=False, buttonEvents=[],
-                 lx3InputState='ready', lx3PhysicalCounterValid=True, lx3PhysicalCounter=0)
+                 lx3InputState='ready', lx3PhysicalCounterValid=True, lx3PhysicalCounter=0, lx3InputResetCount=1)
     self.refresh_panda = True
 
   def step(self, *buttons, events=()):
@@ -175,6 +175,177 @@ class TestLx3Session(unittest.TestCase):
         self.assertIn('lx3InputFault' if state == 'integrityFault' else 'lx3InputNotReady', self.ctx.events.events)
         self.assertNotIn('steerUnavailable', self.ctx.events.events)
         self.assertFalse(self.ctx.lx3_engagement.ack_valid and self.ctx.lx3_engagement.ack_mode != Mode.OFF)
+
+  def delayed_main_off(self, phase=1, press=34, anchor=36, consumed=40, target=44, generation_delta=2,
+                       capture_events=(), with_press=True, request_age=0):
+    self.engage('mainCruise', counter=6)
+    old = self.ctx.lx3_engagement.accepted_generation
+    self.cs.lx3PhysicalCounter = press
+    if with_press:
+      self.step(button('mainCruise', True, counter=press))
+    self.cs.lx3PhysicalCounter = consumed
+    self.panda.lx3RequestGeneration = old + generation_delta
+    self.panda.lx3PhysicalCounter = target if phase == 1 else anchor
+    self.panda.lx3PermissionPhase = phase
+    self.panda.lx3RequestedMode = 2 if phase == 1 else 0
+    self.panda.lx3AcceptedMode = 0
+    self.panda.lx3ControlsAllowed = self.panda.controlsAllowed = False
+    self.panda.lx3RequestAgeMs = request_age
+    self.now += .1
+    self.step(events=capture_events)
+    return old
+
+  @staticmethod
+  def delayed_edges(anchor=36, press=42, release=44):
+    return (button('mainCruise', counter=anchor), button('accelCruise', True, counter=press),
+            button('accelCruise', counter=release))
+
+  def test_delayed_off_then_short_res_requires_new_pre_enable_and_ack(self):
+    old = self.delayed_main_off()
+    self.assertIsNotNone(self.ctx.lx3_engagement.replay_base)
+    self.assertFalse(self.ctx.enabled)
+    self.cs.lx3PhysicalCounter = 44
+    self.now += .04
+    self.assertEqual(self.step(*self.delayed_edges()), (False, False))
+    intent = self.ctx.lx3_engagement
+    self.assertEqual(self.ctx.state_machine.state, State.preEnabled)
+    self.assertEqual((intent.ack_generation, intent.ack_counter, intent.ack_mode), (old + 2, 44, Mode.COMBINED))
+    self.assertEqual((intent.mode, intent.accepted_generation), (Mode.OFF, 0))
+    self.accept()
+    self.assertEqual(self.step(), (True, True))
+    self.assertEqual(intent.accepted_generation, old + 2)
+
+  def test_delayed_off_companion_can_precede_the_following_pending(self):
+    old = self.delayed_main_off(phase=0, generation_delta=1)
+    self.assertIsNotNone(self.ctx.lx3_engagement.replay_base)
+    self.pending(Mode.COMBINED, 44)
+    self.assertEqual(self.panda.lx3RequestGeneration, old + 2)
+    self.cs.lx3PhysicalCounter = 44
+    self.step(*self.delayed_edges())
+    self.assertEqual(self.ctx.state_machine.state, State.preEnabled)
+    self.assertEqual(self.ctx.lx3_engagement.ack_counter, 44)
+
+  def test_delayed_off_target_consumes_only_real_off_then_waits_for_res_companion(self):
+    self.delayed_main_off(phase=0, generation_delta=1)
+    self.cs.lx3PhysicalCounter = 44
+    self.step(*self.delayed_edges())
+    intent = self.ctx.lx3_engagement
+    self.assertFalse(self.ctx.enabled)
+    self.assertFalse(intent.ack_valid)
+    self.assertEqual((intent.pending, intent.pending_counter), (Mode.COMBINED, 44))
+    self.pending(Mode.COMBINED, 44)
+    self.step()
+    self.assertEqual(self.ctx.state_machine.state, State.preEnabled)
+    self.assertEqual(intent.ack_mode, Mode.COMBINED)
+
+  def test_same_batch_off_then_res_disables_an_existing_active_session_first(self):
+    self.engage('mainCruise', counter=6)
+    self.pending(Mode.COMBINED, 44)
+    self.step(*self.delayed_edges())
+    intent = self.ctx.lx3_engagement
+    self.assertEqual(self.ctx.state_machine.state, State.disabled)
+    self.assertFalse(self.ctx.active)
+    self.assertFalse(intent.ack_valid)
+    self.assertEqual(intent.pending_counter, 44)
+    self.step()
+    self.assertEqual(self.ctx.state_machine.state, State.preEnabled)
+    self.assertEqual(intent.ack_counter, 44)
+
+  def test_delayed_batch_emission_order_handles_counter_wrap(self):
+    self.delayed_main_off(press=246, anchor=248, consumed=252, target=0)
+    self.cs.lx3PhysicalCounter = 0
+    self.step(*self.delayed_edges(anchor=248, press=254, release=0))
+    self.assertEqual(self.ctx.state_machine.state, State.preEnabled)
+    self.assertEqual(self.ctx.lx3_engagement.ack_counter, 0)
+
+  def test_partial_delayed_batches_do_not_replay_a_release_twice(self):
+    self.delayed_main_off()
+    self.cs.lx3PhysicalCounter = 42
+    self.step(*self.delayed_edges()[:2])
+    self.assertFalse(self.ctx.enabled)
+    self.assertIsNotNone(self.ctx.lx3_engagement.replay_base)
+    self.step()
+    self.cs.lx3PhysicalCounter = 44
+    self.step(button('accelCruise', counter=44))
+    self.assertEqual(self.ctx.state_machine.state, State.preEnabled)
+    self.assertEqual(self.ctx.lx3_engagement.ack_counter, 44)
+
+  def test_base_cannot_supply_permission_when_target_can_never_arrives(self):
+    self.delayed_main_off()
+    for delay in (.1, .499, .5, .6):
+      self.now = 1.1 + delay
+      self.step()
+      self.assertFalse(self.ctx.enabled)
+      self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.assertIsNone(self.ctx.lx3_engagement.replay_base)
+
+  def test_hidden_input_reset_or_cancel_clears_delayed_base(self):
+    for modification in ('reset', 'cancel', 'not_ready', 'stale_cs', 'epoch', 'target_generation', 'expired'):
+      with self.subTest(modification=modification):
+        self.setUp()
+        self.delayed_main_off()
+        self.assertIsNotNone(self.ctx.lx3_engagement.replay_base)
+        events = self.delayed_edges()
+        self.cs.lx3PhysicalCounter = 44
+        if modification == 'reset': self.cs.lx3InputResetCount += 1
+        if modification == 'cancel': events += (button('cancel', True, counter=44),)
+        if modification == 'not_ready': self.cs.lx3InputState = 'integrityFault'
+        if modification == 'stale_cs': self.ctx.car_state_fresh = False
+        if modification == 'epoch': self.panda.lx3TransportEpoch += 1
+        if modification == 'target_generation': self.panda.lx3RequestGeneration += 5
+        if modification == 'expired': self.now += .5
+        self.step(*events)
+        self.assertIsNone(self.ctx.lx3_engagement.replay_base)
+        self.assertFalse(self.ctx.enabled)
+        self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+
+  def test_entry_barriers_prevent_capture_and_clear_a_waiting_base(self):
+    for event in ('doorOpen', 'wrongGear', 'pedalPressed', 'steerUnavailable', 'commIssue', 'tooDistracted'):
+      for stage in ('capture', 'application'):
+        with self.subTest(event=event, stage=stage):
+          self.setUp()
+          self.delayed_main_off(capture_events=(event,) if stage == 'capture' else ())
+          self.cs.lx3PhysicalCounter = 44
+          self.step(*self.delayed_edges(), events=(event,) if stage == 'application' else ())
+          self.assertIsNone(self.ctx.lx3_engagement.replay_base)
+          self.assertFalse(self.ctx.enabled)
+          self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+
+  def test_unproven_or_out_of_bounds_delayed_base_is_never_captured(self):
+    for change in ('old_producer', 'odd_counter', 'far_counter',
+                   'far_generation', 'generation_wrap', 'panda_deadline'):
+      with self.subTest(change=change):
+        self.setUp()
+        if change == 'old_producer': self.cs.lx3InputResetCount = 0
+        kwargs = {}
+        if change == 'odd_counter': kwargs['target'] = 45
+        if change == 'far_counter': kwargs['target'] = 68
+        if change == 'far_generation': kwargs['generation_delta'] = 5
+        if change == 'generation_wrap': kwargs['generation_delta'] = -1
+        if change == 'panda_deadline': kwargs['request_age'] = 500
+        self.delayed_main_off(**kwargs)
+        self.assertIsNone(self.ctx.lx3_engagement.replay_base)
+
+  def test_replay_derived_candidate_still_needs_matching_native_counter_and_mode(self):
+    for target, mode in ((40, 2), (44, 1)):
+      self.setUp()
+      self.delayed_main_off(target=target)
+      self.panda.lx3RequestedMode = mode
+      self.cs.lx3PhysicalCounter = 44
+      self.step(*self.delayed_edges())
+      self.assertFalse(self.ctx.enabled)
+      self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+
+  def test_delayed_main_release_needs_held_press_provenance(self):
+    for change in ('anchor', 'missing_press', 'long_press'):
+      with self.subTest(change=change):
+        self.setUp()
+        self.delayed_main_off(with_press=change != 'missing_press', press=0 if change == 'long_press' else 34)
+        self.cs.lx3PhysicalCounter = 44
+        self.step(*self.delayed_edges(anchor=4 if change == 'anchor' else 36))
+        self.assertFalse(self.ctx.enabled)
+        self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+        self.assertIsNone(self.ctx.lx3_engagement.replay_base)
 
   def test_old_carstate_producer_cannot_enable(self):
     del self.cs.lx3InputState

@@ -12,7 +12,7 @@ FIELDS = {
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'seatbeltUnlatched',
                'steerFaultTemporary', 'steerFaultPermanent', 'latEnabled', 'buttonEvents', 'datetime',
-               'lx3InputState', 'lx3InputReason', 'lx3PhysicalCounter', 'lx3PhysicalCounterValid'),
+               'lx3InputState', 'lx3InputReason', 'lx3PhysicalCounter', 'lx3PhysicalCounterValid', 'lx3InputResetCount'),
   'carControl': ('enabled', 'latActive', 'longActive', 'actuators', 'lx3IdentityValid', 'lx3Generation',
                  'lx3PhysicalCounter', 'lx3Mode', 'lx3TransportEpoch'),
   'selfdriveState': ('enabled', 'active', 'state', 'lx3EngagementMode', 'lx3AckMode', 'lx3AckGeneration',

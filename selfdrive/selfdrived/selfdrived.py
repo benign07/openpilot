@@ -586,7 +586,7 @@ class SelfdriveD:
     now = now_ns / 1e9
     intent = self.lx3_engagement
     intent.begin_step(now)
-    candidate, requested = intent.request(CS.buttonEvents if self.car_state_fresh else (), now)
+    had_session = intent.mode != EngagementMode.OFF and intent.accepted_generation != 0
     # LX3 main/RES/SET/LFA intent is owned here. In particular, a stock SCC
     # response or a cruise helper's automatic request cannot engage this path.
     excluded = (EventName.wrongCarMode, EventName.buttonEnable, EventName.buttonCancel, EventName.pcmEnable,
@@ -604,25 +604,31 @@ class SelfdriveD:
              lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience,
                               require_controls=False))
     panda = lx3_permission_sample(self.sm['pandaStates']) if healthy else None
-    if intent.observe_rejection(panda, now):
-      candidate, requested = EngagementMode.OFF, True
     if CS.steerFaultTemporary or CS.steerFaultPermanent:
       self.events.add(EventName.steerUnavailable)
     if not lx3_input_ready(CS):
       self.events.add(EventName.lx3InputFault if str(getattr(CS, 'lx3InputState', 'notApplicable')) == 'integrityFault'
                       else EventName.lx3InputNotReady)
+    input_barriers = any(self.events.contains(et) for et in
+                         (ET.NO_ENTRY, ET.USER_DISABLE, ET.SOFT_DISABLE, ET.IMMEDIATE_DISABLE))
+    intent.prepare_replay(CS, panda, now, healthy, input_barriers)
+    buttons = tuple(CS.buttonEvents) if self.car_state_fresh else ()
+    buttons = intent.replay_buttons(buttons, CS, now)
+    candidate, requested = intent.request(buttons, now)
+    if intent.observe_rejection(panda, now):
+      candidate, requested = EngagementMode.OFF, True
 
     if candidate == EngagementMode.OFF:
       if requested or self.enabled:
         self.events.add(EventName.buttonCancel)
       self.enabled, self.active = self.state_machine.update(self.events)
-      intent.reject(now)
+      intent.reject(now, preserve_replay=intent.replay_base is not None)
       return
 
     if intent.pending is not None:
       # Suspend an old accepted session before requesting a different mode. Use
       # the normal disable transition; PRE_ENABLE entry is only from disabled.
-      if self.enabled and intent.mode != EngagementMode.OFF:
+      if self.enabled and (had_session or intent.mode != EngagementMode.OFF):
         self.events.add(EventName.buttonCancel)
         self.enabled, self.active = self.state_machine.update(self.events)
         intent.mode = EngagementMode.OFF
@@ -686,15 +692,18 @@ class SelfdriveD:
         intent.reject(now)
       return
 
+    replay_captured = False
     if not healthy or not lx3_permission_matches(panda, intent.mode, intent.accepted_generation,
                                                 intent.accepted_counter, accepted=True, epoch=intent.accepted_epoch):
+      if healthy:
+        replay_captured = intent.capture_replay(CS, panda, now, input_barriers)
       self.events.add(EventName.controlsMismatch)
     if self.enabled and not self.active and any(self.events.contains(et) for et in
                                                 (ET.NO_ENTRY, ET.USER_DISABLE, ET.SOFT_DISABLE, ET.IMMEDIATE_DISABLE)):
       self.events.add(EventName.buttonCancel)
     self.enabled, self.active = self.state_machine.update(self.events)
     if not self.enabled:
-      intent.reject(now)
+      intent.reject(now, preserve_replay=replay_captured)
 
   def read_personality_param(self):
     try:

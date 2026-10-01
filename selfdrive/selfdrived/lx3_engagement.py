@@ -44,6 +44,9 @@ class Lx3Engagement:
     self.accepted_epoch = 0
     self.rejection = None
     self.unbound_rejection = None
+    self.main_press = None
+    self.input_reset_count = None
+    self.replay_base = None
     self.clear_ack()
 
   def clear_ack(self):
@@ -71,7 +74,9 @@ class Lx3Engagement:
     self.ack_valid = generation != 0
     self.ack_epoch = self.pending_epoch if epoch is None else epoch
 
-  def reject(self, now):
+  def reject(self, now, preserve_replay=False):
+    if not preserve_replay:
+      self.replay_base = None
     if self.pending_generation != 0:
       self.rejection = self.pending_generation, self.pending_counter, now, self.pending_epoch
       self.set_ack(EngagementMode.OFF, self.pending_generation, self.pending_counter)
@@ -87,6 +92,107 @@ class Lx3Engagement:
     self.pending_generation = 0
     self.pending_epoch = 0
     self.accepted_epoch = 0
+
+  def prepare_replay(self, cs, panda, now, healthy, barriers):
+    """Discard delayed intent across any input reset, barrier or transport loss."""
+    serial = int(getattr(cs, 'lx3InputResetCount', 0))
+    qualified = lx3_input_ready(cs) and 0 < serial < 2**32
+    reset = self.input_reset_count is not None and serial != self.input_reset_count
+    self.input_reset_count = serial
+    if not qualified or reset or not healthy or barriers:
+      self.main_press = None
+      self.replay_base = None
+      return
+    base = self.replay_base
+    if base is not None:
+      consumed = (int(cs.lx3PhysicalCounter) - base['counter']) % 256
+      if (panda.lx3TransportEpoch != base['epoch'] or panda.lx3PermissionPhase not in (0, 1) or
+          not 1 <= panda.lx3RequestGeneration - base['origin_generation'] <= 4 or
+          not 0 <= now - base['stamp'] < 0.5 or panda.lx3RequestAgeMs >= 500 or
+          serial != base['reset_count'] or consumed > 26 or consumed % 2):
+        self.replay_base = None
+
+  def capture_replay(self, cs, panda, now, barriers):
+    # Only preserve our own previously accepted intent. This does not preserve
+    # authority, renew an old ACK, or adopt a mode reported by Panda.
+    serial = int(getattr(cs, 'lx3InputResetCount', 0))
+    if (barriers or panda is None or not lx3_input_ready(cs) or not 0 < serial < 2**32 or
+        self.pending is not None or self.mode == EngagementMode.OFF or
+        self.accepted_generation == 0 or panda.lx3TransportEpoch != self.accepted_epoch or
+        not 1 <= panda.lx3RequestGeneration - self.accepted_generation <= 4 or
+        panda.lx3PermissionPhase not in (0, 1) or panda.lx3RequestAgeMs >= 500):
+      return False
+    counter = int(cs.lx3PhysicalCounter)
+    delta = (panda.lx3PhysicalCounter - counter) % 256
+    if min(delta, 256 - delta) > 26 or delta % 2:
+      return False
+    self.replay_base = {'mode': self.mode, 'counter': counter,
+                        'reset_count': serial, 'stamp': now, 'main_press': self.main_press,
+                        'origin_generation': self.accepted_generation,
+                        'epoch': self.accepted_epoch}
+    return True
+
+  @staticmethod
+  def button_candidate(name, current, pending):
+    if name == 'mainCruise':
+      return EngagementMode.OFF if pending or current == EngagementMode.COMBINED else EngagementMode.COMBINED
+    if name == 'lfaButton':
+      return EngagementMode.OFF if pending or current != EngagementMode.OFF else EngagementMode.LATERAL
+    if name in ('accelCruise', 'decelCruise') and not pending and current != EngagementMode.COMBINED:
+      return EngagementMode.COMBINED
+    return None
+
+  def replay_buttons(self, buttons, cs, now):
+    """Interpret delayed emissions from our own prior mode, without authority.
+
+    MAIN's debounce anchor may precede the consumed counter. A held physical
+    press and a bounded neutral anchor are required to interpret that release.
+    No event is invented from the companion or a cached mode.
+    """
+    base = self.replay_base
+    if base is None:
+      return buttons
+    if any(str(b.type) == 'cancel' or not getattr(b, 'lx3PhysicalValid', False) for b in buttons):
+      self.replay_base = None
+      return buttons
+    consumed = (int(cs.lx3PhysicalCounter) - base['counter']) % 256
+    for index, b in enumerate(buttons):
+      name, counter = str(b.type), int(b.lx3PhysicalCounter)
+      forward = (counter - base['counter']) % 256
+      if b.pressed:
+        if name == 'mainCruise':
+          if not 2 <= forward <= consumed or forward % 2:
+            self.replay_base = None
+            return ()
+          base['main_press'] = self.main_press = counter
+        continue
+      candidate = self.button_candidate(name, base['mode'], False)
+      if name not in ('mainCruise', 'lfaButton', 'accelCruise', 'decelCruise'):
+        continue
+      admitted = 2 <= forward <= consumed and forward % 2 == 0
+      if name == 'mainCruise':
+        press = base['main_press']
+        width = (counter - press) % 256 if press is not None else 0
+        behind = (base['counter'] - counter) % 256
+        admitted = (press is not None and 2 <= width <= 26 and width % 2 == 0 and
+                    (admitted or (behind <= 26 and behind % 2 == 0)))
+        base['main_press'] = self.main_press = None
+      if not admitted:
+        self.replay_base = None
+        return ()
+      if candidate is None:
+        continue
+      base['mode'] = candidate
+      if candidate != EngagementMode.OFF:
+        # Re-enter through the ordinary association, StateMachine PRE_ENABLE,
+        # and a new generation-bound ACK. Accepted mode/identity stay cleared.
+        # This candidate is derived from CAN. Only the normal matching Panda
+        # (mode,counter,generation,epoch) association can issue its fresh ACK.
+        self.replay_base = None
+        self.pending, self.pending_counter, self.pending_since = candidate, counter, now
+        self.pending_generation = self.pending_epoch = 0
+        return buttons[index + 1:]
+    return ()  # Already consumed these emissions; never interpret them twice.
 
   def observe_rejection(self, panda, now):
     if self.unbound_rejection is None or panda is None:
@@ -123,19 +229,17 @@ class Lx3Engagement:
     candidate = None
     current = self.mode
     for b in buttons:
-      if b.pressed or not getattr(b, 'lx3PhysicalValid', False):
+      if not getattr(b, 'lx3PhysicalValid', False):
         continue
       name = str(b.type)
       if name == 'mainCruise':
-        candidate = EngagementMode.OFF if self.pending is not None or current == EngagementMode.COMBINED else EngagementMode.COMBINED
-      elif name == 'lfaButton':
-        candidate = EngagementMode.OFF if self.pending is not None or current != EngagementMode.OFF else EngagementMode.LATERAL
-      elif name in ('accelCruise', 'decelCruise'):
-        if self.pending is not None or current == EngagementMode.COMBINED:
-          continue  # Speed adjustment is not another permission transaction.
-        candidate = EngagementMode.COMBINED
-      else:
+        self.main_press = int(b.lx3PhysicalCounter) if b.pressed else None
+      if b.pressed:
         continue
+      next_candidate = self.button_candidate(name, current, self.pending is not None)
+      if next_candidate is None:
+        continue
+      candidate = next_candidate
       current = candidate
       if candidate == EngagementMode.OFF:
         self.reject(now)

@@ -81,12 +81,14 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
                                   (0xEA, frame(0xEA, 24), 0)]]])
       parsers[Bus.cam].update([[ns, [(0x162, frame(0x162, 32), 2)]]])
       result = state.update_canfd(parsers)
-      # Exercise the actual dataclass -> Capnp publisher conversion used by card.
+      # Serialize the actual CarState producer through the Capnp schema.
       message = car.CarState.new_message(**result.to_dict())
       with car.CarState.from_bytes(message.to_bytes()) as reader:
         self.assertEqual(str(reader.lx3InputState), expected)
         self.assertEqual(reader.lx3PhysicalCounter, counter)
         self.assertEqual(reader.lx3PhysicalCounterValid, expected == 'ready')
+        self.assertEqual(reader.lx3InputResetCount, state.lx3_button_intent.input.reset_count)
+        self.assertGreater(reader.lx3InputResetCount, 0)
         self.assertFalse(reader.steerFaultTemporary)
         self.assertFalse(reader.steerFaultPermanent)
         self.assertFalse(any(str(event.type) in ('mainCruise', 'lfaButton', 'accelCruise') and not event.pressed

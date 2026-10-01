@@ -96,6 +96,15 @@ class TestPhysicalInputs(unittest.TestCase):
     self.assertEqual(self.input.state, 'ready')
     self.assertEqual(self.input.diagnostic_reason, 'valid')
 
+  def test_reset_serial_is_nonzero_and_changes_on_every_rejection(self):
+    self.warmup()
+    serial = self.input.reset_count
+    self.feed(0, corrupt=True)
+    self.assertEqual(self.input.reset_count, serial + 1)
+    self.input.reset_count = 2**32 - 1
+    self.input.reject('cancel')
+    self.assertEqual(self.input.reset_count, 1)
+
   def test_dead_stream_is_a_fault_even_before_warmup_finishes(self):
     self.assertFalse(self.input.fresh(self.now))
     self.assertEqual(self.input.state, 'warmingUp')
@@ -325,6 +334,17 @@ class TestPhysicalParser(unittest.TestCase):
     events, ready = self.feed(self.frame(128), self.frame(), self.frame(corrupt=True))
     self.assertFalse(ready)
     self.assertEqual(events, [])
+
+  def test_hidden_fault_and_requalification_in_one_batch_retains_reset_serial(self):
+    self.warmup()
+    serial = self.intent.input.reset_count
+    frames = [self.frame(corrupt=True)] + [self.frame() for _ in range(4)] + [self.frame(1), self.frame()]
+    self.parser.update([[frames[-1][0], [f for frame in frames for f in frame[1]]]])
+    events, ready = self.intent.from_parser(self.parser, checksum, with_counter=True)
+    self.assertTrue(ready)
+    self.assertEqual(self.intent.input.state, 'ready')
+    self.assertGreater(self.intent.input.reset_count, serial)
+    self.assertEqual([e[:2] for e in events], [('accelCruise', True), ('accelCruise', False)])
 
   def test_bad_frame_after_valid_cancel_preserves_cancel_and_faults(self):
     self.warmup()

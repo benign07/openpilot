@@ -77,9 +77,13 @@ def run_case(lib, spec):
     expected = 2
   if scenario == 'combined_main_off_res_short':
     buttons = {200: 8, 800: 8, 960: 1}
-    # Golden OFF/RES identity race: delayed batched MAIN OFF arrives after the
-    # companion has revoked the old host mode. No mismatched ACK may grant it.
-    expected = 0 if (delay, batch, offset, order) == (30, 80, 0, 'host_first') else 2
+    expected = 2  # Every retry needs its own actual physical release/new ACK.
+  if scenario == 'combined_main_off_lfa_short':
+    buttons = {200: 8, 800: 8, 960: 128}
+    expected = 1
+  if scenario == 'combined_lfa_off_res_short':
+    buttons = {200: 8, 800: 128, 960: 1}
+    expected = 2
   if scenario == 'cancel': buttons[640] = 4
   if scenario == 'cancel_short_retry':
     buttons.update({640: 4, 720: 1})
@@ -145,6 +149,7 @@ def run_case(lib, spec):
     case.cs.lx3InputState = intent.input.state
     case.cs.lx3PhysicalCounterValid = ready and intent.input.counter is not None
     case.cs.lx3PhysicalCounter = intent.input.counter or 0
+    case.cs.lx3InputResetCount = intent.input.reset_count
     case.now = 1 + ms / 1000
     host.ENV['time'] = NS(monotonic_ns=lambda: 1_000_000_000 + ms * 1_000_000)
     barriers = ()
@@ -160,7 +165,7 @@ def run_case(lib, spec):
     counters['single_state_machine_updates'] += 1
     session = case.ctx.lx3_engagement
     if case.ctx.active:
-      assert case.ctx.enabled and session.mode in (1, 2) and session.pending is None
+      assert case.ctx.enabled and session.mode in (1, 2) and session.pending is None, (spec, ms, vars(session), trace)
       assert not session.ack_valid
       assert case.panda.lx3PermissionPhase == 2 and case.panda.lx3ControlsAllowed
       assert session.accepted_generation == case.panda.lx3RequestGeneration
@@ -284,8 +289,9 @@ def main():
                                   ('host_first', 'between', 'host_last'),
                                   ('main_res_fast', 'main_set_fast', 'main_gap_fast', 'main_lfa_fast',
                                    'res_set_direct', 'lfa_res_direct', 'res_main_direct', 'combined_main_off_res')))
-  specs.extend([(0, 0, 0, 'host_first', 'combined_main_off_res_short'),
-                (30, 80, 0, 'host_first', 'combined_main_off_res_short')])
+  specs.extend(itertools.product((0, 30, 90), (0, 80), (0, 30, 90),
+                                 ('host_first', 'between', 'host_last'),
+                                 ('combined_main_off_res_short', 'combined_main_off_lfa_short', 'combined_lfa_off_res_short')))
   results = [run_case(lib, spec) for spec in specs]
   total = Counter()
   for result in results: total.update(result['counts'])

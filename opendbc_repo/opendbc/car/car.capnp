@@ -267,6 +267,8 @@ struct CarState {
   lx3PhysicalCounter @83 :UInt8;
   lx3PhysicalCounterValid @84 :Bool;
   lx3InputReason @85 :Text;
+  # Nonzero producer reset serial; zero means an older/default producer.
+  lx3InputResetCount @86 :UInt32;
 
   enum Lx3InputState {
     notApplicable @0;

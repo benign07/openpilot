@@ -148,15 +148,18 @@ class TestInputHealthSchema(unittest.TestCase):
     old = schema.CarState.new_message(canValid=True)
     self.assertEqual(str(old.lx3InputState), 'notApplicable')
     self.assertFalse(old.lx3PhysicalCounterValid)
+    self.assertEqual(old.lx3InputResetCount, 0)
     self.assertFalse(host.MODULE['lx3_input_ready'](old))
     for state in ('notApplicable', 'warmingUp', 'ready', 'requalifying', 'integrityFault'):
       msg = schema.CarState.new_message(lx3InputState=state, lx3PhysicalCounter=254,
-                                        lx3PhysicalCounterValid=state == 'ready', lx3InputReason='checksum')
+                                        lx3PhysicalCounterValid=state == 'ready', lx3InputReason='checksum',
+                                        lx3InputResetCount=4294967295)
       with schema.CarState.from_bytes(msg.to_bytes()) as parsed:
         sample = selected_fields(parsed, FIELDS['carState'])
         self.assertEqual(sample['lx3InputState'], state)
         self.assertEqual(sample['lx3PhysicalCounter'], 254)
         self.assertEqual(sample['lx3InputReason'], 'checksum')
+        self.assertEqual(sample['lx3InputResetCount'], 4294967295)
         self.assertEqual(sample['lx3PhysicalCounterValid'], state == 'ready')
         self.assertEqual(host.MODULE['lx3_input_ready'](parsed), state == 'ready')
 

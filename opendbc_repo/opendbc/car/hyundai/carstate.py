@@ -815,6 +815,7 @@ class CarState(CarStateBase):
                           for name, pressed, counter in events]
       ret.lx3InputState = intent.input.state
       ret.lx3InputReason = intent.input.diagnostic_reason
+      ret.lx3InputResetCount = intent.input.reset_count
       ret.lx3PhysicalCounter = intent.input.counter or 0
       ret.lx3PhysicalCounterValid = ready and intent.input.counter is not None
 
