@@ -23,7 +23,7 @@ from openpilot.system.manager.process_config import managed_processes
 from openpilot.system.version import get_version
 from openpilot.tools.lib.helpers import RE
 from openpilot.tools.lib.logreader import LogReader
-from msgq.visionipc import VisionIpcServer, VisionStreamType
+from msgq.visionipc import VisionIpcClient, VisionIpcServer, VisionStreamType
 
 SentinelType = log.Sentinel.SentinelType
 
@@ -117,6 +117,14 @@ class TestLoggerd:
     for stream_type, frame_spec, _ in streams:
       vipc_server.create_buffers_with_sizes(stream_type, 40, *(frame_spec))
     vipc_server.start_listener()
+    deadline = time.monotonic() + 3
+    advertised_streams = []
+    while time.monotonic() < deadline:
+      advertised_streams = sorted(int(stream) for stream in VisionIpcClient.available_streams("camerad", False))
+      if advertised_streams:
+        break
+      time.sleep(.01)
+    assert advertised_streams == sorted(int(stream) for stream, _, _ in streams)
 
     os.environ["LOGGERD_TEST"] = "1"
     os.environ["LOGGERD_SEGMENT_LENGTH"] = str(segment_length)
@@ -125,6 +133,7 @@ class TestLoggerd:
     assert pm.wait_for_readers_to_update("roadCameraState", timeout=5)
 
     fps = 20
+    observed_road_encoder_segments = set()
     for n in range(1, int(num_segs * segment_length * fps) + 1):
       # send video
       for stream_type, frame_spec, state in streams:
@@ -146,9 +155,14 @@ class TestLoggerd:
         assert pm.wait_for_readers_to_update(state, timeout=5, dt=0.001)
 
       sm.update(100)  # wait for encode data publish
+      if sm.updated["roadEncodeData"]:
+        observed_road_encoder_segments.add(int(sm["roadEncodeData"].idx.segmentNum))
 
     managed_processes["loggerd"].stop()
     managed_processes["encoderd"].stop()
+    del vipc_server
+    return {"road_encoder_segments": sorted(observed_road_encoder_segments),
+            "advertised_streams": advertised_streams}
 
   def test_init_data_values(self):
     os.environ["CLEAN"] = random.choice(["0", "1"])

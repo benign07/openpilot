@@ -72,12 +72,12 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: uv run --no-sync python -m unittest openpilot.selfdrive.selfdrived.tests.test_lx3_runtime_configuration -v
-      - name: Actual video encoder rotation with absent and present driver camera
+      - name: Actual video encoder rotation and pre-fix negative A/B
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           uv pip install pytest
-          uv run --no-sync python system/loggerd/tests/check_logger_rotation.py
+          uv run --no-sync python system/loggerd/tests/check_logger_rotation_ab.py
       - name: Actual generated Panda C++ pack and firmware decoder transport
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -99,7 +99,11 @@ jobs:
         if: always()
         with:
           name: lx3-full-runtime-build-log
-          path: lx3-full-build.log
+          path: |
+            lx3-full-build.log
+            lx3-logger-baseline-build.log
+            lx3-logger-candidate-restored-build.log
+            lx3-logger-rotation-ab.json
       - name: Record scope
         if: always()
         run: echo 'This builds the complete Linux x86_64 runtime graph using the repository lockfile. --minimal excludes extra tools/tests. Import checks are not a closed-loop IPC or in-vehicle test. No OTA or installation.' >> "$GITHUB_STEP_SUMMARY"
