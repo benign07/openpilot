@@ -158,3 +158,28 @@ can_inventory_work/lx3_rejected_rx_pending_validation_20261001.json에있다.
 만들지않고기존RX버튼revoke와같은함수를같은RX문맥에서쓴다.
 19시원본TCS/MDPS CRC는정상이므로이수정역시계기판경고원인/해결증거가
 아니다. 정확전체Linux/H7 CI는커밋후별도확인하며OTA/차량접속없음.
+
+## Host 휠속도 CRC 검증 누락
+
+LX3 전용 DBC 자동 checksum binding 누락의남은입력인 WHEEL_SPEEDS를
+실제 production parser factory/DBC 회귀에서검사했다. 정상counter42/
+휠속도10 뒤 byte8만손상시킨원본을넣으면, 정확f673 factory는속도와
+timestamp를갱신해 timestamp1010000000 !=1000000000 단언이실패한다.
+기존MDPS/TCS와같은CRC callback을LX3블록에추가해값·timestamp유지와
+counter43 정상입력복구를검증했다. 정보용counter/신호scale/다른차량
+경로는그대로다. 실제generated parser/packer 구성검사에도휠속도CRC
+binding을확인한다. lx3_host_wheel_crc_validation_20261001.json에정확
+이전factory Git객체/새factory/실패·통과로그SHA를보관했다.
+
+새질문에대한원본14 rlog 감사 wheel_and_hybrid_crc_1900_20261001.json:
+SHA확인한원본bus0 WHEEL_SPEEDS101568개모두24B/commonCRC정상,
+byte2증가+1 101567개. ACCELERATOR_ALT50781개모두32B/commonCRC정상,
+byte2증가+2 50777개/+4 3개. CRC는기존생산hkg함수로계산했다.
+이는이LX3로그의header형식을검증하고다른연식/펌웨어/물리ECU의역할을
+확정하지않는다. native0x105 CRC/counter예외는이wheel수정에서유지하며
+CRC없는신호라고주장하지않는다. 새근거로LX3가속신호host정의와native
+전용배열을분리해후속검토할수있지만,그정책변경이완료됐다고보고하지
+않는다. 원본CRC가정상이므로wheel누락역시19시OEM경고원인증거가아니다.
+Claude62는wheel callback최소수정을동의했으나원본JSON경로를잘못찾아
+그수치를독립열람했다고주장하지않는다. 해당파일의정확경로는
+can_inventory_work/wheel_and_hybrid_crc_1900_20261001.json이다.

@@ -394,23 +394,27 @@ class TestLx3ClusterTransport(unittest.TestCase):
       self.assertEqual(parser.ts_nanos[name]['CHECKSUM'], self.clock + 20_000_000, name)
       self.assertEqual(msg.sigs['COUNTER'].type, 0, name)
 
-  def test_lx3_physical_mdps_and_tcs_ignore_corrupt_originals_and_recover(self):
+  def test_lx3_physical_mdps_tcs_and_wheels_ignore_corrupt_originals_and_recover(self):
     parser = ENV['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[0]
-    for name in ('MDPS', 'TCS'):
+    for name in ('WHEEL_SPEEDS', 'MDPS', 'TCS'):
       parser._add_message(name)
       msg = parser.dbc.name_to_msg[name]
       raw = bytearray(msg.size)
       raw[2] = 42
+      if name == 'WHEEL_SPEEDS':
+        raw[8:10] = (320).to_bytes(2, 'little')
       raw[:2] = self.env['hkg_can_fd_checksum'](msg.address, None, raw).to_bytes(2, 'little')
       parser.update([[self.clock, [(msg.address, bytes(raw), 0)]]])
       before = dict(parser.vl[name])
       self.assertEqual(parser.ts_nanos[name]['CHECKSUM'], self.clock)
+      if name == 'WHEEL_SPEEDS':
+        self.assertEqual(before['WHEEL_SPEED_1'], 10)
       corrupt = bytearray(raw)
-      corrupt[5] ^= 1
+      corrupt[8 if name == 'WHEEL_SPEEDS' else 5] ^= 1
       parser.update([[self.clock + 10_000_000, [(msg.address, bytes(corrupt), 0)]]])
       self.assertEqual(parser.ts_nanos[name]['CHECKSUM'], self.clock, name)
       self.assertEqual(parser.vl[name], before, name)
-      raw[2] = 43  # Actual MDPS/TCS counters advance by +1.
+      raw[2] = 43  # Actual MDPS/TCS/wheel counters advance by +1.
       raw[:2] = self.env['hkg_can_fd_checksum'](msg.address, None, raw).to_bytes(2, 'little')
       parser.update([[self.clock + 20_000_000, [(msg.address, bytes(raw), 0)]]])
       self.assertEqual(parser.ts_nanos[name]['CHECKSUM'], self.clock + 20_000_000, name)

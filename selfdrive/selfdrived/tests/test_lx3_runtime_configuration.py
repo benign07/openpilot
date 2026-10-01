@@ -66,7 +66,7 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
       self.assertEqual(set(message.sigs), set(controller.packer.dbc.name_to_msg[name].sigs))
     self.assertIn('RAW_UNMAPPED_79', parser.dbc.name_to_msg['LFA'].sigs)
     pt_parser = CarState.get_can_parsers_canfd(None, cp)[Bus.pt]
-    for name in ('MDPS', 'TCS'):
+    for name in ('MDPS', 'TCS', 'WHEEL_SPEEDS'):
       message = pt_parser.dbc.name_to_msg[name]
       self.assertIsNotNone(message.sigs['CHECKSUM'].calc_checksum)
       self.assertEqual(message.sigs['COUNTER'].type, 0)
