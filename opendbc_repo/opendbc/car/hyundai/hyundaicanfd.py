@@ -153,7 +153,12 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
         values["LKAS_ANGLE_ACTIVE"] = 0 #2 if lat_active else 1,
         values["LKAS_ANGLE_MAX_TORQUE"] = 0 #max_torque if lat_active else 0,
         values["NEW_SIGNAL_1"] = 10
-      ret.append(packer.make_can_msg("LFA", CAN.ECAN, values, rx_counter = rx_counter))
+      # LX3 steering uses LFA_ALT. Keep the passive compatibility companion,
+      # but let active OEM emergency LFA pass through without a host duplicate.
+      passive_lfa = (values.get("STEER_REQ") == 0 and values.get("LKAS_ANGLE_ACTIVE") == 0 and
+                     values.get("LKAS_ANGLE_MAX_TORQUE") == 0 and values.get("TORQUE_REQUEST") in (-1024, 0))
+      if not lx3_hev or passive_lfa:
+        ret.append(packer.make_can_msg("LFA", CAN.ECAN, values, rx_counter = rx_counter))
 
   elif CS.lfa is not None:
     values = {}

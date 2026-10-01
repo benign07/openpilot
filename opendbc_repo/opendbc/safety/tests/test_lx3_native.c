@@ -1794,8 +1794,71 @@ static void required_rx_startup_regressions(void) {
   puts("PASS: LX3 startup requires all five observed valid RX inputs before request/ACK; 20 missing-input and 4 complete LFA/combined profiles with recovery/cancel");
 }
 
+static void legacy_steering_format_regressions(void) {
+  const unsigned int addresses[] = {0x50U, 0x110U, 0x12AU};
+  const uint16_t profiles[] = {1214U, 1182U, 190U};
+  for (unsigned int pi = 0U; pi < 3U; pi++) {
+    for (unsigned int allowed = 0U; allowed < 2U; allowed++) {
+      for (unsigned int ai = 0U; ai < 3U; ai++) {
+        for (unsigned int bus = 0U; bus < 2U; bus++) {
+          reset(profiles[pi]);
+          if (allowed) grant_controls();  // Isolated TX policy, not physical grant proof.
+          CANPacket_t p = packet(addresses[ai], bus, addresses[ai] == 0x110U ? 13U : 10U);
+          p.data[5] = 0xFEU; p.data[6] = 0x1FU;  // Actual DBC +1023 torque/STEER_REQ1.
+          hyundai_canfd_update_checksum(&p);
+          const bool accepted = safety_tx_hook(&p);
+          if ((pi < 2U) && accepted) {
+            printf("LEGACY_STEERING_ESCAPE profile=%u addr=%03x bus=%u allowed=%u\n",
+                   profiles[pi], addresses[ai], bus, allowed); fflush(stdout);
+          }
+          assert(accepted == (pi == 2U));
+          if (pi < 2U) {
+            assert(!safety_tx_buffered_for_fwd);
+            // Preserve the passive12A companion used by the existing host.
+            memset(p.data, 0, sizeof(p.data));
+            assert(safety_tx_hook(&p) == (addresses[ai] == 0x12AU));
+            CANPacket_t original = p; original.bus = 2U;
+            original.data[5] = 0xFEU; original.data[6] = 0x1FU;
+            hyundai_canfd_update_checksum(&original);
+            const CANPacket_t saved = original;
+            assert(safety_fwd_hook(&original) == 0);
+            assert(memcmp(original.data, saved.data, GET_LEN(&saved)) == 0);
+          }
+        }
+      }
+    }
+  }
+  const int torques[] = {-1024, -1, 0, 1, 1023};
+  for (unsigned int pi = 0U; pi < 2U; pi++) {
+    for (unsigned int allowed = 0U; allowed < 2U; allowed++) {
+      for (unsigned int bus = 0U; bus < 2U; bus++) {
+        for (unsigned int ti = 0U; ti < 5U; ti++) {
+          for (unsigned int angle_active = 0U; angle_active < 4U; angle_active++) {
+            for (unsigned int cap = 0U; cap < 2U; cap++) {
+              for (unsigned int req = 0U; req < 2U; req++) {
+                reset(profiles[pi]); if (allowed) grant_controls();
+                CANPacket_t p = packet(0x12AU, bus, 10U);
+                const unsigned int torque = (unsigned int)(torques[ti] + 1024);
+                p.data[5] = (torque & 0x7FU) << 1U;
+                p.data[6] = ((torque >> 7U) & 0xFU) | (req << 4U);
+                p.data[9] = (angle_active << 4U) | 0x80U;  // Preserve unrelated raw bit79.
+                p.data[12] = cap;
+                const bool passive = ((torques[ti] == -1024) || (torques[ti] == 0)) &&
+                                     (angle_active == 0U) && (cap == 0U) && (req == 0U);
+                assert(safety_tx_hook(&p) == passive);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  puts("PASS: LX3 rejects legacy050/110 and active12A steering; passive12A, original OEM steering and legacy190 preserved");
+}
+
 int main(int argc, char **argv) {
   if (argc == 2) {
+    if (strcmp(argv[1], "--legacy-steering-formats") == 0) { legacy_steering_format_regressions(); return 0; }
     if (strcmp(argv[1], "--required-rx-startup") == 0) { required_rx_startup_regressions(); return 0; }
     if (strcmp(argv[1], "--latest-scc-warning") == 0) { latest_scc_warning_regressions(); return 0; }
     if (strcmp(argv[1], "--hybrid-crc") == 0) { hybrid_crc_receive_regressions(); return 0; }
@@ -1836,5 +1899,6 @@ int main(int argc, char **argv) {
   hybrid_crc_receive_regressions();
   latest_scc_warning_regressions();
   required_rx_startup_regressions();
+  legacy_steering_format_regressions();
   return 0;
 }

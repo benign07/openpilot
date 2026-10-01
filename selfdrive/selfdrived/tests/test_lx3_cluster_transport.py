@@ -15,6 +15,22 @@ Lx3ClusterTransport = runpy.run_path(str(ROOT / 'opendbc_repo/opendbc/car/hyunda
 
 
 class TestLx3ClusterTransport(unittest.TestCase):
+  def test_lx3_passive_lfa_companion_is_kept_but_active_oem_lfa_is_not_duplicated(self):
+    self.cs.mdps = self.cs.lfa_alt = self.cs.steer_touch_2af = None
+    self.cs.adrv_0x161['ALERTS_1'] = 11  # Exercise unchanged original emergency fields.
+    for lx3 in (False, True):
+      self.cp.carFingerprint = 'HYUNDAI_PALISADE_LX3_HEV' if lx3 else 'OTHER_CAR'
+      for field, value in ((None, 0), ('STEER_REQ', 1), ('LKAS_ANGLE_ACTIVE', 2),
+                           ('LKAS_ANGLE_MAX_TORQUE', 1), ('TORQUE_REQUEST', 1)):
+        _, self.cs.lfa = self.lfa_original(1)
+        if field is not None:
+          self.cs.lfa[field] = value
+        original = self.cs.lfa.copy()
+        packets = self.env['create_steering_messages_camera_scc'](
+          1, self.packer, self.cp, self.can, self.cc, True, 0, self.cs, 0., 25, True)
+        self.assertEqual([p[0] for p in packets], [] if lx3 and field is not None else [0x12A])
+        self.assertEqual(self.cs.lfa, original)
+
   def scc_warning_message(self, warning, guarded, enabled, stopping, override):
     definitions(ROOT / 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py', self.env, {'create_acc_control_scc2'})
     self.cs.scc_control = dict.fromkeys(self.packer.dbc.name_to_msg['SCC_CONTROL'].sigs, 0)

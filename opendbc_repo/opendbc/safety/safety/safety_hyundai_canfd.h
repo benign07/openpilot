@@ -65,6 +65,14 @@ static bool hyundai_canfd_actuator_addr(int addr) {
   return (addr == 0xCB) || (addr == 0x12A) || (addr == 0x1A0);
 }
 
+static bool lx3_legacy_lfa_passive(const CANPacket_t *pkt) {
+  // Preserve Carrot's passive 0x12A companion format, including its -1024
+  // torque sentinel, but never use it as a second steering control path.
+  const int torque = (((GET_BYTE(pkt, 6) & 0xFU) << 7U) | (GET_BYTE(pkt, 5) >> 1U)) - 1024;
+  return !GET_BIT(pkt, 52U) && (((GET_BYTE(pkt, 9) >> 4U) & 0x3U) == 0U) &&
+         (GET_BYTE(pkt, 12) == 0U) && ((torque == 0) || (torque == -1024));
+}
+
 static bool hyundai_canfd_lx3_display_addr(int addr) {
   return (addr == 0x161) || (addr == 0x162) || (addr == 0x1E0) || (addr == 0x1EA) || (addr == 0x200);
 }
@@ -992,6 +1000,11 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
     if (!hyundai_camera_scc || !hyundai_canfd_hda2 || !hyundai_hybrid_gas_signal || !hyundai_longitudinal) {
       return false;
     }
+    // The supported LX3 profile controls steering through bounded LFA_ALT
+    // (0xCB) only. Shared legacy LKAS/LFA formats must not bypass that path.
+    // Retain the existing passive LFA companion and non-LX3 compatibility.
+    if ((addr == 0x50) || (addr == 0x110) ||
+        ((addr == 0x12A) && !lx3_legacy_lfa_passive(to_send))) return false;
     if ((addr == 0xEA) || (addr == 0x175) || (addr == 0x2AF) || (addr == 0x1AA) || (addr == 0x1CF)) {
       return false;  // Do not synthesize driver/EPS feedback or enable buttons.
     }
@@ -1156,6 +1169,9 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
         }
       }
       CANPacket_t buffered_pkt;
+      // A queued passive companion may not overwrite an OEM steering request.
+      // Keep the original bytes/counter/CRC and the existing queue deadline.
+      if (hyundai_canfd_lx3_guard && (addr == 0x12A) && !lx3_legacy_lfa_passive(to_send)) return bus_fwd;
       bool use_buffered = canfd_bfwd_pop(bfwd, &buffered_pkt);
 
       // queue�� ������� ������ ������ 1~2ȸ ����
