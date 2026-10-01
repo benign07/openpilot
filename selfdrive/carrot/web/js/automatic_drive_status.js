@@ -18,6 +18,7 @@
       if (!response.ok) throw new Error('unavailable');
       const data = await response.json();
       host.textContent = (labels[data.state] || '기록 상태 확인 중') +
+        (data.state === 'error' && typeof data.retry_after_seconds === 'number' ? ' · 자동 재시도 대기' : '') +
         (typeof data.bytes === 'number' ? ` · ${(data.bytes / 1048576).toFixed(1)} MB` : '');
     } catch (_) {
       host.textContent = '자동 기록 상태를 확인할 수 없습니다 · 기기 연결 또는 업데이트를 확인하세요';

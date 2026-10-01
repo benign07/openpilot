@@ -72,6 +72,12 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: uv run --no-sync python -m unittest openpilot.selfdrive.selfdrived.tests.test_lx3_runtime_configuration -v
+      - name: Actual video encoder rotation with absent and present driver camera
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          uv pip install pytest
+          uv run --no-sync python system/loggerd/tests/check_logger_rotation.py
       - name: Actual generated Panda C++ pack and firmware decoder transport
         env:
           PYTHONPATH: ${{ github.workspace }}

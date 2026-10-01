@@ -121,6 +121,12 @@ class ChunkStore:
   def full(self, now):
     return self.stream is not None and (now - self.started >= self.seconds or self.size >= self.chunk_bytes)
 
+  def abandon_open_stream(self):
+    """Release a failed writer; keep partial bytes for normal recovery on retry."""
+    stream, self.stream = self.stream, None
+    if stream is not None:
+      stream.close()
+
   def seal(self, reason):
     if not self.stream:
       return
@@ -206,6 +212,8 @@ class AutoRecorder:
     self.permission_states, self.permission_times, self.permission_omitted = {}, {}, {}
     self.permission_sequence = 0
     self.sampled_out = self.stale_packets = 0
+    self.can_event_counts = {'rx_invalid': 0, 'tx_requested_invalid': 0, 'rx_malformed': 0, 'tx_requested_malformed': 0}
+    self.can_validity = {}
     self.state = 'waiting_for_ignition'
 
   def event(self, name, now, **details):
@@ -270,6 +278,7 @@ class AutoRecorder:
       self.trip = uuid.uuid4().hex
       self.previous, self.can_last, self.faults, self.last_event = {}, {}, {}, {}
       self.actuation_states = {}
+      self.can_validity = {}
       self.permission_states, self.permission_times, self.permission_omitted = {}, {}, {}
       self.permission_sequence = 0
       self.lead_changes.clear()
@@ -292,6 +301,7 @@ class AutoRecorder:
     mode = control_mode(services, now)
     sample = {'kind': 'sample', 'mono_ns': int(now * 1e9), 'mode': mode, 'services': services,
               'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
+              'can_event_counts': dict(self.can_event_counts),
               'route': self.metadata.get('route')}
     if self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
       sample['host_disabled_panda_allowed'] = host_disabled_panda_allowed(services, now)
@@ -316,7 +326,15 @@ class AutoRecorder:
         self.event('lead_flicker_candidate', now, classification='target_change_or_dropout_unconfirmed')
     self.previous, self.last_sample = current, now
 
-  def can_frame(self, bus, address, data, mono_ns, now, direction='rx'):
+  def transport_event(self, direction, now, *, valid=True, malformed=False):
+    if malformed or not valid:
+      key = direction + ('_malformed' if malformed else '_invalid')
+      self.can_event_counts[key] += 1
+      self.event('can_transport_observation', now, direction=direction,
+                 counts=dict(self.can_event_counts),
+                 semantic_status='msgq_publication_validity_not_CAN_checksum_or_EPS_delivery')
+
+  def can_frame(self, bus, address, data, mono_ns, now, direction='rx', event_valid=True):
     if self.state != 'recording' or address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64:
       return
     if self.store.full(now):
@@ -332,6 +350,8 @@ class AutoRecorder:
     if key not in self.can_last and len(self.can_last) >= 128:
       self.sampled_out += 1
       return
+    validity_changed = self.can_validity.get(key) != event_valid
+    self.can_validity[key] = event_valid
     fault_changed = False
     if address == 0x162 and len(data) == 32 and self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
       bits = int.from_bytes(data, 'little')
@@ -341,6 +361,7 @@ class AutoRecorder:
       if fault_changed:
         self.store.append({'kind': 'event', 'name': 'oem_fault_observation', 'mono_ns': mono_ns,
                            'direction': direction, 'bus': bus, 'before': before, 'after': value,
+                           'event_valid': event_valid,
                            'semantic_status': 'dbc_definition_not_causal_diagnosis'}, now)
       self.faults[key] = value
     state_changed = False
@@ -358,6 +379,7 @@ class AutoRecorder:
         if state_changed:
           self.store.append({'kind': 'event', 'name': 'actuation_state_observation', 'mono_ns': mono_ns,
                              'direction': direction, 'bus': bus, 'address': address,
+                             'event_valid': event_valid,
                              'before': before, 'after': state,
                              'semantic_status': 'raw_dbc_state_not_verified_EPS_delivery'}, now)
         self.actuation_states[key] = state
@@ -365,11 +387,12 @@ class AutoRecorder:
     # 25Hz frames can be drained in one50ms worker batch. Keep their counters
     # for replay, still bounded by drain/chunk/quota limits. Other CAN is sampled.
     period = 0 if address == 0x10B and bus == 0 and direction == 'rx' else .1
-    if now - self.can_last.get(key, -math.inf) < period and not fault_changed and not state_changed:
+    if now - self.can_last.get(key, -math.inf) < period and not fault_changed and not state_changed and not validity_changed:
       self.sampled_out += 1
       return
     self.can_last[key] = now
     self.store.append({'kind': 'can_sample', 'mono_ns': mono_ns, 'direction': direction,
+                       'event_valid': event_valid,
                        'bus': bus, 'address': address, 'dlc': len(data), 'data': data.hex()}, now)
 
   def close(self):
@@ -379,4 +402,5 @@ class AutoRecorder:
   def status(self):
     return {'state': self.state, 'trip_id': self.trip, 'bytes': self.store.usage, 'quota': self.store.quota,
             'error': self.store.error, 'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
+            'can_event_counts': dict(self.can_event_counts),
             'control_changes': False, 'phone_backup': False}

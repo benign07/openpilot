@@ -6,13 +6,14 @@ from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace as NS
+from unittest.mock import patch
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from .automatic import AutoRecorder, ChunkStore, control_mode, host_disabled_panda_allowed
 from .automatic_routes import register
-from .automatic_runtime import read_param, selected_fields
+from .automatic_runtime import AutomaticController, read_param, selected_fields
 from tools.can_auto_sync import analyze, download
 
 
@@ -27,6 +28,89 @@ def services(now=100, started=True, lat=False, long=False):
 
 
 class RuntimeTests(unittest.TestCase):
+  def test_invalid_publication_is_preserved_with_raw_direction_and_validity(self):
+    with tempfile.TemporaryDirectory() as folder:
+      controller = AutomaticController(folder)
+      controller.recorder = AutoRecorder(ChunkStore(folder, reserve=0), {'boot_id': 'test'})
+      controller.recorder.update(services(), 100)
+      frame = NS(src=0, address=0xCB, dat=bytes(24))
+      for valid, stamp in ((True, 100), (False, 100.01), (True, 100.02)):
+        event = NS(valid=valid, logMonoTime=int(stamp * 1e9), sendcan=[frame])
+        controller.consume_can(b'fixture', 'sendcan', lambda raw: event, stamp)
+      controller.recorder.close()
+      rows = [json.loads(line) for path in Path(folder).glob('*.jsonl.gz') for line in gzip.decompress(path.read_bytes()).splitlines()]
+      can = [row for row in rows if row['kind'] == 'can_sample']
+      self.assertEqual([row['event_valid'] for row in can], [True, False, True])
+      self.assertTrue(all(row['direction'] == 'tx_requested' for row in can))
+      self.assertEqual(controller.status()['can_event_counts']['tx_requested_invalid'], 1)
+      self.assertTrue(any(row.get('name') == 'can_transport_observation' for row in rows))
+
+  def test_malformed_publication_is_counted_and_next_valid_event_survives(self):
+    with tempfile.TemporaryDirectory() as folder:
+      controller = AutomaticController(folder)
+      controller.recorder = AutoRecorder(ChunkStore(folder, reserve=0), {'boot_id': 'test'})
+      controller.recorder.update(services(), 100)
+      def bad_decoder(raw):
+        raise ValueError('malformed')
+      controller.consume_can(b'bad', 'can', bad_decoder, 100)
+      event = NS(valid=False, logMonoTime=100_010_000_000, can=[NS(src=128, address=0x10B, dat=bytes(16))])
+      controller.consume_can(b'next', 'can', lambda raw: event, 100.01)
+      controller.recorder.close()
+      rows = [json.loads(line) for path in Path(folder).glob('*.jsonl.gz') for line in gzip.decompress(path.read_bytes()).splitlines()]
+      self.assertEqual(controller.status()['can_event_counts']['rx_malformed'], 1)
+      self.assertEqual(controller.status()['can_event_counts']['rx_invalid'], 1)
+      can = [row for row in rows if row['kind'] == 'can_sample']
+      self.assertEqual(len(can), 1)
+      self.assertEqual(can[0]['direction'], 'tx_echo')
+      self.assertFalse(can[0]['event_valid'])
+
+  def test_worker_failure_retries_and_recovers_partial_after_failed_seal(self):
+    with tempfile.TemporaryDirectory() as folder:
+      controller = AutomaticController(folder)
+      attempts = []
+      def loop():
+        attempts.append(len(attempts))
+        controller.recorder = AutoRecorder(ChunkStore(folder, reserve=0), {'boot_id': 'test'})
+        controller.recorder.update(services(), 100)
+        if len(attempts) == 1:
+          controller.recorder.store.seal = lambda reason: (_ for _ in ()).throw(OSError('seal failed'))
+          raise OSError('transient read')
+        controller.shutdown.set()
+      controller.live_loop = loop
+      original_wait = controller.shutdown.wait
+      waits = []
+      def retry_wait(seconds):
+        waits.append(seconds)
+        self.assertEqual(controller.restart_count, 1)
+        self.assertEqual(controller.status()['state'], 'error')
+        return original_wait(0)
+      with patch.object(controller.shutdown, 'wait', side_effect=retry_wait):
+        controller.run()
+      self.assertEqual(len(attempts), 2)
+      self.assertEqual(waits, [5, 10])
+      self.assertFalse(list(Path(folder).glob('*.partial')))
+      manifests = controller.recorder.store.list_chunks()
+      self.assertEqual(len(manifests), 2)
+      self.assertIn('power_loss_recovered', [row['reason'] for row in manifests])
+      self.assertTrue(all(hashlib.sha256((Path(folder) / (row['id'] + '.jsonl.gz')).read_bytes()).hexdigest() == row['sha256'] for row in manifests))
+
+  def test_repeated_worker_failure_uses_bounded_backoff_and_shutdown_stops_it(self):
+    controller = AutomaticController('unused-fixture-root')
+    def loop():
+      raise OSError('offline')
+    controller.live_loop = loop
+    waits = []
+    def retry_wait(seconds):
+      waits.append(seconds)
+      if len(waits) == 6:
+        controller.shutdown.set()
+        return True
+      return False
+    with patch.object(controller.shutdown, 'wait', side_effect=retry_wait):
+      controller.run()
+    self.assertEqual(waits, [5, 10, 20, 40, 60, 60])
+    self.assertEqual(controller.restart_count, 6)
+
   def test_guarded_missing_companion_is_unknown_not_legacy_health(self):
     sample = services()
     panda = {'safetyModel': 'hyundaiCanfd', 'safetyParam': 1214, 'controlsAllowed': True}

@@ -66,6 +66,8 @@ class AutomaticController:
     self.worker = None
     self.recorder = None
     self.error = None
+    self.restart_count = 0
+    self.retry_after_seconds = 0
 
   def start(self):
     if self.worker is None:
@@ -76,7 +78,8 @@ class AutomaticController:
     with self.lock:
       result = self.recorder.status() if self.recorder else {'state': 'starting'}
       if self.error:
-        result.update(state='error', error=self.error)
+        result.update(state='error', error=self.error, retry_after_seconds=self.retry_after_seconds)
+      result['recorder_restart_count'] = self.restart_count
       return result
 
   def close(self):
@@ -92,18 +95,44 @@ class AutomaticController:
     return store.list_chunks() if store else []
 
   def run(self):
+    delay = 5
+    while not self.shutdown.is_set():
+      try:
+        self.live_loop()
+      except Exception as exc:
+        with self.lock:
+          self.error = f'{type(exc).__name__}: {str(exc)[:160]}'
+          self.restart_count += 1
+          self.retry_after_seconds = delay
+      finally:
+        with self.lock:
+          if self.recorder:
+            try:
+              self.recorder.close()
+            except Exception as exc:
+              self.error = f'close: {type(exc).__name__}: {str(exc)[:160]}'
+              try:
+                self.recorder.store.abandon_open_stream()
+              except Exception:
+                pass  # Keep partial files; retry recovery once storage works.
+      if self.shutdown.wait(delay):
+        break
+      delay = min(60, delay * 2)
+
+  def consume_can(self, raw, source, decoder, now):
+    direction = 'tx_requested' if source == 'sendcan' else 'rx'
     try:
-      self.live_loop()
-    except Exception as exc:
+      event = decoder(raw)
+    except Exception:
       with self.lock:
-        self.error = f'{type(exc).__name__}: {str(exc)[:160]}'
-    finally:
-      with self.lock:
-        if self.recorder:
-          try:
-            self.recorder.close()
-          except Exception as exc:
-            self.error = f'close: {type(exc).__name__}: {str(exc)[:160]}'
+        self.recorder.transport_event(direction, now, malformed=True)
+      return
+    with self.lock:
+      self.recorder.transport_event(direction, now, valid=bool(event.valid))
+      for frame in getattr(event, source):
+        if frame.address in self.recorder.ADDRESSES:
+          self.recorder.can_frame(frame.src, frame.address, bytes(frame.dat), event.logMonoTime,
+                                  now, direction, event_valid=bool(event.valid))
 
   def live_loop(self):
     from cereal import car, messaging
@@ -114,6 +143,7 @@ class AutomaticController:
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     metadata = {'boot_id': boot, 'route': None, 'car_fingerprint': None,
+                'recorder_restart_count': self.restart_count,
                 'rate_hz': 5, 'can_per_key_max_hz': 10, 'physical_ecu_origin': 'not_inferred_from_bus',
                 'physical_10b_capture': 'all_received_subject_to_drain_chunk_quota_limits',
                 'permission_transition_worker_max_hz': 20,
@@ -133,6 +163,8 @@ class AutomaticController:
       metadata['dbc_sha256'] = hashlib.sha256(dbc.read_bytes()).hexdigest()
     with self.lock:
       self.recorder = AutoRecorder(ChunkStore(self.root), metadata)
+      self.error = None
+      self.retry_after_seconds = 0
     last_metadata = last_context = -100
     services = {}
     while not self.shutdown.is_set():
@@ -173,12 +205,5 @@ class AutomaticController:
           raw = sock.receive(non_blocking=True)
           if raw is None:
             break
-          event = messaging.log_from_bytes(raw)
-          if not event.valid:
-            continue
-          with self.lock:
-            for frame in getattr(event, name):
-              if frame.address in self.recorder.ADDRESSES:
-                self.recorder.can_frame(frame.src, frame.address, bytes(frame.dat), event.logMonoTime,
-                                        time.monotonic(), 'tx_requested' if name == 'sendcan' else 'rx')
+          self.consume_can(raw, name, messaging.log_from_bytes, time.monotonic())
       self.shutdown.wait(.05)

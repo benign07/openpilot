@@ -97,7 +97,7 @@ class TestLoggerd:
 
     return sent_msgs
 
-  def _publish_camera_and_audio_messages(self, num_segs=1, segment_length=5):
+  def _publish_camera_and_audio_messages(self, num_segs=1, segment_length=5, include_driver=True):
     # Use small frame sizes for testing (width, height, size, stride, uv_offset)
     # NV12 format: size = stride * height * 1.5, uv_offset = stride * height
     w, h = 320, 240
@@ -107,6 +107,9 @@ class TestLoggerd:
       (VisionStreamType.VISION_STREAM_DRIVER, frame_spec, "driverCameraState"),
       (VisionStreamType.VISION_STREAM_WIDE_ROAD, frame_spec, "wideRoadCameraState"),
     ]
+
+    if not include_driver:
+      streams = [row for row in streams if row[0] != VisionStreamType.VISION_STREAM_DRIVER]
 
     sm = messaging.SubMaster(["roadEncodeData"])
     pm = messaging.PubMaster([s for _, _, s in streams] + ["rawAudioData"])
@@ -187,15 +190,19 @@ class TestLoggerd:
       assert logged_params[param_key].decode() == v
 
   @pytest.mark.xdist_group("camera_encoder_tests")  # setting xdist group ensures tests are run in same worker, prevents encoderd from crashing
-  def test_rotation(self):
+  @pytest.mark.parametrize("include_driver", [True, False])
+  def test_rotation(self, include_driver):
     Params().put("RecordFront", True)
 
     expected_files = {"rlog.zst", "qlog.zst", "qcamera.ts", "fcamera.hevc", "dcamera.hevc", "ecamera.hevc"}
 
+    if not include_driver:
+      expected_files.remove("dcamera.hevc")
+
     num_segs = random.randint(2, 3)
     length = random.randint(4, 5) # H264 encoder uses 40 lookahead frames and does B-frame reordering, so minimum 3 seconds before qcam output
 
-    self._publish_camera_and_audio_messages(num_segs=num_segs, segment_length=length)
+    self._publish_camera_and_audio_messages(num_segs=num_segs, segment_length=length, include_driver=include_driver)
 
     route_path = str(self._get_latest_log_dir()).rsplit("--", 1)[0]
     for n in range(num_segs):
