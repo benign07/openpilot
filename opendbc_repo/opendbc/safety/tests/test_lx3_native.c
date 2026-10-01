@@ -1383,7 +1383,7 @@ static void legacy_physical_input_receive_regressions(void) {
 static void refresh_physical_rx_except(unsigned int missing, uint8_t counter) {
   for (int i = 0; i < current_safety_config.rx_checks_len; i++) {
     RxCheck *check = &current_safety_config.rx_checks[i];
-    unsigned int index = check->status.msg_seen ? check->status.index : 0U;
+    int index = check->status.msg_seen ? check->status.index : 0;
     if (!check->status.msg_seen && (check->msg[0].addr == 0x35)) index = 2U;  // Actual hybrid0x105.
     const unsigned int addr = check->msg[index].addr;
     if (addr == missing) continue;
