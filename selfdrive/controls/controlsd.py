@@ -30,6 +30,7 @@ from selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.selfdrive.carrot.carrot_controls import CarrotControls
+from openpilot.selfdrive.carrot.hud_lead import select_display_lead
 from openpilot.selfdrive.selfdrived.lx3_engagement import lx3_control_permissions, lx3_control_inputs_valid
 from openpilot.selfdrive.selfdrived.lx3_transport import stamp_control_identity
 
@@ -262,11 +263,19 @@ class Controls:
     hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual
 
     radarState = self.sm['radarState']
-    leadOne = radarState.leadOne
-    hudControl.leadDistance = leadOne.dRel if leadOne.status else 0
-    hudControl.leadRelSpeed = leadOne.vRel if leadOne.status else 0
-    hudControl.leadRadar = 1 if leadOne.radar else 0
-    hudControl.leadDPath = leadOne.dPath
+    if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
+      lead = select_display_lead(radarState) if self.sm.alive['radarState'] and self.sm.valid['radarState'] else None
+      hudControl.leadVisible = lead is not None
+      hudControl.leadDistance = lead.dRel if lead is not None else 0
+      hudControl.leadRelSpeed = lead.vRel if lead is not None else 0
+      hudControl.leadRadar = int(lead.radar) if lead is not None else 0
+      hudControl.leadDPath = lead.dPath if lead is not None else 0
+    else:
+      leadOne = radarState.leadOne
+      hudControl.leadDistance = leadOne.dRel if leadOne.status else 0
+      hudControl.leadRelSpeed = leadOne.vRel if leadOne.status else 0
+      hudControl.leadRadar = 1 if leadOne.radar else 0
+      hudControl.leadDPath = leadOne.dPath
 
     meta = self.sm['modelV2'].meta
     if False: # command

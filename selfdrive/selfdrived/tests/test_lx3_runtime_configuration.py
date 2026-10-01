@@ -13,7 +13,7 @@ from opendbc.car.hyundai.carcontroller import CarController
 from opendbc.car.hyundai.values import CAR, DBC
 from opendbc.car import Bus
 from opendbc.car.hyundai.hyundaicanfd import hkg_can_fd_checksum
-from cereal import car
+from cereal import car, log
 
 
 class TestLx3RuntimeConfiguration(unittest.TestCase):
@@ -65,6 +65,23 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
       self.assertEqual(message.sigs['COUNTER'].type, 0)
       self.assertEqual(set(message.sigs), set(controller.packer.dbc.name_to_msg[name].sigs))
     self.assertIn('RAW_UNMAPPED_79', parser.dbc.name_to_msg['LFA'].sigs)
+
+  def test_actual_hud_schema_serializes_nearest_valid_display_lead(self):
+    from openpilot.selfdrive.carrot.tests.test_lx3_hud_lead import TestLx3HudLead
+    cp = self.configuration()
+    self.assertEqual(cp.carFingerprint, CAR.HYUNDAI_PALISADE_LX3_HEV)
+    radar = log.RadarState.new_message(
+      leadOne={'status': True, 'dRel': 40, 'yRel': 0.2, 'vRel': -1, 'radar': True, 'dPath': 0.1},
+      leadTwo={'status': True, 'dRel': 12, 'yRel': -0.3, 'vRel': -3, 'radar': False, 'dPath': -0.8})
+    command = car.CarControl.new_message()
+    TestLx3HudLead().hud(radar.leadOne, radar.leadTwo, target=command.hudControl)
+    with car.CarControl.from_bytes(command.to_bytes()) as reader:
+      hud = reader.hudControl
+      self.assertTrue(hud.leadVisible)
+      self.assertEqual((hud.leadDistance, hud.leadRelSpeed, hud.leadRadar), (12, -3, 0))
+      self.assertAlmostEqual(hud.leadDPath, -0.8)
+      self.assertFalse(reader.latActive)
+      self.assertFalse(reader.longActive)
 
   def test_real_carstate_producer_serializes_input_health_without_eps_fault(self):
     cp = self.configuration()

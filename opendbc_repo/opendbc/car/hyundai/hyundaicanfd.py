@@ -385,10 +385,14 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, g
   #values["ACC_ObjLatPos"] = - hud_control.leadDPath
   values["DriveMode"] = 0 # 0: Default, 1: Comfort Mode, 2:Normal mode, 3:Dynamic mode, reserved
 
-  hud_lead_info = 0
-  if hud_control.leadVisible:
-    hud_lead_info = 1 if values["ACC_ObjRelSpd"] > 0 else 2
-  values["HUD_LEAD_INFO"] = hud_lead_info  #1: in-path object detected(uncontrollable), 2: controllable long, 3: controllable long & lat, ... reserved
+  if not lx3_guard:
+    hud_lead_info = 0
+    if hud_control.leadVisible:
+      hud_lead_info = 1 if values["ACC_ObjRelSpd"] > 0 else 2
+    values["HUD_LEAD_INFO"] = hud_lead_info
+  # LX3 retains the camera's object distance/speed/lateral fields above.
+  # Keep its matching HUD status too; a radar-selected CCNC display target
+  # must not enable a different camera object or a no-object sentinel.
 
   values["DriverAlert"] = 0   # 1: SCC Disengaged, 2: No SCC Engage condition, 3: SCC Disenganed when the vehicle stops
 

@@ -247,6 +247,8 @@ jobs:
           selfdrive.carrot.tests.test_hud_settings_integrity
           selfdrive.carrot.tests.test_lx3_can_time
           selfdrive.carrot.can_diagnostics.test_automatic -v
+      - name: LX3 nearest valid HUD lead using production controlsd block
+        run: python -m unittest selfdrive.carrot.tests.test_lx3_hud_lead -v
       - name: Check additive telemetry schema
         run: |
           python - <<'PY'
