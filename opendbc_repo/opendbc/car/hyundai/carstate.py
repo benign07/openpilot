@@ -841,13 +841,15 @@ class CarState(CarStateBase):
     if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV:
       pt_parser.raw_capture = {0x10B}
       # The LX3 DBC filename does not opt into the generic checksum binding.
-      # Bind only the clock, camera health and now-defined cluster header.
+      # Restore checksum validation for copied camera actuator templates as
+      # well as the clock/health/display inputs. Keep COUNTER informational:
+      # observed LX3 counters advance by +2, not the generic parser's +1.
       # Original0x161 CRCs matched all10,161 samples in the onset comparison;
       # corrupt display/emergency indicators must not refresh the cache.
       pt_parser.dbc.name_to_msg[LX3_TIME_MESSAGE].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
       cam_parser.dbc.name_to_msg['CCNC_0x162'].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
       cam_parser.dbc.name_to_msg['ADRV_0x161'].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum
-      for name in ('LFAHDA_CLUSTER', 'ADRV_0x1ea', 'ADRV_0x200'):
+      for name in ('LFAHDA_CLUSTER', 'ADRV_0x1ea', 'ADRV_0x200', 'LFA', 'LFA_ALT', 'SCC_CONTROL'):
         # All originals in the seven onset/baseline segments pass this CRC.
         # Only a valid received publication may refresh the display source.
         cam_parser.dbc.name_to_msg[name].sigs['CHECKSUM'].calc_checksum = hkg_can_fd_checksum

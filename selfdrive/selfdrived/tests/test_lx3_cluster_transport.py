@@ -23,7 +23,7 @@ class TestLx3ClusterTransport(unittest.TestCase):
                     HyundaiFlags=NS(CAMERA_SCC=NS(value=1)), CV=NS(MS_TO_KPH=3.6, MS_TO_MPH=2.236936),
                     _get_desire_and_lane_changing=lambda _: (0, 0))
     definitions(ROOT / 'opendbc_repo/opendbc/can/packer.py', self.env)
-    names = {'create_tcs_messages', 'create_suppress_lfa', 'create_lfahda_cluster', 'create_lfa_icon_non_camera_scc', 'create_ccnc_messages', '_make_ccnc_cluster_msg',
+    names = {'create_tcs_messages', 'create_suppress_lfa', 'create_lfahda_cluster', 'create_lfa_icon_non_camera_scc', 'create_ccnc_messages', 'create_steering_messages_camera_scc', '_make_ccnc_cluster_msg',
              '_make_ccnc_values', '_suppress_trailer_mode_warning', '_apply_radar_blink'}
     definitions(ROOT / 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py', self.env, names)
     self.packer = self.env['CANPacker'](str(DBC_FILE))
@@ -311,6 +311,88 @@ class TestLx3ClusterTransport(unittest.TestCase):
         self.assertFalse(any(a & b for a, b in zip(covered, bits)), (name, sig.name))
         covered = bytearray(a | b for a, b in zip(covered, bits))
       self.assertEqual(covered, bytes([255] * msg.size), name)
+
+  def lfa_original(self, bit79):
+    # Actual CRC-valid factory LFA capture. Bit79 has no validated meaning.
+    # Both values must be copied, rather than inventing a fixed enable bit.
+    raw = bytearray.fromhex('a4f29500800108000081000400640000')
+    raw[9] = (raw[9] & 0x7f) | (bit79 << 7)
+    raw[:2] = self.env['hkg_can_fd_checksum'](0x12a, None, raw).to_bytes(2, 'little')
+    parser = self.env['CANParser'](str(DBC_FILE), [('LFA', 100)], 2)
+    parser.update([[self.clock, [(0x12a, bytes(raw), 2)]]])
+    return bytes(raw), dict(parser.vl['LFA'])
+
+  def test_lfa_original_bit79_survives_parser_packer_round_trip(self):
+    for bit79 in (0, 1):
+      raw, values = self.lfa_original(bit79)
+      _, rebuilt, _ = self.packer.make_can_msg('LFA', 0, values)
+      self.assertEqual(rebuilt, raw, bit79)
+
+  def test_camera_scc_lfa_keeps_original_bit79_without_changing_carrot_commands(self):
+    for bit79 in (0, 1):
+      for active in (False, True):
+        for emergency in (False, True):
+          raw, values = self.lfa_original(bit79)
+          self.cs.mdps = None
+          self.cs.lfa_alt = None
+          self.cs.lfa = values
+          self.cs.adrv_0x161 = {'ALERTS_1': 11 if emergency else 0}
+          self.cc.latActive = active
+          [(addr, rebuilt, bus)] = self.env['create_steering_messages_camera_scc'](
+            0, self.packer, self.cp, self.can, self.cc, active, 0, self.cs, 0, 25, True)
+          self.assertEqual((addr, bus), (0x12a, 0))
+          self.assertEqual(rebuilt[9] & 0x80, raw[9] & 0x80, (bit79, active, emergency))
+          if emergency:
+            self.assertEqual(rebuilt[3:], raw[3:])
+          else:
+            # Original carrot camera-SCC values are retained; this fix only
+            # preserves an OEM field lost by decode/re-encode.
+            # Host buffered templates are restamped by Panda before wire TX;
+            # inspect fields directly, without treating their old CRC as RX.
+            def value(name):
+              sig = self.packer.dbc.name_to_msg['LFA'].sigs[name]
+              return self.env['get_raw_value'](rebuilt, sig) * sig.factor + sig.offset
+            self.assertEqual(value('TORQUE_REQUEST'), -1024)
+            self.assertEqual(value('NEW_SIGNAL_1'), 10)
+            self.assertEqual(value('LKA_ACTIVE'), 3 if active else 0)
+
+  def test_lfa_raw_bit79_does_not_overlap_existing_fields_or_enable_validation(self):
+    msg = self.packer.dbc.name_to_msg['LFA']
+    sig = msg.sigs['RAW_UNMAPPED_79']
+    raw_mask = bytearray(msg.size)
+    self.env['set_value'](raw_mask, sig, 1)
+    self.assertEqual(raw_mask, bytes(9) + b'\x80' + bytes(6))
+    self.assertEqual(sig.type, 0)
+    self.assertEqual(msg.sigs['COUNTER'].type, 0)
+    for other in msg.sigs.values():
+      if other.name == sig.name:
+        continue
+      bits = bytearray(msg.size)
+      self.env['set_value'](bits, other, (1 << other.size) - 1)
+      self.assertFalse(any(a & b for a, b in zip(bits, raw_mask)), other.name)
+
+  def test_lx3_camera_actuator_templates_only_refresh_from_crc_valid_originals(self):
+    parser = ENV['get_can_parsers_canfd'](None, NS(carFingerprint='lx3', flags=1))[2]
+    for name in ('LFA', 'LFA_ALT', 'SCC_CONTROL'):
+      parser._add_message(name)
+      msg = parser.dbc.name_to_msg[name]
+      raw = bytearray(msg.size)
+      raw[2] = 42
+      raw[:2] = self.env['hkg_can_fd_checksum'](msg.address, None, raw).to_bytes(2, 'little')
+      parser.update([[self.clock, [(msg.address, bytes(raw), 2)]]])
+      before = dict(parser.vl[name])
+      self.assertEqual(parser.ts_nanos[name]['CHECKSUM'], self.clock)
+      corrupt = bytearray(raw)
+      corrupt[3] ^= 1
+      parser.update([[self.clock + 10_000_000, [(msg.address, bytes(corrupt), 2)]]])
+      self.assertEqual(parser.ts_nanos[name]['CHECKSUM'], self.clock, name)
+      self.assertEqual(dict(parser.vl[name]), before, name)
+      raw[2] = 44  # Retain actual +2 OEM counters; no generic +1 validator.
+      raw[:2] = self.env['hkg_can_fd_checksum'](msg.address, None, raw).to_bytes(2, 'little')
+      parser.update([[self.clock + 20_000_000, [(msg.address, bytes(raw), 2)]]])
+      self.assertEqual(parser.vl[name]['COUNTER'], 44, name)
+      self.assertEqual(parser.ts_nanos[name]['CHECKSUM'], self.clock + 20_000_000, name)
+      self.assertEqual(msg.sigs['COUNTER'].type, 0, name)
 
 
 if __name__ == '__main__':

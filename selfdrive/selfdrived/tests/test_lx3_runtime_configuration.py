@@ -59,6 +59,12 @@ class TestLx3RuntimeConfiguration(unittest.TestCase):
       self.assertIsNotNone(message.sigs['CHECKSUM'].calc_checksum)
       self.assertTrue(any(s.startswith('RAW_UNMAPPED_') for s in message.sigs))
       self.assertEqual(set(message.sigs), set(controller.packer.dbc.name_to_msg[name].sigs))
+    for name in ('LFA', 'LFA_ALT', 'SCC_CONTROL'):
+      message = parser.dbc.name_to_msg[name]
+      self.assertIsNotNone(message.sigs['CHECKSUM'].calc_checksum)
+      self.assertEqual(message.sigs['COUNTER'].type, 0)
+      self.assertEqual(set(message.sigs), set(controller.packer.dbc.name_to_msg[name].sigs))
+    self.assertIn('RAW_UNMAPPED_79', parser.dbc.name_to_msg['LFA'].sigs)
 
   def test_real_carstate_producer_serializes_input_health_without_eps_fault(self):
     cp = self.configuration()
