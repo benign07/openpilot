@@ -248,6 +248,53 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
       await self.svc.tick(); reboot.assert_not_called()
     self.assertEqual(self.svc.state['phase'], 'waiting_parked')
 
+  async def test_control_source_release_waits_for_real_onroad_health(self):
+    name = 'selfdrive/controls/controlsd.py'
+    target = self.svc.root / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b'validated source\n')
+    release = {'files': [{'path': name, 'sha256': core.sha(target.read_bytes())}]}
+    self.svc.state = {'phase': 'verifying', 'release': release, 'applied_at': service.time.time() - 300,
+                      'message': '기기 시작 확인 중'}
+    now = service.time.monotonic()
+    fake_states = {'managerState': SimpleNamespace(processes=[SimpleNamespace(name=n, running=True)
+                                                      for n in ('carrot_server', 'ui')]),
+                   'deviceState': SimpleNamespace(started=False),
+                   'carState': SimpleNamespace(canValid=True)}
+    class FakeHealth(dict):
+      def update(self, _): pass
+    health = FakeHealth(fake_states)
+    health.alive = health.valid = {'managerState': True, 'deviceState': True, 'carState': True}
+    health.logMonoTime = {name: int(now * 1e9) for name in ('managerState', 'deviceState', 'carState')}
+    self.svc.health_sm = health
+    self.svc.state['release'] = {'files': [{'path': 'selfdrive/carrot/example.py'}]}
+    self.assertTrue(await self.svc.healthy())  # Legacy source updates keep offroad verification.
+    self.svc.state['release'] = release
+    self.assertIsNone(await self.svc.healthy())
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'verifying')
+    self.assertNotIn('onroad_verify_started_at', self.svc.state)
+
+    health['deviceState'].started = True
+    health['managerState'].processes = [SimpleNamespace(name=n, running=True) for n in service.REQUIRED]
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'complete')
+
+  async def test_failed_onroad_control_source_health_warns_after_deadline(self):
+    name = 'selfdrive/selfdrived/selfdrived.py'
+    target = self.svc.root / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b'validated source\n')
+    self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': name, 'sha256': core.sha(target.read_bytes())}]},
+                      'applied_at': service.time.time() - 300}
+    self.svc.healthy = AsyncMock(return_value=False)
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'verifying')
+    self.assertIn('onroad_verify_started_at', self.svc.state)
+    self.svc.state['onroad_verify_started_at'] = service.time.time() - 181
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'health_warning')
+
 
 class RecorderFieldsTests(unittest.TestCase):
   def test_recorded_params_exist_and_required_context_is_present(self):

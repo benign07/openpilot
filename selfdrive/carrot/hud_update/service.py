@@ -12,6 +12,14 @@ from . import core
 
 ACTIVE = {'waiting_parked', 'downloading', 'countdown', 'armed', 'applying', 'verifying', 'rolling_back'}
 REQUIRED = {'card', 'controlsd', 'selfdrived', 'plannerd', 'radard', 'modeld', 'carrot_server'}
+CONTROL_SOURCES = {'selfdrive/selfdrived/selfdrived.py', 'selfdrive/controls/controlsd.py',
+                   'selfdrive/carrot/carrot_controls.py',
+                   'opendbc_repo/opendbc/car/hyundai/carcontroller.py',
+                   'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py'}
+
+
+def requires_onroad_verification(release):
+  return any(row['path'] in CONTROL_SOURCES for row in release.get('files', []))
 
 
 def fetch(url, limit):
@@ -98,6 +106,8 @@ class UpdateService:
         return False
     running = {p.name for p in sm['managerState'].processes if p.running}
     if not sm['deviceState'].started:
+      if requires_onroad_verification(self.state.get('release') or {}):
+        return None  # Control processes must actually run before claiming success.
       return {'carrot_server', 'ui'} <= running
     return (REQUIRED <= running and sm.alive.get('carState') and sm.valid.get('carState') and
             0 <= time.monotonic() - sm.logMonoTime['carState'] / 1e9 < .5 and sm['carState'].canValid)
@@ -108,9 +118,19 @@ class UpdateService:
       if phase == 'verifying':
         release = self.state['release']
         matched = all(core.sha(core.checked_path(self.root, row['path']).read_bytes()) == row['sha256'] for row in release['files'])
-        if matched and await self.healthy():
+        health = await self.healthy()
+        if matched and health is True:
           self.change('complete', '업데이트 완료 · 적용 파일과 기기 프로세스 확인됨')
-        elif time.time() - self.state.get('applied_at', time.time()) > 180:
+        elif matched and health is None:
+          if self.state.get('message') != '제어 소스 적용됨 · 차량 시작 후 프로세스·CAN 확인 대기':
+            self.change('verifying', '제어 소스 적용됨 · 차량 시작 후 프로세스·CAN 확인 대기')
+        else:
+          if requires_onroad_verification(release) and 'onroad_verify_started_at' not in self.state:
+            self.state['onroad_verify_started_at'] = time.time()
+            core.save(self.folder / 'state.json', self.state)
+          started = self.state.get('onroad_verify_started_at', self.state.get('applied_at', time.time()))
+          if time.time() - started <= 180:
+            return
           self.change('health_warning', '파일 적용됨 · 기기 정상 실행 확인 실패, PC 점검 필요')
         return
       if phase not in ('waiting_parked', 'countdown'): return
