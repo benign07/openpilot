@@ -60,10 +60,10 @@ class TestLx3SteeringHandoff(unittest.TestCase):
     emergency = self.messages(True)
     self.assertEqual((emergency[0][1][3] >> 4) & 3, 2)
     selected, owned = lx3_camera_steering_handoff(emergency, True, owned, self.cs)
-    self.assertEqual(selected, emergency)  # Replace the previously queued OP goal once.
+    self.assertEqual(selected, emergency)  # Preserve the preexisting OEM emergency path.
     self.assertFalse(owned)
     selected, owned = lx3_camera_steering_handoff(emergency, True, owned, self.cs)
-    self.assertEqual(selected, [self.companion])
+    self.assertEqual(selected, emergency)
     self.assertFalse(owned)
 
   def test_active_oem_template_is_not_a_neutral_handoff(self):
