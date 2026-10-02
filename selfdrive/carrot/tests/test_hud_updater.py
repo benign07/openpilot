@@ -51,6 +51,15 @@ class ReleaseTests(unittest.TestCase):
     self.assertEqual((self.root / self.release['files'][0]['path']).read_text(), 'value = 2\n')
     self.assertEqual(core.load(self.folder / 'state.json')['phase'], 'verifying')
 
+  def test_every_permitted_runtime_source_requires_onroad_verification(self):
+    for name in ('selfdrive/selfdrived/selfdrived.py', 'selfdrive/controls/controlsd.py',
+                 'selfdrive/controls/lib/latcontrol.py', 'selfdrive/carrot/carrot_controls.py',
+                 'selfdrive/carrot/server/services/settings.py',
+                 'opendbc_repo/opendbc/car/hyundai/carstate.py'):
+      self.assertTrue(service.requires_onroad_verification({'files': [{'path': name}]}), name)
+    self.assertFalse(service.requires_onroad_verification({'files': [{'path': 'selfdrive/carrot/web/js/widget_pwa.js'}]}))
+    self.assertTrue(service.requires_onroad_verification({'files': [{'path': 'selfdrive/carrot/web/runtime.py'}]}))
+
   def test_tampering_signature_hash_and_notes_are_rejected(self):
     raw, index = self.signed()
     with self.assertRaises(ValueError): core.verify_bundle(raw + b' ', index, self.public)
@@ -267,7 +276,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     health.alive = health.valid = {'managerState': True, 'deviceState': True, 'carState': True}
     health.logMonoTime = {name: int(now * 1e9) for name in ('managerState', 'deviceState', 'carState')}
     self.svc.health_sm = health
-    self.svc.state['release'] = {'files': [{'path': 'selfdrive/carrot/example.py'}]}
+    self.svc.state['release'] = {'files': [{'path': 'selfdrive/carrot/web/example.js'}]}
     self.assertTrue(await self.svc.healthy())  # Legacy source updates keep offroad verification.
     self.svc.state['release'] = release
     self.assertIsNone(await self.svc.healthy())
@@ -276,7 +285,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     self.assertNotIn('onroad_verify_started_at', self.svc.state)
 
     health['deviceState'].started = True
-    health['managerState'].processes = [SimpleNamespace(name=n, running=True) for n in service.REQUIRED]
+    health['managerState'].processes = [SimpleNamespace(name=n, running=True, pid=i + 100) for i, n in enumerate(service.REQUIRED)]
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'verifying')
+    self.svc.onroad_healthy_since = service.time.monotonic() - service.ONROAD_HEALTH_SECONDS - 1
     await self.svc.tick()
     self.assertEqual(self.svc.state['phase'], 'complete')
 
@@ -292,8 +304,145 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(self.svc.state['phase'], 'verifying')
     self.assertIn('onroad_verify_started_at', self.svc.state)
     self.svc.state['onroad_verify_started_at'] = service.time.time() - 181
+    self.svc.onroad_verify_started_mono = service.time.monotonic() - service.ONROAD_HEALTH_DEADLINE - 1
     await self.svc.tick()
     self.assertEqual(self.svc.state['phase'], 'health_warning')
+
+  async def test_stale_boot_and_long_offroad_wait_do_not_consume_onroad_deadline(self):
+    name = 'selfdrive/controls/controlsd.py'
+    target = self.svc.root / name
+    target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'validated source\n')
+    self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': name, 'sha256': core.sha(target.read_bytes())}]},
+                      'applied_at': service.time.time() - 3600}
+    class FakeHealth(dict):
+      def update(self, _): pass
+    now = service.time.monotonic()
+    health = FakeHealth(managerState=SimpleNamespace(processes=[]), deviceState=SimpleNamespace(started=False),
+                        carState=SimpleNamespace(canValid=False))
+    health.alive = health.valid = {'managerState': False, 'deviceState': False, 'carState': False}
+    health.logMonoTime = {name: int(now * 1e9) for name in health}
+    self.svc.health_sm = health
+    await self.svc.tick()  # Initial SubMaster has not received deviceState.
+    self.assertNotIn('onroad_verify_started_at', self.svc.state)
+    health.alive = health.valid = {'managerState': True, 'deviceState': True, 'carState': False}
+    await self.svc.tick()  # Parked for arbitrarily long after application.
+    self.assertNotIn('onroad_verify_started_at', self.svc.state)
+    health['deviceState'].started = True
+    await self.svc.tick()  # First onroad tick is unhealthy, but gets a fresh 180s window.
+    self.assertEqual(self.svc.state['phase'], 'verifying')
+    self.assertIn('onroad_verify_started_at', self.svc.state)
+    self.assertLess(service.time.monotonic() - self.svc.onroad_verify_started_mono, 1)
+    self.svc.state['onroad_verify_started_at'] -= 10000  # RTC correction cannot consume the monotonic window.
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'verifying')
+    health['deviceState'].started = False
+    await self.svc.tick()
+    self.assertNotIn('onroad_verify_started_at', self.svc.state)
+    self.assertIsNone(self.svc.onroad_verify_started_mono)
+
+  async def test_onroad_health_must_remain_good_across_process_restarts(self):
+    name = 'selfdrive/controls/controlsd.py'
+    target = self.svc.root / name
+    target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'validated source\n')
+    self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': name, 'sha256': core.sha(target.read_bytes())}]}}
+    class FakeHealth(dict):
+      def update(self, _): pass
+    now = service.time.monotonic()
+    health = FakeHealth(managerState=SimpleNamespace(processes=[SimpleNamespace(name=n, running=True, pid=i + 100)
+                                                       for i, n in enumerate(service.REQUIRED)]),
+                        deviceState=SimpleNamespace(started=True), carState=SimpleNamespace(canValid=True))
+    health.alive = health.valid = {name: True for name in health}
+    health.logMonoTime = {name: int(now * 1e9) for name in health}
+    self.svc.health_sm = health
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'verifying')
+    self.svc.onroad_healthy_since = service.time.monotonic() - service.ONROAD_HEALTH_SECONDS - 1
+    health['managerState'].processes[0].pid += 1
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'verifying')
+    self.assertLess(service.time.monotonic() - self.svc.onroad_healthy_since, 1)
+    health['carState'].canValid = False
+    await self.svc.tick()
+    self.assertIsNone(self.svc.onroad_healthy_since)
+    health['carState'].canValid = True
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'verifying')
+    self.svc.onroad_healthy_since = service.time.monotonic() - service.ONROAD_HEALTH_SECONDS - 1
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'complete')
+
+  async def test_applied_file_hash_mismatch_warns_without_claiming_health(self):
+    name = 'selfdrive/controls/controlsd.py'
+    target = self.svc.root / name
+    target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'unexpected bytes\n')
+    self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': name, 'sha256': core.sha(b'expected bytes\n')}]}}
+    self.svc.healthy = AsyncMock(return_value=True)
+    await self.svc.tick()
+    self.svc.healthy.assert_not_awaited()
+    self.assertEqual(self.svc.state['phase'], 'health_warning')
+
+  async def test_static_web_release_stale_health_uses_original_offroad_deadline(self):
+    name = 'selfdrive/carrot/web/js/example.js'
+    target = self.svc.root / name
+    target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'const value = 2;\n')
+    self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': name, 'sha256': core.sha(target.read_bytes())}]},
+                      'applied_at': service.time.time() - service.ONROAD_HEALTH_DEADLINE - 1}
+    self.svc.healthy = AsyncMock(return_value=None)
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'health_warning')
+
+  async def test_late_first_healthy_sample_can_finish_bounded_stable_window(self):
+    name = 'selfdrive/controls/controlsd.py'
+    target = self.svc.root / name
+    target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'validated source\n')
+    self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': name, 'sha256': core.sha(target.read_bytes())}]}}
+    clock = [1000.0]
+    fake_time = SimpleNamespace(monotonic=lambda: clock[0], time=lambda: 2000.0 + clock[0])
+    self.svc.health_identity = (('card', 100),)
+    self.svc.healthy = AsyncMock(side_effect=[False, True, True, True])
+    with patch.object(service, 'time', fake_time):
+      await self.svc.tick()
+      clock[0] = 1155.0
+      await self.svc.tick()
+      clock[0] = 1181.0
+      await self.svc.tick()
+      self.assertEqual(self.svc.state['phase'], 'verifying')
+      clock[0] = 1186.0
+      await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'complete')
+
+  async def test_restart_in_same_boot_keeps_onroad_failure_deadline(self):
+    name = 'selfdrive/controls/controlsd.py'
+    target = self.svc.root / name
+    target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'validated source\n')
+    self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': name, 'sha256': core.sha(target.read_bytes())}]}}
+    clock = [1000.0]
+    fake_time = SimpleNamespace(monotonic=lambda: clock[0], time=lambda: 2000.0 + clock[0])
+    self.svc.healthy = AsyncMock(return_value=False)
+    with patch.object(service, 'time', fake_time):
+      await self.svc.tick()
+      self.assertEqual(core.load(self.svc.folder / 'state.json')['onroad_verify_started_mono'], 1000.0)
+      with patch.object(Path, 'read_text', autospec=True) as reader:
+        real_read = Path.open
+        def read(path, *args, **kwargs):
+          if path.as_posix() == '/proc/sys/kernel/random/boot_id': return 'test-boot'
+          with real_read(path, 'r', encoding='utf-8') as stream: return stream.read()
+        reader.side_effect = read
+        restarted = service.UpdateService({}, root=self.svc.root, state_root=self.svc.folder)
+      self.assertEqual(restarted.onroad_verify_started_mono, 1000.0)
+      class FakeHealth(dict):
+        def update(self, _): pass
+      health = FakeHealth()
+      health.alive = health.valid = {'managerState': False, 'deviceState': False, 'carState': False}
+      health.logMonoTime = {'managerState': 0, 'deviceState': 0, 'carState': 0}
+      restarted.health_sm = health  # Fresh SubMaster still awaiting first publication.
+      clock[0] = 1170.0
+      await restarted.tick()
+      self.assertEqual(restarted.onroad_verify_started_mono, 1000.0)
+      self.assertEqual(restarted.health_mode, 'unknown')
+      clock[0] = 1181.0
+      await restarted.tick()
+      self.assertEqual(restarted.state['phase'], 'health_warning')
 
 
 class RecorderFieldsTests(unittest.TestCase):

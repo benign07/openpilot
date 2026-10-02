@@ -12,14 +12,15 @@ from . import core
 
 ACTIVE = {'waiting_parked', 'downloading', 'countdown', 'armed', 'applying', 'verifying', 'rolling_back'}
 REQUIRED = {'card', 'controlsd', 'selfdrived', 'plannerd', 'radard', 'modeld', 'carrot_server'}
-CONTROL_SOURCES = {'selfdrive/selfdrived/selfdrived.py', 'selfdrive/controls/controlsd.py',
-                   'selfdrive/carrot/carrot_controls.py',
-                   'opendbc_repo/opendbc/car/hyundai/carcontroller.py',
-                   'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py'}
+ONROAD_HEALTH_SECONDS = 30
+ONROAD_HEALTH_DEADLINE = 180
 
 
 def requires_onroad_verification(release):
-  return any(row['path'] in CONTROL_SOURCES for row in release.get('files', []))
+  # Only static web assets can be verified while parked. All permitted Python
+  # code may affect the driving process tree, including future Carrot modules.
+  return any(not (row['path'].startswith('selfdrive/carrot/web/') and
+                  row['path'].endswith(('.js', '.css', '.html', '.json'))) for row in release.get('files', []))
 
 
 def fetch(url, limit):
@@ -41,7 +42,17 @@ class UpdateService:
     self.parked_since = None
     self.countdown_since = None
     self.health_sm = None
+    self.health_identity = None
+    self.health_mode = 'unknown'
+    self.onroad_observed = False
+    self.onroad_verify_started_mono = None
+    self.onroad_healthy_since = None
+    self.onroad_healthy_identity = None
     self.boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    if self.state.get('phase') == 'verifying' and self.state.get('onroad_verify_boot') == self.boot:
+      started = self.state.get('onroad_verify_started_mono')
+      if type(started) in (int, float) and 0 <= started <= time.monotonic():
+        self.onroad_verify_started_mono = started
     if self.state.get('phase') in ('downloading', 'countdown', 'armed'):
       self.state.update(phase='waiting_parked', message='연결 서비스 재시작 · P 정차 확인 대기')
       core.save(self.folder / 'state.json', self.state)
@@ -101,16 +112,29 @@ class UpdateService:
       self.health_sm = messaging.SubMaster(['managerState', 'deviceState', 'carState'])
     sm = self.health_sm
     sm.update(0)
-    for name in ('managerState', 'deviceState'):
-      if not sm.alive.get(name) or not sm.valid.get(name) or not 0 <= time.monotonic() - sm.logMonoTime[name] / 1e9 < 3:
-        return False
-    running = {p.name for p in sm['managerState'].processes if p.running}
-    if not sm['deviceState'].started:
+    self.health_identity = None
+    def fresh(name):
+      return (sm.alive.get(name) and sm.valid.get(name) and
+              0 <= time.monotonic() - sm.logMonoTime[name] / 1e9 < 3)
+    if not fresh('deviceState'):
+      self.health_mode = 'onroad' if self.onroad_observed else 'unknown'
+      return False if self.onroad_observed else None
+    self.onroad_observed = bool(sm['deviceState'].started)
+    if not self.onroad_observed:
+      self.health_mode = 'offroad'
       if requires_onroad_verification(self.state.get('release') or {}):
-        return None  # Control processes must actually run before claiming success.
-      return {'carrot_server', 'ui'} <= running
-    return (REQUIRED <= running and sm.alive.get('carState') and sm.valid.get('carState') and
-            0 <= time.monotonic() - sm.logMonoTime['carState'] / 1e9 < .5 and sm['carState'].canValid)
+        return None  # A real offroad state does not start the onroad timer.
+      if not fresh('managerState'): return None
+      running = {p.name: p for p in sm['managerState'].processes if p.running}
+      return {'carrot_server', 'ui'} <= running.keys()
+    self.health_mode = 'onroad'
+    if not fresh('managerState'):
+      return False  # Started vehicle with missing manager health is a failure.
+    running = {p.name: p for p in sm['managerState'].processes if p.running}
+    healthy = bool(REQUIRED <= running.keys() and sm.alive.get('carState') and sm.valid.get('carState') and
+                   0 <= time.monotonic() - sm.logMonoTime['carState'] / 1e9 < .5 and sm['carState'].canValid)
+    self.health_identity = tuple(sorted((name, running[name].pid) for name in REQUIRED)) if healthy else None
+    return healthy
 
   async def tick(self):
     async with self.lock:
@@ -118,19 +142,51 @@ class UpdateService:
       if phase == 'verifying':
         release = self.state['release']
         matched = all(core.sha(core.checked_path(self.root, row['path']).read_bytes()) == row['sha256'] for row in release['files'])
+        if not matched:
+          self.change('health_warning', '적용 파일 무결성 확인 실패 · PC 점검 필요')
+          return
         health = await self.healthy()
-        if matched and health is True:
-          self.change('complete', '업데이트 완료 · 적용 파일과 기기 프로세스 확인됨')
-        elif matched and health is None:
+        critical = requires_onroad_verification(release)
+        if critical and health is None:
+          self.onroad_healthy_since = self.onroad_healthy_identity = None
+          if self.health_mode == 'offroad' and self.onroad_verify_started_mono is not None:
+            self.onroad_verify_started_mono = None
+            for name in ('onroad_verify_started_at', 'onroad_verify_started_mono', 'onroad_verify_boot'):
+              self.state.pop(name, None)
+            core.save(self.folder / 'state.json', self.state)
+          elif (self.health_mode == 'unknown' and self.onroad_verify_started_mono is not None and
+                time.monotonic() - self.onroad_verify_started_mono > ONROAD_HEALTH_DEADLINE):
+            self.change('health_warning', '차량 시작 후 상태 정보가 끊겨 실행 확인 실패 · PC 점검 필요')
+            return
           if self.state.get('message') != '제어 소스 적용됨 · 차량 시작 후 프로세스·CAN 확인 대기':
             self.change('verifying', '제어 소스 적용됨 · 차량 시작 후 프로세스·CAN 확인 대기')
-        else:
-          if requires_onroad_verification(release) and 'onroad_verify_started_at' not in self.state:
+          return
+        if critical:
+          if self.onroad_verify_started_mono is None:
+            self.onroad_verify_started_mono = time.monotonic()
             self.state['onroad_verify_started_at'] = time.time()
+            self.state['onroad_verify_started_mono'] = self.onroad_verify_started_mono
+            self.state['onroad_verify_boot'] = self.boot
             core.save(self.folder / 'state.json', self.state)
-          started = self.state.get('onroad_verify_started_at', self.state.get('applied_at', time.time()))
-          if time.time() - started <= 180:
-            return
+          if health is True:
+            identity = self.health_identity
+            if identity is None or identity != self.onroad_healthy_identity:
+              self.onroad_healthy_since = time.monotonic()
+              self.onroad_healthy_identity = identity
+            if time.monotonic() - self.onroad_healthy_since >= ONROAD_HEALTH_SECONDS:
+              self.change('complete', '업데이트 완료 · 적용 파일과 차량 시작 후 연속 프로세스·CAN 확인됨')
+              return
+          else:
+            self.onroad_healthy_since = self.onroad_healthy_identity = None
+          deadline = self.onroad_verify_started_mono + ONROAD_HEALTH_DEADLINE
+          if health is True and self.onroad_healthy_since is not None:
+            deadline = max(deadline, min(self.onroad_healthy_since + ONROAD_HEALTH_SECONDS,
+                                         self.onroad_verify_started_mono + ONROAD_HEALTH_DEADLINE + ONROAD_HEALTH_SECONDS))
+          if time.monotonic() > deadline:
+            self.change('health_warning', '파일 적용됨 · 기기 정상 실행 확인 실패, PC 점검 필요')
+        elif health is True:
+          self.change('complete', '업데이트 완료 · 적용 파일과 기기 프로세스 확인됨')
+        elif time.time() - self.state.get('applied_at', time.time()) > ONROAD_HEALTH_DEADLINE:
           self.change('health_warning', '파일 적용됨 · 기기 정상 실행 확인 실패, PC 점검 필요')
         return
       if phase not in ('waiting_parked', 'countdown'): return
