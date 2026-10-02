@@ -1,0 +1,32 @@
+{
+  "release_id": "palisade-20261002-01",
+  "sequence": 2,
+  "car_fingerprint": "HYUNDAI_PALISADE_LX3_HEV",
+  "notes": [
+    "LX3 제어 승인 대기 중 짧은 carState 발행 공백은 새 승인 없이 기다리고, 지속 손실·Panda 오류·입력 이상은 거절합니다.",
+    "운전자 조향 개입이 확인되면 좌우 제어를 쉬고, 재개 첫 두 조향 목표각을 실측각에 가깝게 제한합니다.",
+    "이번 버전은 원본 로그와 PC/CI 검증 후보입니다. 계기판 경고·실차 응답은 별도 운행에서 확인해야 합니다."
+  ],
+  "files": [
+    {
+      "path": "opendbc_repo/opendbc/car/hyundai/carcontroller.py",
+      "before": "9e3115b11953272bdd4ba0456cc6324c51cf8e1d8b3ff6cf77c548b62e1a04a2"
+    },
+    {
+      "path": "opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py",
+      "before": "12f5c3dd1db694f6e8bc8f4762ceb09cff825d3b04510135bd62770bbfd26239"
+    },
+    {
+      "path": "selfdrive/carrot/carrot_controls.py",
+      "before": "9ec672bedb288f2af6cda762f69c0ce6f124ec3b19321b3aa80d36802fc56dad"
+    },
+    {
+      "path": "selfdrive/controls/controlsd.py",
+      "before": "63711f5f10ec28705c890db54261208bda6a2ac926cc9904d81d6efe292d401a"
+    },
+    {
+      "path": "selfdrive/selfdrived/selfdrived.py",
+      "before": "fd0c6933310a5daa51c65cc9f4b43fa218355e09297a2822ad4e667b53025f60"
+    }
+  ]
+}
