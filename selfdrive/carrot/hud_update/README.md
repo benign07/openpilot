@@ -18,7 +18,7 @@ AGNOS의 초기 부팅 시각이 이미지 제작일로 돌아가는 기기에�
 
 ## 배포 범위
 
-첫 버전은 기존 Python/JavaScript/HTML/CSS/JSON 파일의 제한된 소스 업데이트다. 허용 디렉터리는 core.checked_path에 명시했다. 새 파일 추가, 삭제, updater 자체, 부트로더, 펌웨어, 모델, C++/네이티브 바이너리, DBC/schema는 이 경로로 배포하지 않는다. 해당 변경은 별도의 검토·빌드·기기 설치가 필요하다.
+기존 Python/JavaScript/HTML/CSS/JSON 파일의 제한된 소스 업데이트다. 허용 디렉터리와 LX3 인게이지 수정에 필요한 `selfdrive/selfdrived/selfdrived.py`, `selfdrive/controls/controlsd.py` 두 파일은 core.checked_path에 명시했다. 이 허용 목록 변경은 updater 자체의 변경이므로, 기기에 먼저 정차 상태에서 별도 설치·검증해야 한다. 그 전에는 두 파일을 포함한 bundle을 HUD 채널에 게시하지 않는다. 새 파일 추가, 삭제, updater 자체, 부트로더, 펌웨어, 모델, C++/네이티브 바이너리, DBC/schema는 이 경로로 배포하지 않는다. 해당 변경은 별도의 검토·빌드·기기 설치가 필요하다.
 
 서명은 Ed25519이며 기기에 고정된 공개키로 검증한다. GitHub 인덱스는 실제 bundle 커밋 SHA와 파일 SHA-256를 고정한다. 화면에 표시한 release_id/변경점과 서명된 내용이 일치해야 한다. 현재 실기기 파일의 before 해시가 다르면 덮어쓰지 않고 PC 검토를 요구한다. `/data/params`와 주행 기록에는 쓰지 않는다.
 

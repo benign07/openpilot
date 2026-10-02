@@ -60,7 +60,8 @@ def checked_path(root, name):
   if not isinstance(name, str) or str(p) != name or p.is_absolute() or '..' in p.parts or '\\' in name:
     raise ValueError('Invalid release path')
   allowed = (name.startswith('selfdrive/carrot/') or name.startswith('selfdrive/controls/lib/') or
-             name.startswith('opendbc_repo/opendbc/car/hyundai/'))
+             name.startswith('opendbc_repo/opendbc/car/hyundai/') or
+             name in ('selfdrive/selfdrived/selfdrived.py', 'selfdrive/controls/controlsd.py'))
   if not allowed or p.suffix not in ('.py', '.js', '.css', '.html', '.json') or 'hud_update' in name:
     raise ValueError('This file needs a separate device deployment: ' + name)
   # Symlinked files/parents cannot redirect a release outside the selected tree.

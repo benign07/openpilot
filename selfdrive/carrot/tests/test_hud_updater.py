@@ -71,6 +71,40 @@ class ReleaseTests(unittest.TestCase):
     data, idx = self.signed(changed)
     with self.assertRaises(ValueError): core.verify_bundle(data, idx, self.public)
 
+  def test_exact_control_sources_are_allowed_after_bootstrap_only(self):
+    old = b'active = False\n'; new = b'active = True\n'
+    changed = copy.deepcopy(self.release)
+    changed['files'] = []
+    for name in ('selfdrive/selfdrived/selfdrived.py', 'selfdrive/controls/controlsd.py',
+                 'selfdrive/carrot/carrot_controls.py'):
+      target = self.root / name
+      target.parent.mkdir(parents=True, exist_ok=True)
+      target.write_bytes(old)
+      changed['files'].append({'path': name, 'before': core.sha(old), 'sha256': core.sha(new),
+                               'bytes': len(new), 'data': base64.b64encode(new).decode()})
+    raw, index = self.signed(changed)
+    verified = core.verify_bundle(raw, index, self.public)
+    core.stage(self.root, self.folder, verified)
+    for row in changed['files']:
+      self.assertEqual((self.root / row['path']).read_bytes(), old)
+    core.save(self.folder / 'state.json', {'phase': 'armed', 'armed_at': 1000, 'armed_boot': 'old',
+                                          'release': verified, 'previous_installed': {}})
+    writes = 0
+    def interrupted_write(path, data, mode):
+      nonlocal writes
+      core.atomic(path, data, mode)
+      writes += 1
+      if writes == 2:
+        raise OSError('simulated interruption between control sources')
+    with self.assertRaises(OSError):
+      core.apply_at_boot(self.root, self.folder, 'new', 1020, write=interrupted_write)
+    for row in changed['files']:
+      self.assertEqual((self.root / row['path']).read_bytes(), old)
+    for forbidden in ('selfdrive/selfdrived/state.py', 'selfdrive/selfdrived/tests/test_lx3_engagement.py',
+                      'selfdrive/controls/controlsd2.py', 'selfdrive/carrot/hud_update/core.py'):
+      with self.assertRaises(ValueError, msg=forbidden):
+        core.checked_path(self.root, forbidden)
+
   def test_local_changes_and_stage_damage_leave_runtime_untouched(self):
     self.arm()
     target = self.root / self.release['files'][0]['path']; target.write_bytes(b'local = 3\n')
