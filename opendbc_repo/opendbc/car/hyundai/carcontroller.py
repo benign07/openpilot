@@ -92,11 +92,17 @@ def lx3_camera_steering_handoff(can_sends, lat_active: bool, host_active_prev: b
   Further neutral frames would replace the still-active OEM LFA command during
   driver override, so leave that original stream alone until OP steers again.
   """
+  has_lfa_alt = any(addr == 0xCB for addr, _dat, _bus in can_sends)
+  if hyundaicanfd.oem_emergency_steering(CS):
+    # Replace a buffered OP goal with the current OEM template once before
+    # letting the original camera stream through. Do not count it as OP-owned.
+    if host_active_prev and has_lfa_alt:
+      return can_sends, False
+    return [msg for msg in can_sends if msg[0] != 0xCB], False
   host_active_now = lat_active and lx3_op_owned_angle_active(can_sends, CS)
   if host_active_now:
     return can_sends, True
-  # An OEM emergency frame may itself say "active". It is not a neutral
-  # handoff and must not replace the same camera frame through the host queue.
+  # An active OEM template is not a neutral handoff.
   neutral_lfa_alt = any(addr == 0xCB and len(dat) > 6 and
                         ((dat[3] >> 4) & 0x3) == 1 and dat[6] == 0
                         for addr, dat, _bus in can_sends)
