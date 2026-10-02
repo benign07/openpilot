@@ -62,6 +62,28 @@ def process_hud_alert(enabled, fingerprint, hud_control):
 def rate_limit(x, x_last, lo, hi):
   return float(np.clip(x, x_last + lo, x_last + hi))
 
+
+def limit_lx3_angle_reentry(commanded_sw_deg: float, measured_sw_deg: float, was_active: bool) -> float:
+  # Panda's first active 0xCB is checked against its latest MDPS angle, not
+  # the host's previous command. Leave margin for measurement/publication lag
+  # during the first two produced host-owned frames after a handoff; later
+  # frames use the normal physics rate limiter.
+  if was_active:
+    return commanded_sw_deg
+  return min(max(commanded_sw_deg, measured_sw_deg - 1.0), measured_sw_deg + 1.0)
+
+
+def lx3_op_owned_angle_active(can_sends, CS) -> bool:
+  # An emergency OEM template can itself contain an active 0xCB. It is not a
+  # host steering command and cannot serve as our next rate-limit reference.
+  return not hyundaicanfd.oem_emergency_steering(CS) and any(
+    addr == 0xCB and len(dat) > 3 and ((dat[3] >> 4) & 0x3) == 2
+    for addr, dat, _bus in can_sends)
+
+
+def lx3_angle_reentry_next(remaining: int, can_sends, CS) -> int:
+  return max(0, remaining - 1) if lx3_op_owned_angle_active(can_sends, CS) else 2
+
 def apply_steer_angle_limits_physics(desired_sw_deg: float,
                                      last_sw_deg: float,
                                      v_ego: float,
@@ -151,6 +173,7 @@ class CarController(CarControllerBase):
     self.button_spam3 = 1
 
     self.apply_angle_last = 0
+    self.lx3_angle_reentry_frames = 2
     self.lkas_max_torque = 0
     self.angle_max_torque = 250
     self.steering_pressed_prev = False
@@ -257,6 +280,9 @@ class CarController(CarControllerBase):
       self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
       CS.modelV2,
     )
+    if self.lx3_cluster is not None and angle_control and CC.latActive:
+      apply_angle = limit_lx3_angle_reentry(apply_angle, CS.out.steeringAngleDeg,
+                                             self.lx3_angle_reentry_frames == 0)
 
     
     if angle_control:
@@ -538,6 +564,8 @@ class CarController(CarControllerBase):
     new_actuators.steeringAngleDeg = float(apply_angle)
     new_actuators.accel = accel
 
+    if self.lx3_cluster is not None:
+      self.lx3_angle_reentry_frames = lx3_angle_reentry_next(self.lx3_angle_reentry_frames, can_sends, CS)
     self.frame += 1
     return new_actuators, can_sends
 

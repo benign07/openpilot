@@ -136,7 +136,8 @@ class Controls:
         ss.lx3EngagementMode, ss.enabled, ss.active,
         input_valid, driving_gear,
         not CS.steerFaultTemporary and not CS.steerFaultPermanent)
-      CC.latActive = self.carrot_controls.lat_suspend_control(CS, lateral and not standstill)
+      CC.latActive = self.carrot_controls.lat_suspend_control(CS, lateral and not standstill,
+                                                               self.sm.logMonoTime['carState'])
       # Existing CarController/Carrot consumers interpret CC.enabled as ACC
       # permission. Keep that contract; selfdriveState.enabled is the session.
       CC.enabled = longitudinal

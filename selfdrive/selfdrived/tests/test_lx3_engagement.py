@@ -35,10 +35,66 @@ class TestLx3PedalPolicy(unittest.TestCase):
     self.assertFalse(MODULE['lx3_disengage_on_gas'](17))
 
 
+class TestLx3AngleReentry(unittest.TestCase):
+  def test_first_active_command_keeps_margin_to_native_measured_angle(self):
+    source = ROOT / 'opendbc_repo/opendbc/car/hyundai/carcontroller.py'
+    env = {}
+    load_definitions(source, env, {'limit_lx3_angle_reentry'})
+    limit = env['limit_lx3_angle_reentry']
+    # At low speed the normal 2 degree host tick can exceed the native
+    # 21-raw-unit bound if Panda's MDPS is newer and moves 0.3 degrees away.
+    for sign in (-1, 1):
+      first = limit(sign * 2.0, 0.0, False)
+      self.assertAlmostEqual(first, sign * 1.0)
+      self.assertLessEqual(abs(round(first * 10) - round(-sign * .3 * 10)), 21)
+      self.assertGreater(abs(round(sign * 2.0 * 10) - round(-sign * .3 * 10)), 21)
+      self.assertEqual(limit(sign * 2.0, 0.0, True), sign * 2.0)
+
+  def test_oem_emergency_template_does_not_become_host_active_reference(self):
+    controller = ROOT / 'opendbc_repo/opendbc/car/hyundai/carcontroller.py'
+    builder = ROOT / 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py'
+    builder_env = {}
+    load_definitions(builder, builder_env, {'oem_emergency_steering'})
+    env = {'hyundaicanfd': NS(oem_emergency_steering=builder_env['oem_emergency_steering'])}
+    load_definitions(controller, env, {'lx3_op_owned_angle_active', 'lx3_angle_reentry_next'})
+    active = (0xCB, bytes([0, 0, 0, 0x20]), 0)
+    cs = NS(adrv_0x161={'ALERTS_1': 0})
+    self.assertTrue(env['lx3_op_owned_angle_active']([active], cs))
+    self.assertEqual(env['lx3_angle_reentry_next'](2, [active], cs), 1)
+    self.assertEqual(env['lx3_angle_reentry_next'](1, [active], cs), 0)
+    cs.adrv_0x161['ALERTS_1'] = 11
+    self.assertFalse(env['lx3_op_owned_angle_active']([active], cs))
+    self.assertEqual(env['lx3_angle_reentry_next'](0, [active], cs), 2)
+    cs.adrv_0x161['ALERTS_1'] = 0
+    self.assertFalse(env['lx3_op_owned_angle_active']([], cs))
+
+
 def load_definitions(path, env, names):
   nodes = [n for n in ast.walk(ast.parse(path.read_text(encoding='utf-8')))
            if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
   exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), env)
+
+
+def load_car_state_receipt(env):
+  # Run the production data_sample receipt prelude; the remainder of the
+  # method needs the full camera/model/IPC stack and is unrelated here.
+  path = ROOT / 'selfdrive/selfdrived/selfdrived.py'
+  tree = ast.parse(path.read_text(encoding='utf-8'))
+  owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'SelfdriveD')
+  method = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == 'data_sample')
+  prelude = []
+  for node in method.body:
+    prelude.append(node)
+    if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'CS'
+                                            for target in node.targets):
+      break
+  assert isinstance(prelude[-1], ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'CS'
+                                                      for target in prelude[-1].targets)
+  receipt = ast.FunctionDef(name='receipt', args=method.args, body=prelude + [ast.Return(value=ast.Name(id='CS', ctx=ast.Load()))],
+                            decorator_list=[], returns=None, type_comment=None)
+  module = ast.fix_missing_locations(ast.Module(body=[receipt], type_ignores=[]))
+  exec(compile(module, str(path), 'exec'), env)
+  return env['receipt']
 
 
 SAFETY_ENV = dict(IntFlag=IntFlag)
@@ -115,6 +171,33 @@ class TestLx3Session(unittest.TestCase):
     self.cs = NS(canValid=True, steerFaultTemporary=False, steerFaultPermanent=False, buttonEvents=[],
                  lx3InputState='ready', lx3PhysicalCounterValid=True, lx3PhysicalCounter=0, lx3InputResetCount=1)
     self.refresh_panda = True
+
+  def test_actual_receipt_path_holds_only_missing_short_samples(self):
+    queue = [NS(valid=True, logMonoTime=1_000_000_000, carState=self.cs), None, None,
+             NS(valid=True, logMonoTime=1_045_000_000, carState=self.cs)]
+    now = [1_000_000_000]
+    receipt = load_car_state_receipt(dict(messaging=NS(recv_one=lambda _: queue.pop(0)),
+                                         time=NS(monotonic_ns=lambda: now[0])))
+    self.ctx.car_state_sock = object()
+    self.ctx.CS_prev = self.cs
+    self.ctx.car_state_last_valid_ns = 0
+    for sample_ns, fresh, missing, last_valid in ((1_000_000_000, True, False, 1_000_000_000),
+                                                  (1_020_000_000, False, True, 1_000_000_000),
+                                                  (1_040_000_000, False, True, 1_000_000_000),
+                                                  (1_045_000_000, True, False, 1_045_000_000)):
+      now[0] = sample_ns
+      self.assertIs(receipt(self.ctx), self.cs)
+      self.assertEqual((self.ctx.car_state_fresh, self.ctx.car_state_missing,
+                        self.ctx.car_state_last_valid_ns), (fresh, missing, last_valid))
+    # Preserve the existing valid-message behavior; a delayed queued message
+    # must still not restart the new missing-sample gap allowance.
+    stale = NS(valid=True, logMonoTime=1_000_000_000, carState=self.cs)
+    receipt_stale = load_car_state_receipt(dict(messaging=NS(recv_one=lambda _: stale),
+                                               time=NS(monotonic_ns=lambda: 1_200_000_000)))
+    receipt_stale(self.ctx)
+    self.assertTrue(self.ctx.car_state_fresh)
+    self.assertFalse(self.ctx.car_state_missing)
+    self.assertEqual(self.ctx.car_state_last_valid_ns, 1_000_000_000)
 
   def step(self, *buttons, events=()):
     self.ctx.events = Events(*events)
@@ -625,6 +708,97 @@ class TestLx3Session(unittest.TestCase):
     self.ctx.car_state_fresh = True
     self.assertEqual(self.step(), (False, False))
 
+  def test_short_missing_carstate_during_pending_waits_without_ack_or_authority(self):
+    self.pending(Mode.COMBINED)
+    self.step(button('mainCruise'))
+    self.assertTrue(self.ctx.enabled)
+    self.assertFalse(self.ctx.active)
+    self.assertTrue(self.ctx.lx3_engagement.ack_valid)
+    self.now += .025  # The route's ordinary carState publication gaps reached 25-30 ms.
+    self.ctx.car_state_fresh = False
+    self.ctx.car_state_missing = True
+    self.ctx.car_state_last_valid_ns = int((self.now - .025) * 1e9)
+    self.assertEqual(self.step(), (False, False))
+    self.assertNotIn('controlsMismatch', self.ctx.events.events)
+    self.assertIsNotNone(self.ctx.lx3_engagement.pending)
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.assertFalse(self.ctx.active)
+    self.ctx.car_state_fresh = True
+    self.ctx.car_state_missing = False
+    self.now += .005
+    self.assertEqual(self.step(), (False, False))
+    self.assertTrue(self.ctx.lx3_engagement.ack_valid)
+    self.accept()
+    self.assertEqual(self.step(), (True, True))
+
+  def test_pending_acceptance_waits_through_two_missing_samples_then_commits_once(self):
+    self.pending(Mode.COMBINED)
+    self.step(button('mainCruise'))
+    self.accept()
+    self.ctx.car_state_fresh = False
+    self.ctx.car_state_missing = True
+    self.ctx.car_state_last_valid_ns = int(self.now * 1e9)
+    for gap in (.02, .049):
+      self.now = 1.0 + gap
+      self.assertEqual(self.step(), (False, False))
+      self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+      self.assertIsNotNone(self.ctx.lx3_engagement.pending)
+    self.ctx.car_state_fresh = True
+    self.ctx.car_state_missing = False
+    self.now = 1.05
+    self.assertEqual(self.step(), (True, True))
+    self.assertIsNone(self.ctx.lx3_engagement.pending)
+    accepted_generation = self.ctx.lx3_engagement.accepted_generation
+    self.now = 1.06
+    self.assertEqual(self.step(), (True, True))
+    self.assertEqual(self.ctx.lx3_engagement.accepted_generation, accepted_generation)
+
+  def test_missing_carstate_never_masks_prolonged_or_invalid_input(self):
+    for missing, gap, panda_fault, entry_barrier, changed_generation in (
+      (True, .051, False, False, False), (False, .025, False, False, False),
+      (True, .025, True, False, False), (True, .025, False, True, False),
+      (True, .025, False, False, True)):
+      with self.subTest(missing=missing, gap=gap, panda_fault=panda_fault,
+                        entry_barrier=entry_barrier, changed_generation=changed_generation):
+        self.setUp()
+        self.pending()
+        self.step(button('lfaButton'))
+        self.now += gap
+        self.ctx.car_state_fresh = False
+        self.ctx.car_state_missing = missing
+        self.ctx.car_state_last_valid_ns = int((self.now - gap) * 1e9)
+        self.panda.safetyRxChecksInvalid = panda_fault
+        if changed_generation:
+          self.panda.lx3RequestGeneration += 1
+        self.assertEqual(self.step(events=('tooDistracted',) if entry_barrier else ()), (False, False))
+        self.assertIn('tooDistracted' if entry_barrier else 'controlsMismatch', self.ctx.events.events)
+        self.assertIsNone(self.ctx.lx3_engagement.pending)
+        self.assertFalse(self.ctx.lx3_engagement.ack_valid and self.ctx.lx3_engagement.ack_mode != Mode.OFF)
+
+  def test_captured_override_torque_yields_lateral_on_second_rising_sample(self):
+    # Execute the production CarrotControls class without a vehicle or sockets.
+    class Params:
+      def get_int(self, name):
+        return {'LatSuspendAngleDeg': 300, 'LaneChangeNeedTorque': 0}[name]
+    env = dict(Params=Params, DT_CTRL=.01, math=math)
+    load_definitions(ROOT / 'selfdrive/carrot/carrot_controls.py', env, {'CarrotControls'})
+    controls = env['CarrotControls'](NS(carFingerprint='HYUNDAI_PALISADE_LX3_HEV'))
+    cs = NS(steeringPressed=False, steeringAngleDeg=1.0, steeringTorque=0,
+            leftBlinker=False, rightBlinker=False)
+    self.assertTrue(controls.lat_suspend_control(cs, True, 1))
+    cs.steeringTorque = -170  # First measured pre-override sample in the route.
+    self.assertTrue(controls.lat_suspend_control(cs, True, 2))
+    self.assertTrue(controls.lat_suspend_control(cs, True, 2))  # Duplicate controlsd tick is not a second sample.
+    cs.steeringTorque = -236  # The next sample remains above 150, before >250.
+    self.assertFalse(controls.lat_suspend_control(cs, True, 3))
+    cs.steeringTorque = 0
+    for sample in range(4, 53):
+      self.assertFalse(controls.lat_suspend_control(cs, True, sample))
+    self.assertTrue(controls.lat_suspend_control(cs, True, 53))
+    controls.CP.carFingerprint = 'OTHER'
+    cs.steeringTorque = 170
+    self.assertTrue(controls.lat_suspend_control(cs, True, 54))
+
   def test_config_fault_extra_panda_and_stock_long_deny(self):
     for field, value in (('safetyRxChecksInvalid', True), ('safetyParam', 0), ('safetyModel', 'noOutput'),
                          ('alternativeExperience', 1), ('faults', ['relayMalfunction'])):
@@ -761,7 +935,8 @@ class TestLx3CanOwnership(unittest.TestCase):
     self.env = dict(copy=copy, math=math, HyundaiFlags=NS(CAMERA_SCC=NS(value=1)),
                     Params=lambda: NS(get_int=lambda _: 0), _get_desire_and_lane_changing=lambda _: (0, 0))
     load_definitions(ROOT / 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py', self.env,
-                     {'create_ccnc_messages', 'create_steering_messages_camera_scc', 'create_acc_control_scc2'})
+                     {'create_ccnc_messages', 'create_steering_messages_camera_scc', 'create_acc_control_scc2',
+                      'oem_emergency_steering'})
     self.cp = NS(carFingerprint='HYUNDAI_PALISADE_LX3_HEV', flags=1)
     self.can = NS(CAM=2, ECAN=0)
     self.cc = NS(enabled=False, latActive=False)

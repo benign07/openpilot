@@ -841,6 +841,41 @@ static void check(const char *name, bool safe) {
 
 static void angle_envelope_regressions(void) {
   for (int sign = -1; sign <= 1; sign += 2) {
+    // At TX the measured wheel is centered. A newer MDPS sample arrives
+    // before the OEM insertion: 10+11 raw is permitted, 10+12 revokes.
+    reset(lx3_param());
+    grant_controls();
+    CANPacket_t p = angle_command(true);
+    set_angle(&p, sign * 10);
+    assert(safety_tx_hook(&p));
+    fresh_mdps(-sign * 11, 0);
+    CANPacket_t out = forward(stock_angle(false), 2);
+    assert(hyundai_canfd_actuator_active(&out) && controls_allowed);
+
+    reset(lx3_param());
+    grant_controls();
+    p = angle_command(true);
+    set_angle(&p, sign * 10);
+    assert(safety_tx_hook(&p));
+    fresh_mdps(-sign * 12, 0);
+    out = forward(stock_angle(false), 2);
+    assert(!hyundai_canfd_actuator_active(&out) && !controls_allowed);
+  }
+  // A newer MDPS sample moving against the host's low-speed 2-degree first
+  // command leaves 23 raw units of error; the host's 1-degree re-entry goal
+  // leaves 13. Panda keeps its original 21-unit safety boundary.
+  for (int sign = -1; sign <= 1; sign += 2) {
+    reset(lx3_param());
+    grant_controls();
+    fresh_mdps(-sign * 3, 0);
+    CANPacket_t p = angle_command(true);
+    set_angle(&p, sign * 20);
+    assert(!safety_tx_hook(&p));
+    assert(!lx3_angle_active_prev);
+    set_angle(&p, sign * 10);
+    assert(safety_tx_hook(&p));
+  }
+  for (int sign = -1; sign <= 1; sign += 2) {
     reset(lx3_param());
     grant_controls();
     CANPacket_t p = angle_command(true);

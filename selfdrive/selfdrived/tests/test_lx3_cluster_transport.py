@@ -82,7 +82,7 @@ class TestLx3ClusterTransport(unittest.TestCase):
                     HyundaiFlags=NS(CAMERA_SCC=NS(value=1)), CV=NS(MS_TO_KPH=3.6, MS_TO_MPH=2.236936),
                     _get_desire_and_lane_changing=lambda _: (0, 0))
     definitions(ROOT / 'opendbc_repo/opendbc/can/packer.py', self.env)
-    names = {'create_tcs_messages', 'create_suppress_lfa', 'create_lfahda_cluster', 'create_lfa_icon_non_camera_scc', 'create_ccnc_messages', 'create_steering_messages_camera_scc', '_make_ccnc_cluster_msg',
+    names = {'create_tcs_messages', 'create_suppress_lfa', 'create_lfahda_cluster', 'create_lfa_icon_non_camera_scc', 'create_ccnc_messages', 'create_steering_messages_camera_scc', 'oem_emergency_steering', '_make_ccnc_cluster_msg',
              '_make_ccnc_values', '_suppress_trailer_mode_warning', '_apply_radar_blink'}
     definitions(ROOT / 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py', self.env, names)
     self.packer = self.env['CANPacker'](str(DBC_FILE))

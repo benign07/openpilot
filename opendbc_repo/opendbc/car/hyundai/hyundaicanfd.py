@@ -87,12 +87,13 @@ class CanBus(CanBusBase):
 
 
 
+def oem_emergency_steering(CS):
+  return CS.adrv_0x161 is not None and CS.adrv_0x161["ALERTS_1"] in (11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26)
+
+
 def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, apply_steer, CS, apply_angle, max_torque, angle_control):
   lx3_hev = CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV'
-  emergency_steering = False
-  if CS.adrv_0x161 is not None:
-    values = CS.adrv_0x161
-    emergency_steering = values["ALERTS_1"] in [11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26]
+  emergency_steering = oem_emergency_steering(CS)
 
 
   ret = []

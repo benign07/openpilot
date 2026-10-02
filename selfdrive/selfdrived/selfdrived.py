@@ -135,6 +135,8 @@ class SelfdriveD:
     self.state_machine = StateMachine()
     self.lx3_engagement = Lx3Engagement() if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' else None
     self.car_state_fresh = False
+    self.car_state_missing = False
+    self.car_state_last_valid_ns = 0
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
     self.atc_type_last = ""
@@ -466,7 +468,12 @@ class SelfdriveD:
 
   def data_sample(self):
     car_state = messaging.recv_one(self.car_state_sock)
+    self.car_state_missing = car_state is None
     self.car_state_fresh = car_state is not None and car_state.valid
+    if self.car_state_fresh:
+      # Bound a later recv_one miss by publication time, not by when a queued
+      # message happened to be consumed here.
+      self.car_state_last_valid_ns = car_state.logMonoTime
     CS = car_state.carState if car_state else self.CS_prev
 
     self.sm.update(0)
@@ -598,12 +605,13 @@ class SelfdriveD:
     # no command is allowed to manufacture controlsAllowed to satisfy this gate.
     panda_ns = self.sm.logMonoTime['pandaStates']
     panda_fresh = panda_ns > 0 and 0 <= now_ns - panda_ns <= 250_000_000
-    healthy = (self.car_state_fresh and CS.canValid and self.CP.openpilotLongitudinalControl and
-             self.CP.steerControlType == car.CarParams.SteerControlType.angle and
-             panda_fresh and self.sm.all_checks(['pandaStates']) and
-             lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience,
-                              require_controls=False))
-    panda = lx3_permission_sample(self.sm['pandaStates']) if healthy else None
+    car_config_valid = (CS.canValid and self.CP.openpilotLongitudinalControl and
+                        self.CP.steerControlType == car.CarParams.SteerControlType.angle)
+    panda_valid = (panda_fresh and self.sm.all_checks(['pandaStates']) and
+                   lx3_pandas_ready(self.sm['pandaStates'], self.CP.safetyConfigs, self.CP.alternativeExperience,
+                                    require_controls=False))
+    healthy = self.car_state_fresh and car_config_valid and panda_valid
+    panda = lx3_permission_sample(self.sm['pandaStates']) if car_config_valid and panda_valid else None
     if CS.steerFaultTemporary or CS.steerFaultPermanent:
       self.events.add(EventName.steerUnavailable)
     if not lx3_input_ready(CS):
@@ -652,6 +660,24 @@ class SelfdriveD:
           panda.lx3RequestedMode == int(candidate) and panda.lx3PhysicalCounter == intent.pending_counter):
         intent.pending_generation = panda.lx3RequestGeneration
         intent.pending_epoch = panda.lx3TransportEpoch
+      # recv_one can miss an otherwise valid 100Hz carState publication. During
+      # this bounded gap, keep PRE_ENABLE inactive and publish no enable ACK.
+      # An invalid message, actual input/Panda fault, changed identity or a
+      # longer loss still takes the existing immediate rejection path.
+      short_missing_car_state = (not self.car_state_fresh and getattr(self, 'car_state_missing', False) and
+                                 0 < getattr(self, 'car_state_last_valid_ns', 0) <= now_ns and
+                                 now_ns - self.car_state_last_valid_ns <= 50_000_000 and
+                                 car_config_valid and panda_valid and lx3_input_ready(CS) and
+                                 not CS.steerFaultTemporary and not CS.steerFaultPermanent and not input_barriers and
+                                 (intent.pending_generation == 0 or
+                                  lx3_permission_matches(panda, candidate, intent.pending_generation,
+                                                         intent.pending_counter, epoch=intent.pending_epoch) or
+                                  lx3_permission_matches(panda, candidate, intent.pending_generation,
+                                                         intent.pending_counter, accepted=True, epoch=intent.pending_epoch)))
+      if short_missing_car_state:
+        self.events.add(EventName.lx3PermissionPending)
+        self.enabled, self.active = self.state_machine.update(self.events)
+        return
       if not healthy:
         self.events.add(EventName.controlsMismatch)
       barriers = any(self.events.contains(et) for et in (ET.NO_ENTRY, ET.USER_DISABLE, ET.SOFT_DISABLE, ET.IMMEDIATE_DISABLE))

@@ -11,10 +11,13 @@ class TestManualBlinkerSuspend(unittest.TestCase):
     with patch('openpilot.selfdrive.carrot.carrot_controls.Params') as params:
       params.return_value.get_int.side_effect = self.params.__getitem__
       self.control = CarrotControls(SimpleNamespace(carFingerprint='HYUNDAI_PALISADE_LX3_HEV'))
-    self.cs = SimpleNamespace(leftBlinker=False, rightBlinker=False, steeringPressed=False, steeringAngleDeg=0)
+    self.cs = SimpleNamespace(leftBlinker=False, rightBlinker=False, steeringPressed=False,
+                              steeringTorque=0, steeringAngleDeg=0)
+    self.car_state_time_ns = 0
 
   def update(self, active=True):
-    return self.control.lat_suspend_control(self.cs, active)
+    self.car_state_time_ns += 10_000_000
+    return self.control.lat_suspend_control(self.cs, active, self.car_state_time_ns)
 
   def test_each_manual_blinker_yields_without_driver_torque(self):
     for side in ('leftBlinker', 'rightBlinker'):
@@ -64,6 +67,47 @@ class TestManualBlinkerSuspend(unittest.TestCase):
     self.control.CP.carFingerprint = 'OTHER'
     self.cs.leftBlinker = True
     self.assertTrue(self.update())
+
+  def test_lx3_raw_driver_torque_yields_before_delayed_pressed_state(self):
+    # The captured route reached -170 before Panda's 250-unit override limit.
+    self.cs.steeringTorque = -170
+    self.assertTrue(self.update())
+    self.cs.steeringTorque = -236
+    self.assertFalse(self.update())
+    self.assertFalse(self.cs.steeringPressed)
+    self.cs.steeringTorque = 0
+    for _ in range(49):
+      self.assertFalse(self.update())
+    self.assertTrue(self.update())
+    self.control.CP.carFingerprint = 'OTHER'
+    self.cs.steeringTorque = 236
+    self.assertTrue(self.update())
+
+  def test_single_raw_torque_spike_does_not_suspend_but_native_limit_does(self):
+    self.cs.steeringTorque = 180
+    self.assertTrue(self.update())
+    self.cs.steeringTorque = 0
+    self.assertTrue(self.update())
+    self.cs.steeringTorque = 251
+    self.assertFalse(self.update())
+
+  def test_duplicate_carstate_publication_counts_only_once(self):
+    self.cs.steeringTorque = 180
+    first_time_ns = 10_000_000
+    self.assertTrue(self.control.lat_suspend_control(self.cs, True, first_time_ns))
+    self.assertTrue(self.control.lat_suspend_control(self.cs, True, first_time_ns))
+    self.assertFalse(self.control.lat_suspend_control(self.cs, True, first_time_ns + 10_000_000))
+
+  def test_lx3_torque_yield_preserves_manual_blinker_handoff(self):
+    self.cs.leftBlinker = True
+    self.assertFalse(self.update())
+    self.assertTrue(self.control.manual_blinker_suspended)
+    self.cs.leftBlinker = False
+    self.cs.steeringTorque = 170
+    self.assertFalse(self.update())  # Manual handoff remains, before torque debounce.
+    self.cs.steeringTorque = 180
+    self.assertFalse(self.update())
+    self.assertTrue(self.control.manual_blinker_suspended)
 
   def test_upstream_disengagement_is_never_overridden(self):
     self.cs.leftBlinker = True

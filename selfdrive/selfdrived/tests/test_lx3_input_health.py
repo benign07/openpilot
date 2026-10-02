@@ -19,7 +19,7 @@ class TestInputHealthConsumers(unittest.TestCase):
     self.ss = NS(lx3EngagementMode=2, enabled=True, active=True, lx3AcceptedGeneration=12,
                  lx3AcceptedPhysicalCounter=40, lx3AcceptedTransportEpoch=0x123456789ABCDEF0)
 
-  def control(self):
+  def control(self, carrot_controls=None):
     # Execute the exact production LX3 branch, including axis AND identity
     # gates, against a still-accepted selfdriveState during CarState input loss.
     path = ROOT / 'selfdrive/controls/controlsd.py'
@@ -27,11 +27,12 @@ class TestInputHealthConsumers(unittest.TestCase):
     branch = next(node for node in ast.walk(tree) if isinstance(node, ast.If) and
                   ast.unparse(node.test) == "self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV'")
     sm = host.SubMaster(selfdriveState=self.ss, onroadEvents=[])
+    sm.logMonoTime = {'carState': 2}
     sm.all_alive = sm.all_checks
     sm.all_valid = sm.all_checks
     cc = NS()
     context = NS(CP=NS(carFingerprint='HYUNDAI_PALISADE_LX3_HEV', openpilotLongitudinalControl=True),
-                 sm=sm, carrot_controls=NS(lat_suspend_control=lambda cs, active: active))
+                 sm=sm, carrot_controls=carrot_controls or NS(lat_suspend_control=lambda cs, active, sample_ns=None: active))
     env = dict(self=context, CC=cc, CS=self.cs, driving_gear=True, standstill=False,
                lx3_control_inputs_valid=host.MODULE['lx3_control_inputs_valid'], lx3_control_permissions=host.permissions,
                stamp_control_identity=TRANSPORT['stamp_control_identity'])
@@ -52,6 +53,21 @@ class TestInputHealthConsumers(unittest.TestCase):
     self.cs.steerFaultTemporary = True
     cc = self.control()
     self.assertFalse(cc.latActive or cc.longActive or cc.enabled)
+
+  def test_driver_override_suspends_only_lateral_with_valid_session_identity(self):
+    class Params:
+      def get_int(self, name):
+        return {'LatSuspendAngleDeg': 300, 'LaneChangeNeedTorque': 0}[name]
+    env = dict(Params=Params, DT_CTRL=.01, math=host.math)
+    host.load_definitions(ROOT / 'selfdrive/carrot/carrot_controls.py', env, {'CarrotControls'})
+    carrot = env['CarrotControls'](NS(carFingerprint='HYUNDAI_PALISADE_LX3_HEV'))
+    self.cs.steeringTorque, self.cs.steeringAngleDeg, self.cs.steeringPressed = -170, -1.0, False
+    self.cs.leftBlinker = self.cs.rightBlinker = False
+    carrot.lat_suspend_control(self.cs, True, 1)
+    self.cs.steeringTorque = -236
+    cc = self.control(carrot)
+    self.assertFalse(cc.latActive)
+    self.assertTrue(cc.enabled and cc.longActive and cc.lx3IdentityValid)
 
   def card(self, fingerprint='HYUNDAI_PALISADE_LX3_HEV'):
     messages = [(address, bytes(32), 0) for address in TRANSPORT['GUARDED_ADDRESSES']] + [(0x730, bytes(8), 1)]
