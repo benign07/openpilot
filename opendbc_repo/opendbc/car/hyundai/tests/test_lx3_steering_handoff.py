@@ -23,33 +23,53 @@ class TestLx3SteeringHandoff(unittest.TestCase):
     return steering + [self.companion]
 
   def test_inactive_session_preserves_oem_camera_steering(self):
-    selected, owned = lx3_camera_steering_handoff(self.messages(False), False, False)
+    selected, owned = lx3_camera_steering_handoff(self.messages(False), False, False, self.cs)
     self.assertFalse(owned)
     self.assertEqual(selected, [self.companion])
 
   def test_driver_yield_sends_one_neutral_then_stops_replacing_oem(self):
-    active, owned = lx3_camera_steering_handoff(self.messages(True), True, False)
+    active, owned = lx3_camera_steering_handoff(self.messages(True), True, False, self.cs)
     self.assertTrue(owned)
     self.assertEqual([msg[0] for msg in active], [0xCB, 0x12A])
     self.assertEqual((active[0][1][3] >> 4) & 3, 2)
 
-    neutral, owned = lx3_camera_steering_handoff(self.messages(False), False, owned)
+    neutral, owned = lx3_camera_steering_handoff(self.messages(False), False, owned, self.cs)
     self.assertFalse(owned)
     self.assertEqual([msg[0] for msg in neutral], [0xCB, 0x12A])
     self.assertEqual((neutral[0][1][3] >> 4) & 3, 1)
     self.assertEqual(neutral[0][1][6], 0)
 
     for _ in range(53):  # Longer than the faulting 0.53-second neutral stream.
-      selected, owned = lx3_camera_steering_handoff(self.messages(False), False, owned)
+      selected, owned = lx3_camera_steering_handoff(self.messages(False), False, owned, self.cs)
       self.assertFalse(owned)
       self.assertEqual(selected, [self.companion])
 
-    resumed, owned = lx3_camera_steering_handoff(self.messages(True), True, owned)
+    resumed, owned = lx3_camera_steering_handoff(self.messages(True), True, owned, self.cs)
     self.assertTrue(owned)
     self.assertEqual([msg[0] for msg in resumed], [0xCB, 0x12A])
 
   def test_missing_camera_template_cannot_claim_host_ownership(self):
-    selected, owned = lx3_camera_steering_handoff([self.companion], True, False)
+    selected, owned = lx3_camera_steering_handoff([self.companion], True, False, self.cs)
+    self.assertEqual(selected, [self.companion])
+    self.assertFalse(owned)
+
+  def test_oem_emergency_does_not_claim_host_steering_or_handoff(self):
+    _, owned = lx3_camera_steering_handoff(self.messages(True), True, False, self.cs)
+    self.assertTrue(owned)
+    self.cs.adrv_0x161 = {'ALERTS_1': 11}
+    emergency = self.messages(True)
+    self.assertEqual((emergency[0][1][3] >> 4) & 3, 2)
+    selected, owned = lx3_camera_steering_handoff(emergency, True, owned, self.cs)
+    self.assertEqual(selected, [self.companion])
+    self.assertFalse(owned)
+
+  def test_active_oem_template_is_not_a_neutral_handoff(self):
+    _, owned = lx3_camera_steering_handoff(self.messages(True), True, False, self.cs)
+    self.assertTrue(owned)
+    self.cs.adrv_0x161 = {'ALERTS_1': 11}
+    active_template = self.messages(False)
+    self.cs.adrv_0x161 = None
+    selected, owned = lx3_camera_steering_handoff(active_template, False, owned, self.cs)
     self.assertEqual(selected, [self.companion])
     self.assertFalse(owned)
 
