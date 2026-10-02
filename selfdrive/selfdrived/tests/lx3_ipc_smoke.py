@@ -122,6 +122,45 @@ def main():
       assert owned.lx3TransportEpoch == panda['epoch']
       assert not wire.sendcan[1].lx3IdentityValid
     return ss, permission
+
+  def check_active_receipt_gap():
+    # Use an actual empty carState socket and the complete production receipt
+    # method. Freeze only the judgement clock for deterministic age boundaries;
+    # the 20ms receive timeout and encoded valid/invalid messages are real IPC.
+    receipt_socket = messaging.sub_sock('carState', timeout=20)
+    context.car_state_sock = receipt_socket
+    context.initialized = True
+    context.mismatch_counter = 0
+    original_identity = (context.lx3_engagement.mode, context.lx3_engagement.accepted_generation,
+                         context.lx3_engagement.accepted_counter, context.lx3_engagement.accepted_epoch)
+    msg = messaging.new_message('carState', valid=True)
+    msg.carState = sm['carState'].as_builder()
+    msg.carState.buttonEvents = [dict(type='lfaButton', pressed=False,
+                                     lx3PhysicalCounter=40, lx3PhysicalValid=True)]
+    pm.send('carState', msg)
+    context.CS_prev = sm['carState']
+    current = SelfdriveD.data_sample(context)
+    assert context.car_state_fresh and not context.car_state_missing
+    context.CS_prev = current
+    stamp = context.car_state_last_valid_ns
+    assert stamp == msg.logMonoTime
+    # No publication follows: the real socket must time out, preserving CS_prev.
+    current = SelfdriveD.data_sample(context)
+    assert not context.car_state_fresh and context.car_state_missing
+    assert context.car_state_last_valid_ns == stamp
+    context.events.clear()
+    with patch('openpilot.selfdrive.selfdrived.selfdrived.time.monotonic_ns', return_value=stamp + 25_000_000):
+      SelfdriveD.update_lx3_state(context, current)
+    assert context.enabled and context.active and not context.lx3_engagement.ack_valid
+    assert log.OnroadEvent.EventName.controlsMismatch not in context.events.events
+    assert (context.lx3_engagement.mode, context.lx3_engagement.accepted_generation,
+            context.lx3_engagement.accepted_counter, context.lx3_engagement.accepted_epoch) == original_identity
+    # Restore the normal live-publication facade used by step; tests for expired
+    # or invalid receipt and loss of identity are in test_lx3_engagement.
+    context.car_state_fresh = True
+    context.car_state_missing = False
+    print('PASS real accepted-session carState socket timeout: bounded age, unchanged identity, no cached LFA replay or ACK')
+
   panda.update(requested=1, counter=40, generation=2, phase=1)
   ss, permission = step('lfaButton', 40)
   assert permission == (False, False) and ss.enabled and not ss.active
@@ -130,6 +169,7 @@ def main():
   ss, permission = step()
   assert permission == (True, False) and not ss.lx3AckValid and ss.lx3AckGeneration == 0
   assert ss.lx3AcceptedTransportEpoch == panda['epoch'] and ss.lx3AcceptedGeneration == 2
+  check_active_receipt_gap()
   panda.update(requested=2, accepted=0, counter=42, generation=3, phase=1, allowed=False)
   ss, permission = step('mainCruise', 42)
   assert permission == (False, False) and not ss.enabled
@@ -140,6 +180,7 @@ def main():
   panda.update(accepted=2, phase=2, allowed=True)
   ss, permission = step()
   assert permission == (True, True) and not ss.lx3AckValid
+  check_active_receipt_gap()
   ss, permission = step(event=log.OnroadEvent.EventName.gasPressedOverride)
   assert permission == (True, True) and context.events.contains(ET.OVERRIDE_LONGITUDINAL)
   ss, permission = step('cancel', input_state='requalifying', input_counter_valid=False)

@@ -719,8 +719,29 @@ class SelfdriveD:
       return
 
     replay_captured = False
-    if not healthy or not lx3_permission_matches(panda, intent.mode, intent.accepted_generation,
-                                                intent.accepted_counter, accepted=True, epoch=intent.accepted_epoch):
+    accepted_matches = lx3_permission_matches(panda, intent.mode, intent.accepted_generation,
+                                               intent.accepted_counter, accepted=True, epoch=intent.accepted_epoch)
+    # recv_one's 20ms timeout can precede the next valid 100Hz publication.
+    # Preserve only an already active, exactly accepted session for the same
+    # 50ms publication-age bound used above. This never grants/replays intent,
+    # promotes PRE_ENABLE, renews an ACK, or accepts an invalid received sample.
+    # Keep `healthy` strict for capture_replay below: missing data cannot anchor
+    # a new generation. All normal events and Panda checks still apply.
+    short_active_gap = (self.enabled and self.active and had_session and
+                        not self.car_state_fresh and getattr(self, 'car_state_missing', False) and
+                        0 < getattr(self, 'car_state_last_valid_ns', 0) <= now_ns and
+                        now_ns - self.car_state_last_valid_ns <= 50_000_000 and
+                        car_config_valid and panda_valid and accepted_matches and lx3_input_ready(CS) and
+                        not CS.steerFaultTemporary and not CS.steerFaultPermanent and not input_barriers)
+    if short_active_gap:
+      cloudlog.event('lx3_active_carstate_gap', car_state_age_ns=now_ns - self.car_state_last_valid_ns,
+                     mode=int(intent.mode), generation=intent.accepted_generation)
+    if not (healthy or short_active_gap) or not accepted_matches:
+      cloudlog.event('lx3_active_reject', car_state_fresh=self.car_state_fresh,
+                     car_state_missing=getattr(self, 'car_state_missing', False),
+                     car_state_age_ns=now_ns - getattr(self, 'car_state_last_valid_ns', 0),
+                     car_config_valid=car_config_valid, panda_valid=panda_valid,
+                     panda_age_ns=now_ns - panda_ns, accepted_matches=accepted_matches)
       if healthy:
         replay_captured = intent.capture_replay(CS, panda, now, input_barriers)
       self.events.add(EventName.controlsMismatch)

@@ -130,7 +130,7 @@ ENV = dict(Events=Events, ET=ET, State=State, DT_CTRL=.01, SOFT_DISABLE_TIME=3,
            ACTIVE_STATES=(State.enabled, State.softDisabling, State.overriding),
            ENABLED_STATES=(State.preEnabled, State.enabled, State.softDisabling, State.overriding),
            EventName=NS(**{name: name for name in EVENT_TYPES}), EngagementMode=Mode,
-           time=NS(monotonic=lambda: 0.0, monotonic_ns=lambda: 0),
+           time=NS(monotonic=lambda: 0.0, monotonic_ns=lambda: 0), cloudlog=NS(event=lambda *a, **kw: None),
            lx3_pandas_ready=pandas_ready, lx3_permission_sample=MODULE['lx3_permission_sample'],
            lx3_permission_matches=MODULE['lx3_permission_matches'], lx3_input_ready=MODULE['lx3_input_ready'],
            car=NS(CarParams=NS(SteerControlType=NS(angle='angle'))))
@@ -730,6 +730,119 @@ class TestLx3Session(unittest.TestCase):
     self.assertTrue(self.ctx.lx3_engagement.ack_valid)
     self.accept()
     self.assertEqual(self.step(), (True, True))
+
+  def test_accepted_session_survives_bounded_missing_publication_without_replaying_buttons(self):
+    # Oct 3 route 183: all three mismatches adjoined 22.45-25.84 ms
+    # publication gaps while Panda still reported the accepted identity.
+    # The logger does not record recv_one(None); explicitly inject that
+    # possible socket outcome here, rather than claim an exact IPC replay.
+    for name, expected in (('lfaButton', (True, False)), ('mainCruise', (True, True))):
+      for gap_ns in (22_451_738, 22_638_937, 25_839_783, 50_000_000):
+        with self.subTest(button=name, gap_ns=gap_ns):
+          self.setUp()
+          self.engage(name)
+          identity = (self.ctx.lx3_engagement.mode, self.ctx.lx3_engagement.accepted_generation,
+                      self.ctx.lx3_engagement.accepted_counter, self.ctx.lx3_engagement.accepted_epoch)
+          stamp = int(self.now * 1e9)
+          self.ctx.car_state_fresh = False
+          self.ctx.car_state_missing = True
+          self.ctx.car_state_last_valid_ns = stamp
+          self.now = (stamp + gap_ns) / 1e9
+          self.assertEqual(self.step(button('mainCruise')), expected)  # cached release must be ignored
+          self.assertNotIn('controlsMismatch', self.ctx.events.events)
+          self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+          self.assertIsNone(self.ctx.lx3_engagement.pending)
+          self.assertEqual((self.ctx.lx3_engagement.mode, self.ctx.lx3_engagement.accepted_generation,
+                            self.ctx.lx3_engagement.accepted_counter, self.ctx.lx3_engagement.accepted_epoch), identity)
+
+  def test_accepted_gap_expires_from_publication_without_renewal(self):
+    self.engage()
+    self.ctx.car_state_fresh = False
+    self.ctx.car_state_missing = True
+    self.ctx.car_state_last_valid_ns = int(self.now * 1e9)
+    base = self.now
+    for gap in (.02, .04, .05):
+      self.now = base + gap
+      self.assertEqual(self.step(), (True, False))
+      self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.now = base + .050001
+    self.assertEqual(self.step(), (False, False))
+    self.assertIn('controlsMismatch', self.ctx.events.events)
+    self.ctx.car_state_fresh = True
+    self.ctx.car_state_missing = False
+    self.assertEqual(self.step(), (False, False))  # recovery never re-engages by itself
+
+  def test_accepted_short_gap_still_rejects_invalid_input_and_permission_loss(self):
+    for fault in ('invalid_received', 'zero_stamp', 'future_stamp', 'panda_stale', 'panda_rx',
+                  'panda_stream', 'controls', 'epoch', 'generation', 'counter', 'mode',
+                  'can_invalid', 'input_fault', 'steer_fault', 'pedal', 'distracted'):
+      with self.subTest(fault=fault):
+        self.setUp()
+        self.engage()
+        self.ctx.car_state_fresh = False
+        self.ctx.car_state_missing = True
+        self.ctx.car_state_last_valid_ns = int(self.now * 1e9)
+        self.now += .025
+        if fault == 'invalid_received': self.ctx.car_state_missing = False
+        if fault == 'zero_stamp': self.ctx.car_state_last_valid_ns = 0
+        if fault == 'future_stamp': self.ctx.car_state_last_valid_ns = int((self.now + .001) * 1e9)
+        if fault == 'panda_stale':
+          self.refresh_panda = False
+          self.ctx.sm.logMonoTime['pandaStates'] = int((self.now - .251) * 1e9)
+        if fault == 'panda_rx': self.panda.safetyRxChecksInvalid = True
+        if fault == 'panda_stream': self.ctx.sm.valid_streams = False
+        if fault == 'controls': self.panda.controlsAllowed = self.panda.lx3ControlsAllowed = False
+        if fault == 'epoch': self.panda.lx3TransportEpoch += 1
+        if fault == 'generation': self.panda.lx3RequestGeneration += 1
+        if fault == 'counter': self.panda.lx3PhysicalCounter += 2
+        if fault == 'mode': self.panda.lx3AcceptedMode = self.panda.lx3RequestedMode = 2
+        if fault == 'can_invalid': self.cs.canValid = False
+        if fault == 'input_fault': self.cs.lx3InputState = 'integrityFault'
+        if fault == 'steer_fault': self.cs.steerFaultTemporary = True
+        events = ('pedalPressed',) if fault == 'pedal' else ('tooDistracted',) if fault == 'distracted' else ()
+        self.assertEqual(self.step(events=events), (False, False))
+        self.assertFalse(self.ctx.enabled)
+        self.assertFalse(self.ctx.lx3_engagement.ack_valid and self.ctx.lx3_engagement.ack_mode != Mode.OFF)
+        self.assertIsNone(self.ctx.lx3_engagement.replay_base)
+
+  def test_short_gap_does_not_start_an_idle_session_from_cached_button(self):
+    self.ctx.car_state_fresh = False
+    self.ctx.car_state_missing = True
+    self.ctx.car_state_last_valid_ns = int((self.now - .025) * 1e9)
+    self.pending()
+    self.assertEqual(self.step(button('lfaButton')), (False, False))
+    self.assertFalse(self.ctx.lx3_engagement.ack_valid)
+    self.assertIsNone(self.ctx.lx3_engagement.pending)
+
+  def test_actual_receipt_missing_then_recovery_preserves_only_existing_session(self):
+    self.engage()
+    stamp = int(self.now * 1e9)
+    queue = [NS(valid=True, logMonoTime=stamp, carState=self.cs), None,
+             NS(valid=True, logMonoTime=stamp + 30_000_000, carState=self.cs),
+             NS(valid=False, logMonoTime=stamp + 40_000_000, carState=self.cs)]
+    receipt = load_car_state_receipt(dict(messaging=NS(recv_one=lambda _: queue.pop(0))))
+    self.ctx.car_state_sock = object()
+    self.ctx.CS_prev = self.cs
+    for age, expected in ((0, (True, False)), (.025, (True, False)),
+                           (.030, (True, False)), (.040, (False, False))):
+      self.now = stamp / 1e9 + age
+      self.assertIs(receipt(self.ctx), self.cs)
+      self.assertEqual(self.step(), expected)
+    self.assertIn('controlsMismatch', self.ctx.events.events)
+
+  def test_missing_sample_never_promotes_accepted_pre_enable(self):
+    self.pending(Mode.COMBINED)
+    self.step(button('mainCruise'), events=('preEnableStandstill',))
+    self.accept()
+    self.step(events=('preEnableStandstill',))
+    self.assertTrue(self.ctx.enabled)
+    self.assertFalse(self.ctx.active)
+    self.ctx.car_state_fresh = False
+    self.ctx.car_state_missing = True
+    self.ctx.car_state_last_valid_ns = int(self.now * 1e9)
+    self.now += .025
+    self.assertEqual(self.step(), (False, False))
+    self.assertFalse(self.ctx.enabled)
 
   def test_pending_acceptance_waits_through_two_missing_samples_then_commits_once(self):
     self.pending(Mode.COMBINED)
