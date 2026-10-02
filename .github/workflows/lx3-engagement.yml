@@ -72,6 +72,10 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: uv run --no-sync python -m unittest openpilot.selfdrive.selfdrived.tests.test_lx3_runtime_configuration -v
+      - name: LX3 camera steering handoff on the generated DBC
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run --no-sync python -m unittest opendbc.car.hyundai.tests.test_lx3_steering_handoff -v
       - name: LX3 event health using actual messaging
         env:
           PYTHONPATH: ${{ github.workspace }}

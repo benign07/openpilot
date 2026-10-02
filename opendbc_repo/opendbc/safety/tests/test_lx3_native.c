@@ -290,6 +290,14 @@ static void guarded_regressions(void) {
   assert(safety_tx_hook(&p));
   out = forward(angle_command(true), 2);
   assert(!hyundai_canfd_actuator_active(&out));
+  // Host sends one neutral at lateral yield, then no more 0xCB. The bounded
+  // neutral reuses expire and the original camera command resumes unchanged.
+  for (unsigned int reuse = 0U; reuse < CANFD_BFWD_REUSE_MAX; reuse++) {
+    out = forward(stock_angle(true), 2);
+    assert(!hyundai_canfd_actuator_active(&out));
+  }
+  out = forward(stock_angle(true), 2);
+  assert(hyundai_canfd_actuator_active(&out) && out.data[6] == 25U);
 
   // The development guard cannot be authorized by legacy enable messages.
   reset(lx3_param());

@@ -84,6 +84,21 @@ def lx3_op_owned_angle_active(can_sends, CS) -> bool:
 def lx3_angle_reentry_next(remaining: int, can_sends, CS) -> int:
   return max(0, remaining - 1) if lx3_op_owned_angle_active(can_sends, CS) else 2
 
+
+def lx3_camera_steering_handoff(can_sends, lat_active: bool, host_active_prev: bool):
+  """Give the original camera 0xCB back when LX3 lateral control yields.
+
+  One neutral frame clears Panda's buffered active goal on the falling edge.
+  Further neutral frames would replace the still-active OEM LFA command during
+  driver override, so leave that original stream alone until OP steers again.
+  """
+  has_lfa_alt = any(addr == 0xCB for addr, _dat, _bus in can_sends)
+  if lat_active:
+    return can_sends, has_lfa_alt
+  if host_active_prev and has_lfa_alt:
+    return can_sends, False
+  return [msg for msg in can_sends if msg[0] != 0xCB], False
+
 def apply_steer_angle_limits_physics(desired_sw_deg: float,
                                      last_sw_deg: float,
                                      v_ego: float,
@@ -147,6 +162,7 @@ class CarController(CarControllerBase):
     self.params = CarControllerParams(CP)
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.lx3_cluster = Lx3ClusterTransport() if CP.carFingerprint == CAR.HYUNDAI_PALISADE_LX3_HEV else None
+    self.lx3_camera_steering_active_prev = False
     self.angle_limit_counter = 0
 
     self.accel_last = 0
@@ -455,7 +471,11 @@ class CarController(CarControllerBase):
 
       # steering control
       if camera_scc:
-        can_sends.extend(hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, apply_steer_req, apply_torque, CS, apply_angle, self.lkas_max_torque, angle_control))
+        steering_sends = hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, apply_steer_req, apply_torque, CS, apply_angle, self.lkas_max_torque, angle_control)
+        if self.lx3_cluster is not None and angle_control:
+          steering_sends, self.lx3_camera_steering_active_prev = lx3_camera_steering_handoff(
+            steering_sends, CC.latActive, self.lx3_camera_steering_active_prev)
+        can_sends.extend(steering_sends)
       else:
         can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, self.lkas_max_torque, angle_control))
 
