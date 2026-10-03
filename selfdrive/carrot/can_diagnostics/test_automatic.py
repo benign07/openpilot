@@ -11,7 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from .automatic import AutoRecorder, ChunkStore, control_mode
 from .automatic_routes import register
-from .automatic_runtime import read_param, selected_fields
+from .automatic_runtime import AutomaticController, read_param, selected_fields
 from tools.can_auto_sync import analyze, download
 
 
@@ -26,6 +26,25 @@ def services(now=100, started=True, lat=False, long=False):
 
 
 class RuntimeTests(unittest.TestCase):
+  def test_transient_worker_error_retries_without_losing_service(self):
+    class Shutdown:
+      def __init__(self, controller): self.controller = controller
+      def is_set(self): return self.controller.calls >= 2
+      def wait(self, delay): return self.is_set()
+    class Controller(AutomaticController):
+      def __init__(self):
+        super().__init__()
+        self.calls = 0
+        self.shutdown = Shutdown(self)
+      def live_loop(self):
+        self.calls += 1
+        if self.calls == 1:
+          raise RuntimeError('temporary subscriber failure')
+    controller = Controller()
+    controller.run()
+    self.assertEqual(controller.calls, 2)
+    self.assertEqual(controller.status()['recorder_restart_count'], 1)
+
   def test_only_selected_fields_are_converted(self):
     class Nested:
       def to_dict(self): return {'enabled': False}

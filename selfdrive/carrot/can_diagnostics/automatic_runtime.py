@@ -51,6 +51,8 @@ class AutomaticController:
     self.worker = None
     self.recorder = None
     self.error = None
+    self.restart_count = 0
+    self.retry_after_seconds = 0
 
   def start(self):
     if self.worker is None:
@@ -61,7 +63,8 @@ class AutomaticController:
     with self.lock:
       result = self.recorder.status() if self.recorder else {'state': 'starting'}
       if self.error:
-        result.update(state='error', error=self.error)
+        result.update(state='error', error=self.error, retry_after_seconds=self.retry_after_seconds)
+      result['recorder_restart_count'] = self.restart_count
       return result
 
   def close(self):
@@ -77,18 +80,28 @@ class AutomaticController:
     return store.list_chunks() if store else []
 
   def run(self):
-    try:
-      self.live_loop()
-    except Exception as exc:
-      with self.lock:
-        self.error = f'{type(exc).__name__}: {str(exc)[:160]}'
-    finally:
-      with self.lock:
-        if self.recorder:
-          try:
-            self.recorder.close()
-          except Exception as exc:
-            self.error = f'close: {type(exc).__name__}: {str(exc)[:160]}'
+    delay = 5
+    while not self.shutdown.is_set():
+      started = time.monotonic()
+      try:
+        self.live_loop()
+      except Exception as exc:
+        if time.monotonic() - started >= 60:
+          delay = 5
+        with self.lock:
+          self.error = f'{type(exc).__name__}: {str(exc)[:160]}'
+          self.restart_count += 1
+          self.retry_after_seconds = delay
+      finally:
+        with self.lock:
+          if self.recorder:
+            try:
+              self.recorder.close()
+            except Exception as exc:
+              self.error = f'close: {type(exc).__name__}: {str(exc)[:160]}'
+      if self.shutdown.wait(delay):
+        break
+      delay = min(60, delay * 2)
 
   def live_loop(self):
     from cereal import car, messaging
@@ -111,6 +124,8 @@ class AutomaticController:
       metadata['dbc_sha256'] = hashlib.sha256(dbc.read_bytes()).hexdigest()
     with self.lock:
       self.recorder = AutoRecorder(ChunkStore(self.root), metadata)
+      self.error = None
+      self.retry_after_seconds = 0
     last_metadata = last_context = -100
     services = {}
     while not self.shutdown.is_set():
