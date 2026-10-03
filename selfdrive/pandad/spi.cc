@@ -7,6 +7,7 @@
 #include <cstring>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
 #include "common/util.h"
 #include "common/timing.h"
@@ -117,6 +118,20 @@ void PandaSpiHandle::cleanup() {
   }
 }
 
+void PandaSpiHandle::set_speed(uint32_t speed_hz) {
+  if (speed_hz != 25000000U && speed_hz != 50000000U) {
+    throw std::invalid_argument("unsupported Panda SPI speed");
+  }
+  LockEx lock(spi_fd, hw_lock);
+  util::safe_ioctl(spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed_hz, "failed setting Panda SPI speed");
+  uint32_t actual_speed_hz = 0U;
+  util::safe_ioctl(spi_fd, SPI_IOC_RD_MAX_SPEED_HZ, &actual_speed_hz, "failed reading Panda SPI speed");
+  if (actual_speed_hz != speed_hz) {
+    throw std::runtime_error("Panda SPI speed readback differs from request");
+  }
+  LOGW("Panda SPI speed set to %u Hz", speed_hz);
+}
+
 
 
 int PandaSpiHandle::control_write(uint8_t request, uint16_t param1, uint16_t param2, unsigned int timeout) {
@@ -224,12 +239,15 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
         // due to full TX buffers
         nack_count += 1;
         if (nack_count > 3) {
-          SPILOG(LOGD, "NACK sleep %d", nack_count);
           usleep(std::clamp(nack_count*10, 200, 2000));
         }
       }
     }
   } while (ret < 0 && connected && !timed_out);
+
+  if (nack_count > 0) {
+    LOGD("SPI: endpoint 0x%x retried after %d NACKs, result %d", endpoint, nack_count, ret);
+  }
 
   if (ret < 0) {
     SPILOG(LOGE, "transfer failed, after %d tries, %.2fms", timeout_count, millis_since_boot() - start_time);
@@ -262,7 +280,6 @@ int PandaSpiHandle::wait_for_ack(uint8_t ack, uint8_t tx, unsigned int timeout, 
     if (rx_buf[0] == ack) {
       break;
     } else if (rx_buf[0] == SPI_NACK) {
-      SPILOG(LOGD, "SPI: got NACK, waiting for 0x%x", ack);
       return SpiError::NACK;
     }
 

@@ -66,5 +66,11 @@ void PandaSafety::setSafetyMode(const std::string &params_string) {
 
   LOGW("setting safety model: %d, param: %d, alternative experience: %d", (int)safety_model, safety_param, alternative_experience);
   panda_->set_alternative_experience(alternative_experience);
+  // The guarded LX3 H7 profile showed recurrent SPI checksum/NACK retries as
+  // CAN traffic increased. Use a conservative clock before switching the
+  // board into that profile; leave every other vehicle at the stock 50 MHz.
+  if (safety_model == cereal::CarParams::SafetyModel::HYUNDAI_CANFD && (safety_param & 1024U) != 0U) {
+    panda_->set_spi_speed(25000000U);
+  }
   panda_->set_safety_model(safety_model, safety_param);
 }

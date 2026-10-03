@@ -24,6 +24,7 @@ public:
   int control_read(uint8_t request, uint16_t param1, uint16_t param2, unsigned char *data, uint16_t length, unsigned int timeout=TIMEOUT);
   int bulk_write(unsigned char endpoint, unsigned char* data, int length, unsigned int timeout=TIMEOUT);
   int bulk_read(unsigned char endpoint, unsigned char* data, int length, unsigned int timeout=TIMEOUT);
+  void set_speed(uint32_t speed_hz);
   void cleanup();
 
   static std::vector<std::string> list();

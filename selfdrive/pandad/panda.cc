@@ -37,6 +37,10 @@ std::vector<std::string> Panda::list() {
   return PandaSpiHandle::list();
 }
 
+void Panda::set_spi_speed(uint32_t speed_hz) {
+  handle->set_speed(speed_hz);
+}
+
 void Panda::set_safety_model(cereal::CarParams::SafetyModel safety_model, uint16_t safety_param) {
   handle->control_write(0xdc, (uint16_t)safety_model, safety_param);
   if (safety_model == cereal::CarParams::SafetyModel::HYUNDAI_CANFD && (safety_param & 1024U) != 0U) {
