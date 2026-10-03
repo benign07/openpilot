@@ -74,6 +74,16 @@ static CANPacket_t feedback_original(void) {
 }
 
 static void feedback_mediation(void) {
+  // No queued feedback means an OEM MDPS frame must pass through byte-for-byte,
+  // including malformed input; no host authority is inferred from that frame.
+  reset(lx3_param());
+  CANPacket_t idle_mdps = feedback_original();
+  idle_mdps.data[0] ^= 1U;
+  const CANPacket_t idle_saved = idle_mdps;
+  CANPacket_t idle_out = forward_raw(idle_mdps, 0);
+  assert(memcmp(idle_out.data, idle_saved.data, 24U) == 0);
+  assert(canfd_bfwd_find(0xEA, 2)->count == 0U && !controls_allowed);
+
   for (unsigned int camera_state = 1U; camera_state <= 2U; camera_state++) {
     prepare_owned();
     CANPacket_t camera = cooperative_camera(camera_state == 2U);
@@ -82,6 +92,8 @@ static void feedback_mediation(void) {
     CANPacket_t host = feedback_host();
     host.data[18] = (uint8_t)camera_state;
     assert(safety_tx_hook(&host));
+    const CanfdTxState* feedback_tx_state = find_canfd_tx_state(2, 0xEA);
+    assert(feedback_tx_state != NULL && !feedback_tx_state->tx_active);
     CANPacket_t original = feedback_original();
     original.data[18] = (original.data[18] & 0xFCU) | (3U - camera_state);
     hyundai_canfd_update_checksum(&original);
@@ -135,6 +147,7 @@ static void feedback_mediation(void) {
   assert(!safety_tx_hook(&host));
   grant_controls();
   assert(safety_tx_hook(&host));
+  assert(!find_canfd_tx_state(2, 0xEA)->tx_active);
   CANPacket_t original = feedback_original();
   CANPacket_t out = forward(original, 0);  // Accepted session but no OP CB ever inserted.
   assert(memcmp(out.data, original.data, 24) == 0);

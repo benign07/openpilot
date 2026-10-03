@@ -1196,6 +1196,7 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
   const int addr = GET_ADDR(to_send);
 
   int bus_fwd = -1;
+  bool lx3_camera_angle_checksum_valid = false;
   uint32_t now = microsecond_timer_get();
   if (hyundai_canfd_lx3_guard) lx3_permission_maintenance();
   if (hyundai_canfd_lx3_guard && (!controls_allowed || safety_rx_checks_invalid || relay_malfunction)) {
@@ -1215,8 +1216,9 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
     // Capture the camera request before replacing this outgoing copy. The
     // physical RX packet remains untouched by fdcan's forwarding copy.
     lx3_camera_angle_active = (GET_BYTE(to_send, 3) >> 4) & 0x3U;
-    lx3_camera_angle_seen = (GET_LEN(to_send) == 24U) &&
-      (hyundai_canfd_get_checksum(to_send) == hyundai_common_canfd_compute_checksum(to_send)) &&
+    lx3_camera_angle_checksum_valid = (GET_LEN(to_send) == 24U) &&
+      (hyundai_canfd_get_checksum(to_send) == hyundai_common_canfd_compute_checksum(to_send));
+    lx3_camera_angle_seen = lx3_camera_angle_checksum_valid &&
       ((lx3_camera_angle_active == 1U) || (lx3_camera_angle_active == 2U));
     lx3_camera_angle_us = now;
   }
@@ -1224,7 +1226,7 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
   if (hyundai_canfd_buffered_fwd) {
     CanfdBufferedFwd* bfwd = canfd_bfwd_find(addr, bus_fwd);
     if (bfwd != NULL) {
-      if (canfd_bfwd_feedback(bfwd)) {
+      if (canfd_bfwd_feedback(bfwd) && (bfwd->started || bfwd->has_last_pkt)) {
         // Only the LFA state is mediated. Use the original MDPS payload for
         // actual effort, angle, EPS torque, fault bits and every unknown bit.
         // A bad/faulted source is passed through without manufacturing an ACK.
@@ -1237,11 +1239,14 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
       }
       if (canfd_bfwd_guarded(bfwd)) {
         const int expected_len = (addr == 0xCB) ? 24 : ((addr == 0x12A) ? 16 : 32);
+        // The camera frame was already CRC-qualified for angle feedback above.
+        const bool source_valid = (GET_LEN(to_send) == expected_len) &&
+          (((addr == 0xCB) && (bus_num == 2)) ? lx3_camera_angle_checksum_valid :
+            (hyundai_canfd_get_checksum(to_send) == hyundai_common_canfd_compute_checksum(to_send)));
         // Malformed OEM input is never an opportunity to insert OP control.
         // Preserve its original bytes; the pending OP queue can only advance
         // on a valid stock frame within its existing acceptance deadline.
-        if ((GET_LEN(to_send) != expected_len) ||
-            (hyundai_canfd_get_checksum(to_send) != hyundai_common_canfd_compute_checksum(to_send))) {
+        if (!source_valid) {
           if (addr == 0xCB) {
             lx3_angle_stream_end();
           }
