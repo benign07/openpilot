@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b1116">
+  <title>Carrot HUD · 주행 평가와 조작 검사</title>
+  <link rel="stylesheet" href="/css/can_diagnostics.css?v=20260927-2">
+  <script src="/js/can_diagnostics.js?v=20260927-2" defer></script>
+  <script src="/js/automatic_drive_status.js?v=20260928-1" defer></script>
+</head>
+<body>
+  <header class="top"><a href="/?view=hud" class="back">‹ HUD</a><span>CARROT <b>LAB</b></span><span id="connection" class="badge">연결 중</span></header>
+  <main>
+    <div id="demo" class="notice" hidden>데모 화면 · 실제 차량 데이터가 아닙니다.</div>
+    <div class="intro"><h1>자동 주행 기록 · CAN 진단</h1><p>평소처럼 운전하세요. 오파 사용 여부와 관계없이 기록이 쌓입니다.</p></div>
+    <div class="card primary"><h2>매 운행 자동 기록</h2><p id="automaticDriveStatus" role="status">자동 기록 상태 확인 중</p><p>이 화면을 닫아도 기기에 기록됩니다. 직접 운전·차선 보조·가감속 보조를 구분하고, 감속과 개입 등 검토할 순간을 자동 표시합니다.</p><p class="fine">제어값은 자동 변경하지 않습니다. 휴대폰 보관 상태는 앱의 자동 보관 표시에서 확인하세요. 아래 수동 검사는 추가 분석이 필요할 때만 사용합니다.</p></div>
+    <nav class="tabs" aria-label="진단 메뉴"><button data-tab="record" class="selected">주행 평가</button><button data-tab="guided">정차 조작 검사</button><button data-tab="history">저장 기록</button><button data-tab="catalog">신호 백과사전</button></nav>
+    <div id="message" role="status" aria-live="polite"></div>
+    <section id="record" class="panel">
+      <div class="card primary">
+        <div class="row"><h2>선택: 상세 CAN 추가 수집</h2><span id="captureState" class="badge">대기</span></div>
+        <p>오파 작동 중에도 기록됩니다. 평가 버튼은 동승자가 조작해 주세요.</p>
+        <div class="metrics"><div><strong id="elapsed">00:00</strong><span>기록 시간</span></div><div><strong id="frames">0</strong><span>수신 프레임</span></div><div><strong id="vehicle">—</strong><span id="gear">차량 상태 대기</span></div></div>
+        <p id="preflight" class="hint">CAN 수신 상태를 확인하고 있습니다.</p>
+        <div class="actions"><button id="startDrive" class="accent" disabled>주행 기록 시작</button><button id="stop" class="danger" disabled>기록 종료</button></div>
+        <p id="captureEnd" class="hint" role="status" hidden></p><p class="fine">화면을 닫아도 기록됩니다. 30분 또는 용량 한도(512MB)에 도달하면 자동 종료됩니다. CAN 양이 많으면 더 일찍 끝날 수 있습니다.</p>
+      </div>
+      <div class="card"><h2>선택: 느낌 남기기</h2><p id="markerHint">‘주행 기록 시작’을 누르면 평가 버튼이 켜집니다.</p><div id="markers" class="markerGrid"></div></div>
+    </section>
+    <section id="guided" class="panel" hidden>
+      <div class="card primary"><h2>브레이크 · 방향지시등 검사</h2><p>P단과 주차 브레이크를 유지하고 오파 제어를 해제한 뒤 시작하세요. 각 검사는 화면 안내에 따라 3회 반복합니다.</p><div id="testChoices" class="testChoices" role="group" aria-label="검사할 조작"></div><button id="startGuided" class="accent secondary" disabled>선택한 조작 검사 시작</button><p id="guidedReason" class="hint"></p><div id="guide" hidden><div class="row"><b id="step">1 / 9</b><span id="feedback"></span></div><progress id="progress" max="9" value="0"></progress><h3 id="instruction"></h3><p id="countdown"></p><button id="mark" class="accent">유지하며 측정</button></div><button id="stopGuided" class="danger secondary" hidden>검사 종료</button></div>
+
+    </section>
+    <section id="catalog" class="panel" hidden>
+      <div class="card"><div class="row"><h2>관측 현황</h2><span class="muted">이번 기록</span></div><div class="stats"><div><b id="seen">0</b><span>버스·주소·길이</span></div><div><b id="unknown">0</b><span>미정의 주소</span></div><div><b id="length">0</b><span>길이 불일치</span></div><div><b id="checksum">—</b><span>체크섬 실패 / 검사</span></div><div><b id="counter">0</b><span>카운터 불연속</span></div></div><p id="dbStatus" class="fine">DBC 정의를 확인하고 있습니다.</p><p class="fine">미정의 주소와 카운터 불연속은 검토할 단서입니다. 곧바로 차량 오류를 뜻하지 않습니다.</p></div>
+      <div class="row"><h2>관측에서 쌓는 백과사전</h2><button id="refreshCatalog" class="small">새로고침</button></div>
+      <p>버스·주소·길이를 기준으로 DBC 정의와 실제 관측을 묶습니다. 신호의 실제 의미는 검증 근거가 쌓일 때 확정합니다.</p>
+      <label for="search" class="sr-only">주소나 신호 검색</label><input id="search" placeholder="주소 또는 신호 이름 검색 · 예: 0x105, BRAKE">
+      <p id="catalogInfo" class="fine"></p><div id="catalogRows"></div>
+    </section>
+    <section id="history" class="panel" hidden><div class="row"><h2>저장된 진단</h2><button id="refreshHistory" class="small">새로고침</button></div><p>원시 CAN, 사건 표식, 신호 사전을 내려받아 rlog와 비교할 수 있습니다.</p><div id="historyRows"></div></section>
+      <div id="result" class="card" hidden><h2>기록 결과</h2><p id="resultText"></p><div id="resultLinks" class="downloads"></div><div id="candidates"></div></div>
+    <footer>관측 → 정의 대조 → 반복 검증 → 매핑 확정<br>이 진단은 CAN을 전송하거나 주행 제어 설정을 변경하지 않습니다.</footer>
+  </main>
+</body>
+</html>
