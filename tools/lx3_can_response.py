@@ -29,6 +29,7 @@ LIMITATIONS = [
   '경고 값은 DBC 필드의 원시 값이며 DTC 진단 결과가 아닙니다. 첫 관측은 발생 시점이 아닙니다.',
   '호스트 요청의 CRC 차이는 Panda에서 카운터/CRC를 완성하기 전 값일 수 있습니다. 실제 버스 CRC 오류와 따로 집계합니다.',
   '요청 간 공백에는 해제·일시 정지 구간도 포함됩니다. 스케줄 지연이나 프레임 손실로 바로 단정하지 않습니다.',
+  'Panda 전달 버퍼 안의 폐기·만료는 송신 거절 프레임으로 기록되지 않을 수 있습니다. 거절 0은 전송 성공을 뜻하지 않습니다.',
 ]
 
 
@@ -130,13 +131,24 @@ class Index:
   def between(self, start, end):
     return self.rows[bisect.bisect_left(self.times, start):bisect.bisect_right(self.times, end)]
 
-  def before(self, t, max_age=.2):
-    i = bisect.bisect_right(self.times, t) - 1
+  def before(self, t, max_age=.2, inclusive=True):
+    i = (bisect.bisect_right(self.times, t) if inclusive else bisect.bisect_left(self.times, t)) - 1
     return self.rows[i] if i >= 0 and t - self.rows[i]['t'] <= max_age else None
 
 
 def brief(row):
   return None if row is None else {k: row[k] for k in ('t', 'source', 'bus', 'address', 'signals') if k in row}
+
+
+def command_matches(address, actual, requested):
+  # Panda preserves CURRENT original SCC warnings even when the host template
+  # predates them. Match requested control fields; retain warnings in the echo.
+  keys = {0xCB: ('active', 'angle_deg', 'cap_raw'), 0x1A0: ('mode', 'accel_value', 'accel_raw', 'stop'), 0xEA: ('lfa_state',)}[address]
+  return all(actual[k] == requested[k] for k in keys)
+
+
+def command_phase(address, signals):
+  return (signals['active'], signals['cap_raw'] == 0) if address == 0xCB else (signals['mode'], signals['stop'])
 
 
 def analyze(rows, window=1., max_events=2000):
@@ -201,8 +213,15 @@ def analyze(rows, window=1., max_events=2000):
   events, selected, modes = [], 0, Counter()
   mdps = idx('ecu_rx', 0, 0xEA)
   for address in (0xCB, 0x1A0):
+    requests = idx('host_request', 0, address).rows
+    # Cut observation windows at the next active/neutral (or SCC mode/stop)
+    # transition, even when that request is not selected for the output table.
+    phase_ends = [math.inf] * len(requests)
+    for i in range(len(requests) - 2, -1, -1):
+      phase_ends[i] = (requests[i + 1]['t'] if command_phase(address, requests[i]['signals']) !=
+                       command_phase(address, requests[i + 1]['signals']) else phase_ends[i + 1])
     previous, last_selected = None, -math.inf
-    for command in idx('host_request', 0, address).rows:
+    for request_index, command in enumerate(requests):
       s, t = command['signals'], command['t']
       p = previous['signals'] if previous else None
       state_change = p is None or any(s[k] != p[k] for k in (('active',) if address == 0xCB else ('mode', 'stop')))
@@ -216,19 +235,31 @@ def analyze(rows, window=1., max_events=2000):
       if len(events) >= max_events:
         continue
       echoes = idx('wire_echo', 0, address).between(t, t + .05)
-      match = next((f for f in echoes if f['signals'] == s), None)
+      match = next((f for f in echoes if command_matches(address, f['signals'], s)), None)
       stock = idx('ecu_rx', 2, address).before(match['t'] if match else t, .05)
-      before = mdps.before(t, .1)
-      after = mdps.between(t, t + window)
-      response = {}
-      if address == 0xCB and before:
+      end = min(t + window, phase_ends[request_index])
+      cut_at_transition = phase_ends[request_index] <= t + window
+      before = mdps.before(t, .1, inclusive=False)
+      before_age = None if before is None else t - before['t']
+      same_batch = mdps.between(t, t)
+      after = [f for f in mdps.between(t, end) if f['t'] > t and (not cut_at_transition or f['t'] < end)]
+      baseline_status = 'missing' if before is None else 'baseline_stale' if before_age > .020000001 else 'fresh'
+      if before and any(f['signals'] != before['signals'] for f in same_batch):
+        baseline_status = 'same_batch_unordered'
+      observed, candidates = {}, {}
+      if address == 0xCB and baseline_status == 'fresh':
         for field, delta in (('lfa_state', 1), ('angle_deg', 1.), ('driver_torque_raw', 50), ('lka_fault', 1), ('lfa_fault', 1)):
           changed = next((f for f in after if abs(f['signals'][field] - before['signals'][field]) >= delta), None)
-          response[field] = None if changed is None else {
-            't': changed['t'], 'delay_from_request_s': round(changed['t'] - t, 6),
-            'before': before['signals'][field], 'after': changed['signals'][field]}
-      times = [t] + [f['t'] for f in after] + [t + window]
-      max_gap = max((b - a for a, b in zip(times, times[1:])), default=window)
+          if changed is not None:
+            change = {'t': changed['t'], 'observed_after_request_s': round(changed['t'] - t, 6),
+                      'before': before['signals'][field], 'after': changed['signals'][field]}
+            if field in ('angle_deg', 'driver_torque_raw'):
+              observed[field] = change
+            else:
+              change['equals_requested_active_raw'] = changed['signals'][field] == s['active'] if field == 'lfa_state' else None
+              candidates[field] = change
+      times = [t] + [f['t'] for f in after] + [end]
+      max_gap = max((b - a for a, b in zip(times, times[1:])), default=end - t)
       ctx = context(t)
       cc = ctx.get('carControl', {}).get('data', {})
       mode = 'combined' if cc.get('latActive') and cc.get('longActive') else 'lateral_only' if cc.get('latActive') else 'lateral_inactive'
@@ -237,11 +268,16 @@ def analyze(rows, window=1., max_events=2000):
       modes[mode] += 1
       events.append({'t': t, 'request': brief(command), 'request_crc': command['integrity'], 'mode': mode,
                      'wire_match': brief(match), 'wire_match_delay_s': None if match is None else round(match['t'] - t, 6),
-                     'wire_origin': 'ambiguous_stock_and_host' if match and stock and stock['signals'] == s
+                     'wire_origin': 'ambiguous_stock_and_host' if match and stock and command_matches(address, stock['signals'], s)
                      else 'host_semantic_match_not_proof_of_origin' if match else 'not_observed',
                      'mdps_before': brief(before), 'mdps_after_count': len(after), 'mdps_max_gap_s': round(max_gap, 6),
-                     'mdps_window_dense': bool(after) and max_gap <= .1, 'first_changes': response,
-                     'nearby_ecu_changes': [r for r in transitions if t <= r['t'] <= t + window and not r['first_observation']],
+                     'mdps_before_age_s': None if before_age is None else round(before_age, 6), 'baseline_status': baseline_status,
+                     'same_batch_unordered': [brief(f) for f in same_batch],
+                     'mdps_window_dense': bool(after) and max_gap <= .1 and baseline_status == 'fresh',
+                     'window_end': end, 'window_end_reason': 'next_command_phase' if cut_at_transition else 'duration',
+                     'observed_changes_after_request': observed, 'state_change_candidates': candidates,
+                     'nearby_ecu_changes': [r for r in transitions if t < r['t'] <= end and
+                                            (not cut_at_transition or r['t'] < end) and not r['first_observation']],
                      'context': ctx})
   events.sort(key=lambda r: r['t'])
   # Every request participates in gap/error metrics, independently of event
@@ -256,9 +292,9 @@ def analyze(rows, window=1., max_events=2000):
       errors.append(abs(signals['angle_deg'] - measured['signals']['angle_deg']))
     cs = state_indices.get('carState', empty).before(t)
     enabled = None if cs is None else cs['data'].get('latEnabled')
-    phase = ('active_request' if signals['active'] == 2 else 'accepted_session_neutral'
-             if signals['active'] == 1 and signals['cap_raw'] == 0 and enabled is True
-             else 'outside_session_neutral' if enabled is False else 'unknown_neutral')
+    neutral = signals['active'] == 1 and signals['cap_raw'] == 0
+    phase = ('active_request' if signals['active'] == 2 else 'invalid_or_other' if not neutral
+             else 'accepted_session_neutral' if enabled is True else 'outside_session_neutral' if enabled is False else 'unknown_neutral')
     camera = idx('ecu_rx', 2, 0xCB).before(t, .05)
     mirrored = idx('wire_echo', 2, 0xEA).before(t, .05)
     pair = f"camera={camera['signals']['active'] if camera else None},physical_mdps={measured['signals']['lfa_state'] if measured else None},camera_mdps_echo={mirrored['signals']['lfa_state'] if mirrored else None}"
@@ -273,7 +309,18 @@ def analyze(rows, window=1., max_events=2000):
                  'active_angle_error_samples': len(errors), 'abs_angle_error_p95_deg': errors[int((len(errors) - 1) * .95)] if errors else None,
                  'abs_angle_error_max_deg': max(errors, default=None), 'phases': phases,
                  'interpretation': 'Nearest prior samples <=50ms; sampled states and timing correlation only, not verified ECU acknowledgment.'}
-  return {'format_version': 1, 'scope': 'offline observations, no actuation or causal conclusion',
+  matches = defaultdict(lambda: {'requests': 0, 'semantic_echo_observed': 0, 'semantic_echo_not_observed': 0})
+  for bus, address in ((0, 0xCB), (0, 0x1A0), (2, 0xEA)):
+    for request in idx('host_request', bus, address).rows:
+      t = request['t']
+      cs = state_indices.get('carState', empty).before(t)
+      enabled = None if cs is None else cs['data'].get('latEnabled')
+      session = 'accepted_session' if enabled is True else 'outside_session' if enabled is False else 'unknown_session'
+      bucket = matches[f'bus{bus}/0x{address:X}/{session}']
+      found = any(command_matches(address, f['signals'], request['signals']) for f in idx('wire_echo', bus, address).between(t, t + .05))
+      bucket['requests'] += 1
+      bucket['semantic_echo_observed' if found else 'semantic_echo_not_observed'] += 1
+  return {'format_version': 2, 'scope': 'offline observations, no actuation or causal conclusion',
           'limitations': LIMITATIONS, 'time_start': min(all_times) if all_times else None,
           'time_end': max(all_times) if all_times else None, 'window_s': window,
           'counts': dict(sorted(counts.items())), 'rejected_by_address': dict(sorted(rejected.items())),
@@ -282,6 +329,7 @@ def analyze(rows, window=1., max_events=2000):
           'selected_command_events': selected, 'emitted_command_events': len(events), 'truncated': selected > len(events),
           'selection': 'All active/mode/stop transitions; accumulated >=2deg/5cap/0.3accel steps at >=250ms intervals.',
           'mode_counts_of_emitted_events': dict(modes), 'steering_observation': observation,
+          'all_request_echo_observations': dict(matches),
           'ecu_transitions': transitions, 'command_events': events}
 
 
@@ -292,7 +340,8 @@ def render_html(report):
                   f"<td>{'첫 관측' if r['first_observation'] else '변화'}</td></tr>" for r in warnings[:3000])
   commands = ''.join(f"<tr><td>{e['t']:.6f}</td><td>{esc(e['mode'])}</td><td>{esc(e['request']['signals'])}</td>"
                      f"<td>{esc(e['wire_origin'])}</td><td>{esc(e['wire_match_delay_s'])}</td>"
-                     f"<td>{esc(e['first_changes'])}</td><td>{'양호' if e['mdps_window_dense'] else '공백/부족'}</td></tr>"
+                     f"<td>{esc(e['observed_changes_after_request'])}<br>{esc(e['state_change_candidates'])}</td>"
+                     f"<td>{esc(e['baseline_status'])}<br>{'밀집' if e['mdps_window_dense'] else '공백/부족'}</td></tr>"
                      for e in report['command_events'])
   return '<!doctype html><html lang="ko"><meta charset="utf-8"><title>LX3 CAN 명령–응답 진단</title>' + '''
 <style>body{font:15px system-ui;margin:32px;color:#172332;background:#f4f6fa}table{border-collapse:collapse;width:100%;background:white}
@@ -300,8 +349,10 @@ td,th{padding:8px;border:1px solid #ccd3df;text-align:left;vertical-align:top}pr
 h1{font-size:26px}.scroll{overflow:auto;max-height:650px}button,input{font:inherit;padding:8px;margin:8px 0}</style>
 <h1>LX3 CAN 명령–응답 진단</h1><p>저장된 정상 운행 기록의 시간상 연관을 확인하는 읽기 전용 PC 보고서입니다.</p>''' + \
     '<ul>' + ''.join('<li>' + esc(line) + '</li>' for line in report['limitations']) + '</ul>' + \
-    '<h2>기록과 검사 범위</h2><pre>' + esc(json.dumps({k: v for k, v in report.items() if k not in
-      ('command_events', 'ecu_transitions', 'counts', 'limitations')}, ensure_ascii=False, indent=2)) + '</pre>' + \
+    f"<p>분석 범위: 부팅 후 {esc(report['time_start'])}~{esc(report['time_end'])}초 · 선택 요청 {report['emitted_command_events']}개 · " + \
+    ('<strong>표 상한에 도달했습니다.</strong>' if report['truncated'] else '선택 요청 표 잘림 없음.') + '</p>' + \
+    '<details><summary>입력 해시·검사 범위·주소별 집계·구간 상세</summary><pre>' + esc(json.dumps({k: v for k, v in report.items() if k not in
+      ('command_events', 'ecu_transitions', 'counts', 'limitations')}, ensure_ascii=False, indent=2)) + '</pre></details>' + \
     '<h2>ECU 상태·경고 변화</h2><p>원시 값입니다. 전체 변화는 JSON에 보존됩니다.</p><div class="scroll"><table><tr>' + \
     '<th>부팅 후 초</th><th>주소</th><th>변화</th><th>관측</th></tr>' + table + '</table></div>' + \
     '<h2>호스트 요청과 이후 관측</h2><input id="filter" placeholder="예: lateral_only, active, combined" aria-label="명령 표 필터">' + \

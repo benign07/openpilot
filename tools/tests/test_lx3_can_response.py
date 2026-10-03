@@ -74,16 +74,52 @@ class TestCanResponse(unittest.TestCase):
     self.assertEqual(event['wire_match_delay_s'], .002)
     self.assertEqual(event['mdps_after_count'], 0)
     self.assertFalse(event['mdps_window_dense'])
-    self.assertEqual(event['first_changes'], {})
+    self.assertEqual(event['state_change_candidates'], {})
+    self.assertEqual(event['observed_changes_after_request'], {})
 
   def test_actual_response_delay_and_same_batch_does_not_claim_causality(self):
     rows = [packet(.99, 0xEA, active=1), packet(1, kind='sendcan'), packet(1, src=128),
             packet(1, 0xEA, active=1), packet(1.03, 0xEA, active=2, angle=15, driver=60)]
     event = analyze(rows)['command_events'][0]
     self.assertEqual(event['wire_match_delay_s'], 0)
-    self.assertEqual(event['first_changes']['lfa_state']['delay_from_request_s'], .03)
-    self.assertEqual(event['first_changes']['angle_deg']['after'], 1.5)
+    self.assertEqual(event['state_change_candidates']['lfa_state']['observed_after_request_s'], .03)
+    self.assertEqual(event['observed_changes_after_request']['angle_deg']['after'], 1.5)
     self.assertFalse(event['mdps_window_dense'])
+
+  def test_next_phase_cuts_window_before_later_state_change(self):
+    rows = [packet(.99, 0xEA, active=1), packet(1, kind='sendcan'), packet(1.19, 0xEA, active=1),
+            packet(1.2, kind='sendcan', active=1, cap=0), packet(1.25, 0xEA, active=2)]
+    first, second = analyze(rows)['command_events']
+    self.assertEqual(first['state_change_candidates'], {})
+    self.assertEqual(first['window_end'], 1.2)
+    self.assertEqual(first['window_end_reason'], 'next_command_phase')
+    self.assertEqual(second['state_change_candidates']['lfa_state']['observed_after_request_s'], .05)
+    self.assertFalse(second['state_change_candidates']['lfa_state']['equals_requested_active_raw'])
+
+  def test_stale_baseline_and_same_batch_change_are_not_timed_responses(self):
+    for baseline_t, changed_t, status in ((.91, 1.005, 'baseline_stale'), (.99, 1, 'same_batch_unordered')):
+      rows = [packet(baseline_t, 0xEA, active=1), packet(1, kind='sendcan'),
+              packet(changed_t, 0xEA, active=2), packet(1.02, 0xEA, active=2)]
+      event = analyze(rows)['command_events'][0]
+      self.assertEqual(event['baseline_status'], status)
+      self.assertEqual(event['state_change_candidates'], {})
+      self.assertEqual(event['observed_changes_after_request'], {})
+
+  def test_driver_effort_is_observation_without_state_response(self):
+    rows = [packet(.99, 0xEA, driver=0), packet(1, kind='sendcan'), packet(1.01, 0xEA, driver=60)]
+    event = analyze(rows)['command_events'][0]
+    self.assertEqual(event['state_change_candidates'], {})
+    self.assertEqual(event['observed_changes_after_request']['driver_torque_raw']['after'], 60)
+
+  def test_missing_echo_and_feedback_matching_not_confused_with_rejection(self):
+    rows = [packet(1, kind='sendcan', angle=50), packet(1.01, src=128, angle=0),
+            packet(1, 0xEA, kind='sendcan', src=2, active=2, driver=220),
+            packet(1.01, 0xEA, src=130, active=2, driver=0)]
+    result = analyze(rows)
+    self.assertEqual(result['rejected_by_address'], {})
+    matching = result['all_request_echo_observations']
+    self.assertEqual(matching['bus0/0xCB/unknown_session']['semantic_echo_not_observed'], 1)
+    self.assertEqual(matching['bus2/0xEA/unknown_session']['semantic_echo_observed'], 1)
 
   def test_first_fault_observation_is_not_rising_edge(self):
     result = analyze([packet(1, 0xEA, fault=1), packet(2, 0xEA, fault=0), packet(3, 0xEA, fault=1)])
@@ -92,6 +128,19 @@ class TestCanResponse(unittest.TestCase):
     self.assertIsNone(changes[0]['changes']['lfa_fault']['before'])
     self.assertFalse(changes[2]['first_observation'])
     self.assertEqual(changes[2]['gap_from_previous_s'], 1)
+
+  def test_scc_echo_matches_command_even_if_original_warning_is_newer(self):
+    request = packet(1, 0x1A0, kind='sendcan')
+    echo = packet(1.005, 0x1A0, src=128)
+    data = bytearray.fromhex(echo['hex'])
+    data[8] |= 1
+    data[9] |= 0x63
+    data[:2] = checksum(0x1A0, data).to_bytes(2, 'little')
+    echo['hex'] = data.hex()
+    event = analyze([request, echo])['command_events'][0]
+    self.assertIsNotNone(event['wire_match'])
+    self.assertEqual(event['wire_match']['signals']['system_fault_raw'], 1)
+    self.assertEqual(event['request']['signals']['system_fault_raw'], 0)
 
   def test_rejections_group_addresses_without_decoding_as_responses(self):
     result = analyze([packet(1, src=192), packet(1, 0xEA, src=194)])
