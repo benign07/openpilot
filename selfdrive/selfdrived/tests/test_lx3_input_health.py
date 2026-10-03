@@ -54,7 +54,7 @@ class TestInputHealthConsumers(unittest.TestCase):
     cc = self.control()
     self.assertFalse(cc.latActive or cc.longActive or cc.enabled)
 
-  def test_driver_override_suspends_only_lateral_with_valid_session_identity(self):
+  def test_driver_effort_preserves_both_axes_and_valid_session_identity(self):
     class Params:
       def get_int(self, name):
         return {'LatSuspendAngleDeg': 300, 'LaneChangeNeedTorque': 0}[name]
@@ -64,10 +64,14 @@ class TestInputHealthConsumers(unittest.TestCase):
     self.cs.steeringTorque, self.cs.steeringAngleDeg, self.cs.steeringPressed = -170, -1.0, False
     self.cs.leftBlinker = self.cs.rightBlinker = False
     carrot.lat_suspend_control(self.cs, True, 1)
-    self.cs.steeringTorque = -236
+    for effort, pressed in ((-236, False), (-497, True), (497, True), (0, False)):
+      self.cs.steeringTorque, self.cs.steeringPressed = effort, pressed
+      cc = self.control(carrot)
+      self.assertTrue(cc.latActive and cc.enabled and cc.longActive and cc.lx3IdentityValid)
+    # Coexistence does not bypass the existing physical input health gate.
+    self.cs.lx3InputState = 'integrityFault'
     cc = self.control(carrot)
-    self.assertFalse(cc.latActive)
-    self.assertTrue(cc.enabled and cc.longActive and cc.lx3IdentityValid)
+    self.assertFalse(cc.latActive or cc.enabled or cc.longActive or cc.lx3IdentityValid)
 
   def card(self, fingerprint='HYUNDAI_PALISADE_LX3_HEV'):
     messages = [(address, bytes(32), 0) for address in TRANSPORT['GUARDED_ADDRESSES']] + [(0x730, bytes(8), 1)]
