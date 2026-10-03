@@ -911,7 +911,7 @@ static void angle_envelope_regressions(void) {
   assert(!safety_tx_hook(&p));
   reset(lx3_param());
   grant_controls();
-  fresh_mdps(0, 500);
+  for (unsigned int i = 0U; i < 6U; i++) fresh_mdps(0, 500);
   p = angle_command(true);
   p.data[6] = 26U;
   assert(!safety_tx_hook(&p));
@@ -922,7 +922,7 @@ static void angle_envelope_regressions(void) {
   p = angle_command(true);
   p.data[6] = 200U;
   assert(safety_tx_hook(&p));
-  fresh_mdps(0, 500);
+  for (unsigned int i = 0U; i < 6U; i++) fresh_mdps(0, 500);
   CANPacket_t output = forward(angle_command(false), 2);
   assert(!hyundai_canfd_actuator_active(&output));  // Recheck before buffering handoff.
   reset(lx3_param());
@@ -1243,6 +1243,13 @@ static void angle_delivery_continuity_regressions(void) {
       }
       set_timer(boundary == 3U ? 1080000U : 1060000U);
       fresh_mdps(0, 0);
+      if (boundary != 3U) {
+        // An observed fallback resets USB continuity. A stale host trajectory
+        // is rejected at TX and permission loss remains visible to the host.
+        assert(!safety_tx_hook(&p));
+        assert(!controls_allowed && !lx3_angle_active_prev);
+        continue;
+      }
       assert(safety_tx_hook(&p));  // USB reference has not moved: still accepted.
       out = forward(stock_angle(false), 2);
       assert(!hyundai_canfd_actuator_active(&out));
@@ -1345,7 +1352,7 @@ static void mdps_receive_boundary_regressions(void) {
       original.data[2] = (uint8_t)(26U + i);
       hyundai_canfd_update_checksum(&original);
       assert(safety_rx_hook(&original));
-      assert(lx3_angle_context_valid(26) == (i == 5U));
+      assert(lx3_angle_context_valid(26));  // Valid release ends sustained effort; host recovery still latches.
     }
     assert(torque_driver.min == 0 && torque_driver.max == 0);
     assert(lx3_mdps_us == mdps_us + 60000U);

@@ -68,35 +68,44 @@ class TestManualBlinkerSuspend(unittest.TestCase):
     self.cs.leftBlinker = True
     self.assertTrue(self.update())
 
-  def test_lx3_raw_driver_torque_yields_before_delayed_pressed_state(self):
-    # The captured route reached -170 before Panda's 250-unit override limit.
+  def test_lx3_driver_effort_keeps_lateral_session_for_torque_blending(self):
     self.cs.steeringTorque = -170
     self.assertTrue(self.update())
     self.cs.steeringTorque = -236
-    self.assertFalse(self.update())
+    self.assertTrue(self.update())
     self.assertFalse(self.cs.steeringPressed)
+    self.cs.steeringTorque = 497
+    self.cs.steeringPressed = True
+    for _ in range(100):
+      self.assertTrue(self.update())
     self.cs.steeringTorque = 0
+    self.cs.steeringPressed = False
     for _ in range(49):
-      self.assertFalse(self.update())
+      self.assertTrue(self.update())
     self.assertTrue(self.update())
     self.control.CP.carFingerprint = 'OTHER'
     self.cs.steeringTorque = 236
     self.assertTrue(self.update())
 
-  def test_single_raw_torque_spike_does_not_suspend_but_native_limit_does(self):
+  def test_single_raw_torque_spike_does_not_suspend_lateral(self):
     self.cs.steeringTorque = 180
     self.assertTrue(self.update())
     self.cs.steeringTorque = 0
     self.assertTrue(self.update())
     self.cs.steeringTorque = 251
-    self.assertFalse(self.update())
+    self.assertTrue(self.update())
 
   def test_duplicate_carstate_publication_counts_only_once(self):
     self.cs.steeringTorque = 180
     first_time_ns = 10_000_000
     self.assertTrue(self.control.lat_suspend_control(self.cs, True, first_time_ns))
     self.assertTrue(self.control.lat_suspend_control(self.cs, True, first_time_ns))
-    self.assertFalse(self.control.lat_suspend_control(self.cs, True, first_time_ns + 10_000_000))
+    self.assertTrue(self.control.lat_suspend_control(self.cs, True, first_time_ns + 10_000_000))
+
+  def test_invalid_lx3_effort_cannot_enable_lateral(self):
+    for value in (float('nan'), float('inf'), -float('inf')):
+      self.cs.steeringTorque = value
+      self.assertFalse(self.update())
 
   def test_lx3_torque_yield_preserves_manual_blinker_handoff(self):
     self.cs.leftBlinker = True

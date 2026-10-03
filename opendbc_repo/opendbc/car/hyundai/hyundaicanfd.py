@@ -97,7 +97,8 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
 
 
   ret = []
-  if CS.mdps is not None and not lx3_hev:
+  lx3_session = CC.latActive or getattr(getattr(CS, 'out', None), 'latEnabled', False)
+  if CS.mdps is not None and (not lx3_hev or (lx3_session and CS.lfa_alt is not None)):
     values = copy.copy(CS.mdps)
     #rx_counter = values.pop("COUNTER", None)
     if angle_control:
@@ -107,7 +108,9 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
       if CS.lfa is not None:
         values["LKA_ACTIVE"] = 1 if CS.lfa["STEER_REQ"] == 1 else 0
 
-    if frame % 1000 < 40:
+    # Restore Carrot's camera-facing LFA state mediation on LX3. Driver effort
+    # and touch remain measured inputs; they are not part of state mediation.
+    if frame % 1000 < 40 and not lx3_hev:
       values["STEERING_COL_TORQUE"] += 220
     #ret.append(packer.make_can_msg("MDPS", CAN.CAM, values, rx_counter = rx_counter))
     ret.append(packer.make_can_msg("MDPS", CAN.CAM, values))

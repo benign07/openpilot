@@ -888,7 +888,7 @@ class TestLx3Session(unittest.TestCase):
         self.assertIsNone(self.ctx.lx3_engagement.pending)
         self.assertFalse(self.ctx.lx3_engagement.ack_valid and self.ctx.lx3_engagement.ack_mode != Mode.OFF)
 
-  def test_captured_override_torque_yields_lateral_on_second_rising_sample(self):
+  def test_driver_torque_keeps_lateral_session_for_controller_blending(self):
     # Execute the production CarrotControls class without a vehicle or sockets.
     class Params:
       def get_int(self, name):
@@ -902,11 +902,15 @@ class TestLx3Session(unittest.TestCase):
     cs.steeringTorque = -170  # First measured pre-override sample in the route.
     self.assertTrue(controls.lat_suspend_control(cs, True, 2))
     self.assertTrue(controls.lat_suspend_control(cs, True, 2))  # Duplicate controlsd tick is not a second sample.
-    cs.steeringTorque = -236  # The next sample remains above 150, before >250.
-    self.assertFalse(controls.lat_suspend_control(cs, True, 3))
+    cs.steeringTorque = -236
+    self.assertTrue(controls.lat_suspend_control(cs, True, 3))
+    cs.steeringTorque = 497  # Observed morning peak; native limits still apply to the output cap.
+    cs.steeringPressed = True
+    self.assertTrue(controls.lat_suspend_control(cs, True, 4))
     cs.steeringTorque = 0
-    for sample in range(4, 53):
-      self.assertFalse(controls.lat_suspend_control(cs, True, sample))
+    cs.steeringPressed = False
+    for sample in range(5, 53):
+      self.assertTrue(controls.lat_suspend_control(cs, True, sample))
     self.assertTrue(controls.lat_suspend_control(cs, True, 53))
     controls.CP.carFingerprint = 'OTHER'
     cs.steeringTorque = 170
@@ -1133,8 +1137,12 @@ class TestLx3CanOwnership(unittest.TestCase):
     self.assertEqual(vars(cs), vars(before))
     return result
 
-  def test_no_fabricated_mdps_or_touch_feedback(self):
-    self.assertEqual([x[0] for x in self.steering(True)], ['LFA_ALT'])
+  def test_mdps_state_mediation_preserves_driver_effort_and_does_not_generate_touch(self):
+    result = self.steering(True)
+    self.assertEqual([x[0] for x in result], ['MDPS', 'LFA_ALT'])
+    self.assertEqual(result[0][2]['LFA2_ACTIVE'], 2)
+    self.assertEqual(result[0][2]['STEERING_COL_TORQUE'], 10)
+    self.assertEqual([x[0] for x in self.steering(False)], ['LFA_ALT'])
 
   def test_inactive_angle_has_no_op_torque_authority(self):
     value = self.steering(False)[0][2]
@@ -1142,14 +1150,14 @@ class TestLx3CanOwnership(unittest.TestCase):
     self.assertEqual(value['LKAS_ANGLE_MAX_TORQUE'], 0)
 
   def test_active_angle_uses_normal_control_output(self):
-    value = self.steering(True)[0][2]
+    value = next(x[2] for x in self.steering(True) if x[0] == 'LFA_ALT')
     self.assertEqual((value['LKAS_ANGLE_ACTIVE'], value['LKAS_ANGLE_MAX_TORQUE']), (2, 60))
 
   def test_oem_emergency_branch_not_silently_removed(self):
     # This inherited handoff is a documented bench/Panda release blocker.
     for alert in (11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26):
       for active in (False, True):
-        value = self.steering(active, alert=alert)[0][2]
+        value = next(x[2] for x in self.steering(active, alert=alert) if x[0] == 'LFA_ALT')
         self.assertEqual((value['LKAS_ANGLE_ACTIVE'], value['LKAS_ANGLE_MAX_TORQUE']), (2, 40))
         self.assertEqual(value['LKAS_ANGLE_CMD'], 3)
 

@@ -126,3 +126,27 @@ LX3_EXPORT void lx3_test_display_timeout(uint32_t us) {
     if (hyundai_canfd_lx3_display_addr(canfd_tx_states[i].addr)) canfd_tx_states[i].timeout_us = us;
   }
 }
+
+// Explicit isolated actuator fixtures. Physical gestures/ACKs are exercised by
+// the separate host-panda joint suite, never inferred from these two helpers.
+LX3_EXPORT void lx3_test_cooperative_start(void) {
+  lx3_test_reset();
+  lx3_mode = 1;
+  lx3_button_seen = true;
+  lx3_button_ready = true;
+  lx3_button_us = microsecond_timer_get();
+  set_controls_allowed(true);
+}
+
+LX3_EXPORT void lx3_test_cooperative_sensor(uint32_t us, int angle, int torque) {
+  set_timer(us);
+  CANPacket_t p = fixture_packet(0xEA, 0, 24);
+  const unsigned int encoded = (unsigned int)(torque + 4095);
+  p.data[10] = encoded & 0xFFU;
+  p.data[11] = (encoded >> 8U) & 0x1FU;
+  p.data[16] = (unsigned int)angle & 0xFFU;
+  p.data[17] = ((unsigned int)angle >> 8U) & 0xFFU;
+  hyundai_canfd_update_checksum(&p);
+  hyundai_canfd_rx_hook(&p);
+  lx3_button_us = us;
+}

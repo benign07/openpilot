@@ -23,6 +23,11 @@ static uint32_t lx3_angle_accepted_us = 0U;
 static bool lx3_angle_forwarded_active_prev = false;
 static int lx3_angle_forwarded = 0;
 static uint32_t lx3_angle_forwarded_us = 0U;
+static bool lx3_angle_forwarded_owned = false;
+static bool lx3_angle_reentry_required = false;
+static bool lx3_camera_angle_seen = false;
+static unsigned int lx3_camera_angle_active = 0U;
+static uint32_t lx3_camera_angle_us = 0U;
 static int lx3_mode = 0;  // 0 OFF, 1 lateral only, 2 combined; same as host.
 static int lx3_requested_mode = 0;
 static bool lx3_pending = false;
@@ -42,11 +47,26 @@ static uint32_t lx3_main_us = 0U;
 static uint8_t lx3_main_release_counter = 0U;
 static int lx3_button_prev = 0;
 
+static void lx3_angle_stream_end(void) {
+  lx3_angle_reentry_required |= lx3_angle_active_prev || lx3_angle_forwarded_active_prev;
+  lx3_angle_active_prev = false;
+  lx3_angle_forwarded_active_prev = false;
+  lx3_angle_forwarded_owned = false;
+}
+
 // Software envelope derived from this port's host maximum of 2 deg/10ms.
 // EPS/OEM qualification and speed-dependent lateral acceleration remain separate.
 static bool lx3_angle_context_valid(int torque) {
   const uint32_t now = microsecond_timer_get();
-  const bool driver_override = (torque_driver.min < -250) || (torque_driver.max > 250);
+  // Like angle-control wind-down policies, allow host/RX scheduling skew.
+  // Require all six qualified MDPS samples to show sustained effort;
+  // MIN(abs(min), abs(max)) would misclassify a history crossing through zero.
+  // The host reduces to 25 on the first raw crossing; neither side disables
+  // lateral control for ordinary driver input.
+  bool driver_override = true;
+  for (int i = 0; i < MAX_SAMPLE_VALS; i++) {
+    driver_override = driver_override && (ABS(torque_driver.values[i]) > 250);
+  }
   return lx3_mdps_seen && !lx3_mdps_fault && (now - lx3_mdps_us <= 50000U) &&
          (!driver_override || (torque <= 25));
 }
@@ -534,6 +554,17 @@ static bool canfd_bfwd_guarded(const CanfdBufferedFwd* st) {
   return hyundai_canfd_lx3_guard && hyundai_canfd_actuator_addr(st->addr);
 }
 
+static bool canfd_bfwd_feedback(const CanfdBufferedFwd* st) {
+  return hyundai_canfd_lx3_guard && (st->addr == 0xEA) && (st->dst_bus == 2);
+}
+
+static bool lx3_feedback_authorized(void) {
+  const uint32_t now = microsecond_timer_get();
+  return controls_allowed && !safety_rx_checks_invalid && !relay_malfunction &&
+         lx3_angle_forwarded_owned && (now - lx3_angle_forwarded_us < 30000U) &&
+         lx3_camera_angle_seen && (now - lx3_camera_angle_us < 30000U);
+}
+
 static bool canfd_bfwd_expired(const CanfdBufferedFwd* st, uint32_t accepted_us) {
   const CanfdTxState* tx_state = find_canfd_tx_state(st->dst_bus, st->addr);
   // Keep the original timestamp across pop/reuse. Arrival of an OEM frame
@@ -565,8 +596,10 @@ static bool canfd_bfwd_packet_authorized(const CanfdBufferedFwd* st, const CANPa
 static void canfd_bfwd_revoke_actuators(void) {
   lx3_angle_active_prev = false;
   lx3_angle_forwarded_active_prev = false;
+  lx3_angle_forwarded_owned = false;
+  lx3_angle_reentry_required = false;
   for (int i = 0; canfd_bfwd[i].addr > 0; i++) {
-    if (canfd_bfwd_guarded(&canfd_bfwd[i])) {
+    if (canfd_bfwd_guarded(&canfd_bfwd[i]) || canfd_bfwd_feedback(&canfd_bfwd[i])) {
       canfd_bfwd_reset(&canfd_bfwd[i]);
       canfd_record_tx_time(canfd_bfwd[i].dst_bus, canfd_bfwd[i].addr, false);
     }
@@ -792,7 +825,7 @@ static void canfd_bfwd_push(CanfdBufferedFwd* st, const CANPacket_t* pkt) {
   }
 
   if (st->count >= CANFD_BFWD_MAX_QUEUE) {
-    if (!canfd_bfwd_guarded(st)) return;
+    if (!canfd_bfwd_guarded(st) && !canfd_bfwd_feedback(st)) return;
     st->head = (st->head + 1U) % CANFD_BFWD_MAX_QUEUE;
     st->count--;
   }
@@ -810,6 +843,11 @@ static bool canfd_bfwd_pop(CanfdBufferedFwd* st, CANPacket_t* pkt) {
   }
 
   if (!st->started || (st->count == 0U)) {
+    return false;
+  }
+
+  if (canfd_bfwd_feedback(st) && (canfd_bfwd_expired(st, st->q_us[st->head]) || !lx3_feedback_authorized())) {
+    canfd_bfwd_reset(st);
     return false;
   }
 
@@ -841,6 +879,11 @@ static bool canfd_bfwd_reuse_last(CanfdBufferedFwd* st, CANPacket_t* pkt) {
   }
 
   if (!st->has_last_pkt || (st->reuse_left == 0U)) {
+    return false;
+  }
+
+  if (canfd_bfwd_feedback(st) && (canfd_bfwd_expired(st, st->last_pkt_us) || !lx3_feedback_authorized())) {
+    canfd_bfwd_reset(st);
     return false;
   }
 
@@ -1011,8 +1054,11 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
     // Retain the existing passive LFA companion and non-LX3 compatibility.
     if ((addr == 0x50) || (addr == 0x110) ||
         ((addr == 0x12A) && !lx3_legacy_lfa_passive(to_send))) return false;
-    if ((addr == 0xEA) || (addr == 0x175) || (addr == 0x2AF) || (addr == 0x1AA) || (addr == 0x1CF)) {
-      return false;  // Do not synthesize driver/EPS feedback or enable buttons.
+    if ((addr == 0x175) || (addr == 0x2AF) || (addr == 0x1AA) || (addr == 0x1CF)) {
+      return false;  // Keep physical brake, touch and button inputs original.
+    }
+    if ((addr == 0xEA) && ((GET_LEN(to_send) != 24U) || !controls_allowed || safety_rx_checks_invalid || relay_malfunction)) {
+      return false;  // Feedback cannot grant authority or survive disengagement.
     }
     if (((addr == 0x362) || (addr == 0x2A4) || hyundai_canfd_lx3_display_addr(addr)) &&
         (!controls_allowed || (lx3_mode == 0) || safety_rx_checks_invalid || relay_malfunction)) {
@@ -1034,7 +1080,11 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
       violation |= (active != 2) && (torque_limit != 0);
       violation |= (desired_angle > HYUNDAI_LX3_MAX_ANGLE) || (desired_angle < -HYUNDAI_LX3_MAX_ANGLE) ||
                    (torque_limit > HYUNDAI_LX3_MAX_TORQUE);
-      violation |= lx3_angle_violation(desired_angle, active, torque_limit);
+      const bool angle_invalid = lx3_angle_violation(desired_angle, active, torque_limit);
+      // A host still following an old trajectory after actual OEM fallback
+      // must see permission loss, not remain green while every TX is dropped.
+      if (angle_invalid && lx3_angle_reentry_required) lx3_clear_session();
+      violation |= angle_invalid;
     }
     if ((addr == 0x12A) && GET_BIT(to_send, 52U) && !controls_allowed) {
       violation = true;
@@ -1115,6 +1165,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
   }
 
   if (hyundai_canfd_lx3_guard && (addr == 0xCB) && tx && !violation) {
+    lx3_angle_reentry_required = false;
     lx3_angle_active_prev = ((GET_BYTE(to_send, 3) >> 4) & 0x3U) == 2U;
     if (lx3_angle_active_prev) {
       lx3_angle_accepted = to_signed(GET_BYTES(to_send, 4, 2) & 0x3FFFU, 14);
@@ -1160,9 +1211,30 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
     return -1;
   }
 
+  if (hyundai_canfd_lx3_guard && (bus_num == 2) && (addr == 0xCB)) {
+    // Capture the camera request before replacing this outgoing copy. The
+    // physical RX packet remains untouched by fdcan's forwarding copy.
+    lx3_camera_angle_active = (GET_BYTE(to_send, 3) >> 4) & 0x3U;
+    lx3_camera_angle_seen = (GET_LEN(to_send) == 24U) &&
+      (hyundai_canfd_get_checksum(to_send) == hyundai_common_canfd_compute_checksum(to_send)) &&
+      ((lx3_camera_angle_active == 1U) || (lx3_camera_angle_active == 2U));
+    lx3_camera_angle_us = now;
+  }
+
   if (hyundai_canfd_buffered_fwd) {
     CanfdBufferedFwd* bfwd = canfd_bfwd_find(addr, bus_fwd);
     if (bfwd != NULL) {
+      if (canfd_bfwd_feedback(bfwd)) {
+        // Only the LFA state is mediated. Use the original MDPS payload for
+        // actual effort, angle, EPS torque, fault bits and every unknown bit.
+        // A bad/faulted source is passed through without manufacturing an ACK.
+        if ((GET_LEN(to_send) != 24U) ||
+            (hyundai_canfd_get_checksum(to_send) != hyundai_common_canfd_compute_checksum(to_send)) ||
+            GET_BIT(to_send, 54U) || GET_BIT(to_send, 149U)) {
+          canfd_bfwd_reset(bfwd);
+          return bus_fwd;
+        }
+      }
       if (canfd_bfwd_guarded(bfwd)) {
         const int expected_len = (addr == 0xCB) ? 24 : ((addr == 0x12A) ? 16 : 32);
         // Malformed OEM input is never an opportunity to insert OP control.
@@ -1170,7 +1242,9 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
         // on a valid stock frame within its existing acceptance deadline.
         if ((GET_LEN(to_send) != expected_len) ||
             (hyundai_canfd_get_checksum(to_send) != hyundai_common_canfd_compute_checksum(to_send))) {
-          if (addr == 0xCB) lx3_angle_forwarded_active_prev = false;
+          if (addr == 0xCB) {
+            lx3_angle_stream_end();
+          }
           return bus_fwd;
         }
       }
@@ -1189,6 +1263,14 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
       }
 
       if (use_buffered) {
+        if (canfd_bfwd_feedback(bfwd)) {
+          const unsigned int active = GET_BYTE(&buffered_pkt, 18) & 0x3U;
+          if (active == lx3_camera_angle_active) {
+            to_send->data[18] = (to_send->data[18] & 0xFCU) | active;
+            hyundai_canfd_update_checksum(to_send);
+          }
+          return bus_fwd;
+        }
         uint8_t counter = hyundai_canfd_get_counter(to_send);
         // The host's SCC template can predate this camera publication. Keep
         // LX3's SysFailState, TakeOverReq and DriverAlert from the CRC/length-
@@ -1206,6 +1288,8 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
         canfd_apply_counter_and_update_checksum(to_send, counter);
 
         if (hyundai_canfd_lx3_guard && (addr == 0xCB)) {
+          lx3_angle_forwarded_owned = true;
+          lx3_angle_forwarded_us = now;
           lx3_angle_forwarded_active_prev = hyundai_canfd_actuator_active(to_send);
           if (lx3_angle_forwarded_active_prev) {
             lx3_angle_forwarded = to_signed(GET_BYTES(to_send, 4, 2) & 0x3FFFU, 14);
@@ -1233,7 +1317,7 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
   if (hyundai_canfd_lx3_guard && (addr == 0xCB)) {
     // Original fallback interrupts the OP stream. A later active insertion
     // must start from the current measured angle, not an old OP goal.
-    lx3_angle_forwarded_active_prev = false;
+    lx3_angle_stream_end();
   }
   return 0;
 }
@@ -1262,6 +1346,11 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   lx3_angle_forwarded_active_prev = false;
   lx3_angle_forwarded = 0;
   lx3_angle_forwarded_us = 0U;
+  lx3_angle_forwarded_owned = false;
+  lx3_angle_reentry_required = false;
+  lx3_camera_angle_seen = false;
+  lx3_camera_angle_active = 0U;
+  lx3_camera_angle_us = 0U;
   lx3_mode = 0;
   lx3_requested_mode = 0;
   lx3_pending = false;

@@ -158,6 +158,14 @@ jobs:
           opendbc_repo/opendbc/safety/tests/test_lx3_native.c -lm -o /tmp/lx3-safety
       - name: Configuration and forwarding compatibility
         run: /tmp/lx3-safety
+      - name: Cooperative steering and camera MDPS mediation
+        run: |
+          gcc -std=gnu11 -Wall -Wextra -Wstrict-prototypes -Werror -Wno-pointer-to-int-cast \
+            -fsanitize=undefined -fno-sanitize-recover=undefined -g \
+            -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety \
+            -Iopendbc_repo/opendbc/safety/tests -Iopendbc_repo/opendbc/safety/tests/libsafety \
+            opendbc_repo/opendbc/safety/tests/test_lx3_cooperative.c -lm -o /tmp/lx3-cooperative
+          /tmp/lx3-cooperative
       - name: Classic non-CANFD protocol compatibility
         run: |
           gcc -DSTM32F4 -std=gnu11 -Wall -Wextra -Wstrict-prototypes -Werror -Wno-pointer-to-int-cast \
@@ -205,6 +213,9 @@ jobs:
             --library /tmp/lx3-host-bridge.so --report lx3-host-panda-joint.json
           python -m selfdrive.selfdrived.tests.lx3_cluster_panda_schedule \
             --library /tmp/lx3-host-bridge.so --report lx3-cluster-panda-schedule.json
+          python -m pip install numpy==2.4.6
+          python -m selfdrive.selfdrived.tests.lx3_cooperative_schedule \
+            --library /tmp/lx3-host-bridge.so --report lx3-cooperative-schedule.json
       - name: Record OTA qualification separately from test infrastructure
         if: always()
         run: |
@@ -228,6 +239,7 @@ jobs:
             native-legacy-audit.txt
             lx3-host-panda-joint.json
             lx3-cluster-panda-schedule.json
+            lx3-cooperative-schedule.json
   offline-tests:
     runs-on: ubuntu-latest
     strategy:
@@ -244,6 +256,7 @@ jobs:
       - run: python -m unittest selfdrive.selfdrived.tests.test_lx3_input_health -v
       - run: python -m unittest selfdrive.selfdrived.tests.test_lx3_cluster_transport -v
       - run: python -m unittest selfdrive.selfdrived.tests.test_lx3_transport -v
+      - run: python -m unittest tools.tests.test_lx3_can_response -v
       - run: >-
           python -m unittest selfdrive.carrot.tests.test_hud_updater
           selfdrive.carrot.tests.test_live_driving_mode

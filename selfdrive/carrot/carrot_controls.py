@@ -12,35 +12,14 @@ class CarrotControls:
     self.lat_suspend_hold_t = 0.0
     self.manual_blinker_suspended = False
     self.manual_blinker_release_t = 0.0
-    self.lx3_last_driver_sample_ns = None
-    self.lx3_driver_yield_candidate_frames = 0
-    self.lx3_driver_yield_frames = 0
 
   def lat_suspend_control(self, CS, latActive, car_state_time_ns=None):
-    lx3_driver_yield = False
-    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
-      # Panda checks raw MDPS driver torque without the 5-sample
-      # steeringPressed debounce or the generic one-second angle suspend.
-      # The existing CarController taper handles a single rising sample.
-      # Yield on a sustained rise, an immediate native-limit crossing, or
-      # confirmed steeringPressed; hold off briefly to avoid oscillation.
-      driver_torque = float(getattr(CS, "steeringTorque", 0.0))
-      if car_state_time_ns is not None and car_state_time_ns != self.lx3_last_driver_sample_ns:
-        self.lx3_last_driver_sample_ns = car_state_time_ns
-        if math.isfinite(driver_torque) and abs(driver_torque) >= 150:
-          self.lx3_driver_yield_candidate_frames += 1
-        else:
-          self.lx3_driver_yield_candidate_frames = 0
-      if (not math.isfinite(driver_torque) or abs(driver_torque) > 250 or
-          self.lx3_driver_yield_candidate_frames >= 2 or CS.steeringPressed):
-        self.lx3_driver_yield_frames = int(0.5 / DT_CTRL)
-      elif self.lx3_driver_yield_frames > 0:
-        self.lx3_driver_yield_frames -= 1
-      lx3_driver_yield = self.lx3_driver_yield_frames > 0
-    else:
-      self.lx3_last_driver_sample_ns = None
-      self.lx3_driver_yield_candidate_frames = 0
-      self.lx3_driver_yield_frames = 0
+    # Driver torque reduces assistance in CarController; it must not toggle
+    # the lateral session or hand control back to the OEM camera. Malformed
+    # input still cannot enable actuation, and explicit maneuver suspension
+    # below remains separate from ordinary shared steering.
+    invalid_lx3_torque = (self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" and
+                         not math.isfinite(float(getattr(CS, "steeringTorque", float('nan')))))
 
     suspend_angle = float(self.params.get_int("LatSuspendAngleDeg"))
     resume_angle  = 15
@@ -86,6 +65,6 @@ class CarrotControls:
         self.lat_suspend_active = False
         self.lat_suspend_enter_t = 0.0
 
-    if self.lat_suspend_active or self.manual_blinker_suspended or lx3_driver_yield:
+    if self.lat_suspend_active or self.manual_blinker_suspended or invalid_lx3_torque:
       latActive = False
     return latActive

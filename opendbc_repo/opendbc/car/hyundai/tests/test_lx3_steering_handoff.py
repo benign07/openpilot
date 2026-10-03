@@ -27,7 +27,7 @@ class TestLx3SteeringHandoff(unittest.TestCase):
     self.assertFalse(owned)
     self.assertEqual(selected, [self.companion])
 
-  def test_driver_yield_sends_one_neutral_then_stops_replacing_oem(self):
+  def test_session_end_sends_one_neutral_then_stops_replacing_oem(self):
     active, owned = lx3_camera_steering_handoff(self.messages(True), True, False, self.cs)
     self.assertTrue(owned)
     self.assertEqual([msg[0] for msg in active], [0xCB, 0x12A])
@@ -39,7 +39,7 @@ class TestLx3SteeringHandoff(unittest.TestCase):
     self.assertEqual((neutral[0][1][3] >> 4) & 3, 1)
     self.assertEqual(neutral[0][1][6], 0)
 
-    for _ in range(53):  # Longer than the faulting 0.53-second neutral stream.
+    for _ in range(53):  # Outside the accepted session, release after one neutral.
       selected, owned = lx3_camera_steering_handoff(self.messages(False), False, owned, self.cs)
       self.assertFalse(owned)
       self.assertEqual(selected, [self.companion])
@@ -52,6 +52,16 @@ class TestLx3SteeringHandoff(unittest.TestCase):
     selected, owned = lx3_camera_steering_handoff([self.companion], True, False, self.cs)
     self.assertEqual(selected, [self.companion])
     self.assertFalse(owned)
+
+  def test_accepted_session_suspend_keeps_neutral_stream(self):
+    for _ in range(80):
+      selected, owned = lx3_camera_steering_handoff(self.messages(False), False, False, self.cs, True)
+      self.assertFalse(owned)
+      self.assertEqual([msg[0] for msg in selected], [0xCB, 0x12A])
+      self.assertEqual((selected[0][1][3] >> 4) & 3, 1)
+      self.assertEqual(selected[0][1][6], 0)
+    selected, owned = lx3_camera_steering_handoff(self.messages(False), False, False, self.cs, False)
+    self.assertEqual(selected, [self.companion])
 
   def test_oem_emergency_does_not_claim_host_steering_or_handoff(self):
     _, owned = lx3_camera_steering_handoff(self.messages(True), True, False, self.cs)

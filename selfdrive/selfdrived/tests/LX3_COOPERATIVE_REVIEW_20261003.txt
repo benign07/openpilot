@@ -1,0 +1,75 @@
+LX3 cooperative steering candidate — 2026-10-03
+
+Compared references
+Stock Carrot 92fb3a0873292d688f86920c50590aefd58fbd03; installed 0627 backup
+61fd1f262a7bca79dbc7868188fa0adac29f1741 (original device baseline 6a3d7783);
+candidate parent c873631675e5fff9a9c7a45994107e8d1d30e153.
+
+Changes
+Ordinary finite driver effort no longer turns latActive off for 0.5 seconds.
+Keep Carrot's assistance reduction/recovery and explicit blinker/large-angle
+suspension. LX3 raw effort >250 immediately sets the existing minimum cap25;
+recovery retains the original latch/filter/ramp. This onset is an LX3 adaptation,
+not a byte-identical restoration of 0627.
+
+Panda requires all six qualified driver samples to exceed absolute250 before
+enforcing cap25. This changes the temporal envelope; numerical angle/rate/cap
+limits remain. The host/Panda joint test covers 0..30ms sensor delay, both signs,
+not arbitrary scheduling stalls or vehicle closed-loop dynamics. All-six high
+alternating signs are sustained effort; a history containing zero is not.
+
+Restore camera-facing MDPS LFA state mediation from Carrot/0627 intent. On LX3,
+Panda merges only the two LFA state bits into a current CRC/length-qualified
+original MDPS frame, preserving actual effort/angle/faults/counter/unknowns and
+recalculating CRC. Require accepted control, healthy RX, fresh camera request,
+matching host state, and actual recently forwarded OP steering ownership.
+Do not restore 0627's periodic +220 driver torque or fixed touch values. This
+candidate is consequently not equivalent to every behavior of 0627.
+
+During an accepted session's blinker/large-angle suspension, keep active1/cap0
+neutral steering ownership so OEM LFA does not silently resume assistance.
+State mediation operates during that neutral ownership too. Outside the session,
+release after one neutral. This combined neutral + mediation behavior has native
+tests but no vehicle validation. Prior warnings around a neutral stream alone do
+not establish causality or prove this combination fixes the warnings.
+
+After observed OEM fallback, reset both accepted and actual-forwarded angle
+references. Valid measured-angle reentry passes. An invalid old trajectory now
+ends permission visibly rather than silently dropping forever. A TX rejection
+alone does not reset references. Unobserved >30ms stream gaps still follow the
+existing forwarding rejection path. Host OEM-emergency template construction is
+unchanged, but a far template after fallback can now end the OP session; the
+original OEM frame continues through. Explicit native regression pins this case.
+
+Compatibility and evidence
+LX3-only guards preserve other-car forwarding including legacy190 full MDPS
+payload handling. No HUD server/settings/schema contract change. Existing
+physical gesture/host-Panda scheduling tests pass1116 cases locally. New actual
+controller torque block + real C fixture passes8 schedules/3376 evaluations.
+That fixture grants isolated actuator authority and is not engagement evidence.
+Full native suite and new cooperative suite pass. Same new tests against exact
+c873 production header fail at effort, feedback acceptance and fallback reentry.
+Added CI cooperative native/UBSan and joint test plus offline diagnostic tests.
+Exact Linux runtime, IPC and H7 build results must be checked for THIS commit;
+the parent commit's prior success does not validate these changes.
+
+Claude Code same-session Opus5.5/high review informed reference-reset visibility,
+all-absolute effort history, neutral ownership and feedback queue age handling.
+Final static review reported no blocking code defect but did not read every
+test/evidence file. Its assertion that the host is always ahead is not assumed:
+only the stated scheduling window was tested. OEM emergency session behavior and
+neutral/mirror combination remain documented vehicle qualification boundaries.
+
+Diagnostic
+tools/lx3_can_response.py analyzes local JSON/JSONL/rlog and writes HTML/JSON.
+No vehicle I/O or arbitrary CAN injection. It separates host requests, actual
+echoes, ECU responses and rejected addresses. Original Oct3 recorded route
+00000183--47c7917cb2 shows FCA at177.503134287, LSS/DAS at177.602234463, LFA
+at194.001467844 monotonic seconds. These are old-install observations, not proof
+of candidate improvement. Original/echo CRCs are valid in these selected signals;
+host CRC differences are reported separately before Panda finalizes frames.
+
+Not established
+OEM warning root cause/repair, real closed-loop steering behavior, H7 bench and
+vehicle qualification, unrestricted scheduling delays, general safety pytest or
+MISRA. No installation, reboot, OTA publication or live CAN sent in this change.

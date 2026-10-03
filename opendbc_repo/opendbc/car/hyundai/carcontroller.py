@@ -85,12 +85,12 @@ def lx3_angle_reentry_next(remaining: int, can_sends, CS) -> int:
   return max(0, remaining - 1) if lx3_op_owned_angle_active(can_sends, CS) else 2
 
 
-def lx3_camera_steering_handoff(can_sends, lat_active: bool, host_active_prev: bool, CS):
-  """Give the original camera 0xCB back when LX3 lateral control yields.
+def lx3_camera_steering_handoff(can_sends, lat_active: bool, host_active_prev: bool, CS, session_active: bool = False):
+  """Keep Carrot's neutral steering ownership during an accepted suspension.
 
   One neutral frame clears Panda's buffered active goal on the falling edge.
-  Further neutral frames would replace the still-active OEM LFA command during
-  driver override, so leave that original stream alone until OP steers again.
+  Outside an accepted session, release the original camera after one neutral.
+  Within a session, blinker/large-angle suspension must not start OEM steering.
   """
   if hyundaicanfd.oem_emergency_steering(CS):
     # Preserve the existing OEM emergency-template path exactly. Its active
@@ -103,6 +103,8 @@ def lx3_camera_steering_handoff(can_sends, lat_active: bool, host_active_prev: b
   neutral_lfa_alt = any(addr == 0xCB and len(dat) > 6 and
                         ((dat[3] >> 4) & 0x3) == 1 and dat[6] == 0
                         for addr, dat, _bus in can_sends)
+  if session_active and neutral_lfa_alt:
+    return can_sends, False
   if host_active_prev and neutral_lfa_alt and not hyundaicanfd.oem_emergency_steering(CS):
     return can_sends, False
   return [msg for msg in can_sends if msg[0] != 0xCB], False
@@ -386,6 +388,17 @@ class CarController(CarControllerBase):
     self.lkas_max_torque = float(np.clip(self.lkas_max_torque + torque_delta,
                                          self.params.ANGLE_MIN_TORQUE, self.angle_max_torque))
 
+    if self.lx3_cluster is not None and driver_torque_abs > 250:
+      # Keep lateral control engaged while the driver steers. Respond to raw
+      # MDPS effort before steeringPressed's debounce, allowing the existing
+      # minimum assistance to meet Panda's sustained-effort limit. Recovery
+      # still follows Carrot's low-force latch/filter and gradual ramp above.
+      self.lkas_max_torque = float(self.params.ANGLE_MIN_TORQUE)
+      self.override_latched = True
+      self.override_release_frames = 0
+      self.recovering_from_override = True
+      self.full_recovery_frames = 0
+
     if not CS.out.steeringPressed and self.recovering_from_override and self.lkas_max_torque >= self.angle_max_torque:
       self.recovering_from_override = False
       self.full_recovery_frames = 1
@@ -482,7 +495,7 @@ class CarController(CarControllerBase):
         steering_sends = hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, apply_steer_req, apply_torque, CS, apply_angle, self.lkas_max_torque, angle_control)
         if self.lx3_cluster is not None and angle_control:
           steering_sends, self.lx3_camera_steering_active_prev = lx3_camera_steering_handoff(
-            steering_sends, CC.latActive, self.lx3_camera_steering_active_prev, CS)
+            steering_sends, CC.latActive, self.lx3_camera_steering_active_prev, CS, CS.out.latEnabled)
         can_sends.extend(steering_sends)
       else:
         can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, self.lkas_max_torque, angle_control))
