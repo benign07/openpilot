@@ -180,7 +180,7 @@ def get_checksum_state(dbc_name: str) -> ChecksumState | None:
     return ChecksumState(4, 2, 3, 5, False, SignalType.HONDA_CHECKSUM, honda_checksum)
   elif dbc_name.startswith(("toyota_", "lexus_")):
     return ChecksumState(8, -1, 7, -1, False, SignalType.TOYOTA_CHECKSUM, toyota_checksum)
-  elif dbc_name.startswith("hyundai_canfd_generated"):
+  elif dbc_name.startswith(("hyundai_canfd_generated", "hyundai_canfd_lx3_hev_generated")):
     print("Using Hyundai CAN FD checksum")
     return ChecksumState(16, -1, 0, -1, True, SignalType.HKG_CAN_FD_CHECKSUM, hkg_can_fd_checksum)
   elif dbc_name.startswith(("vw_mqb", "vw_mqbevo", "vw_meb")):
