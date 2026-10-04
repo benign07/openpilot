@@ -1,4 +1,5 @@
 from aiohttp import web
+from ...can_diagnostics import automatic_routes
 
 from . import (
   carrot_navi,
@@ -29,6 +30,7 @@ from . import (
 
 
 def register_all(app: web.Application) -> None:
+  automatic_routes.register(app)
   static.register(app)
   intro.register(app)
   carrot_navi.register(app)
