@@ -1,5 +1,6 @@
 """Worker-owned read-only msgq subscriptions, independent of HUD connections."""
 import hashlib
+from itertools import islice
 from pathlib import Path
 import threading
 import time
@@ -41,6 +42,20 @@ def selected_fields(reader, fields):
       value = value.to_dict()
     result[key] = value
   return result
+
+
+def panda_summary(panda):
+  buses = (panda.canState0, panda.canState1, panda.canState2)
+  return {
+    'safety_model': str(panda.safetyModel), 'safety_param': int(panda.safetyParam),
+    'controls_allowed': bool(panda.controlsAllowed),
+    'rx_overflow': int(panda.rxBufferOverflow), 'tx_overflow': int(panda.txBufferOverflow),
+    'spi_checksum_errors': int(panda.spiChecksumErrorCount),
+    'rx_checks_invalid': bool(panda.safetyRxChecksInvalid),
+    'faults': [str(fault) for fault in panda.faults],
+    'buses': [{'rx': int(bus.totalRxCnt), 'rx_lost': int(bus.totalRxLostCnt),
+              'errors': int(bus.totalErrorCnt), 'bus_off': bool(bus.busOff)} for bus in buses],
+  }
 
 
 class AutomaticController:
@@ -110,9 +125,11 @@ class AutomaticController:
     params = Params()
     sm = messaging.SubMaster(list(FIELDS))
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
+    panda_socket = messaging.sub_sock('pandaStates', timeout=0, conflate=True)
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     metadata = {'boot_id': boot, 'route': None, 'car_fingerprint': None,
-                'rate_hz': 5, 'can_per_key_max_hz': 10, 'physical_ecu_origin': 'not_inferred_from_bus'}
+                'rate_hz': 5, 'can_per_key_max_hz': 10, 'panda_max_hz': 2,
+                'physical_ecu_origin': 'not_inferred_from_bus'}
     repo = Path(__file__).resolve().parents[3]
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
                'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
@@ -163,4 +180,11 @@ class AutomaticController:
               if frame.address in self.recorder.ADDRESSES:
                 self.recorder.can_frame(frame.src, frame.address, bytes(frame.dat), event.logMonoTime,
                                         time.monotonic(), 'tx_requested' if name == 'sendcan' else 'rx')
+      raw = panda_socket.receive(non_blocking=True)
+      if raw is not None:
+        event = messaging.log_from_bytes(raw)
+        if event.valid and event.which() == 'pandaStates':
+          with self.lock:
+            self.recorder.panda_snapshot([panda_summary(p) for p in islice(event.pandaStates, 4)],
+                                         event.logMonoTime, time.monotonic())
       self.shutdown.wait(.05)

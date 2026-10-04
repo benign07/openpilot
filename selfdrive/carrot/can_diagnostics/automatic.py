@@ -157,7 +157,10 @@ def control_mode(services, now):
 
 
 class AutoRecorder:
-  ADDRESSES = {0x161, 0x162, 0x1EA, 0x2A4, 0x362, 0x1A0}
+  # Include both sides of the LX3 steering path and the physical button.
+  # can_frame() still bounds each direction/bus/address to 10 Hz and keeps
+  # full-rate traffic in rlog rather than duplicating it here.
+  ADDRESSES = {0x10B, 0x12A, 0x161, 0x162, 0x1A0, 0x1EA, 0x2A4, 0x362, 0xCB, 0xEA}
 
   def __init__(self, store, metadata):
     self.store, self.metadata = store, metadata
@@ -167,6 +170,7 @@ class AutoRecorder:
     self.lead_changes = deque(maxlen=20)
     self.last_event = {}
     self.can_last, self.faults = {}, {}
+    self.last_panda_sample = -math.inf
     self.sampled_out = self.stale_packets = 0
     self.state = 'waiting_for_ignition'
 
@@ -188,6 +192,7 @@ class AutoRecorder:
     if self.trip is None:
       self.trip = uuid.uuid4().hex
       self.previous, self.can_last, self.faults, self.last_event = {}, {}, {}, {}
+      self.last_panda_sample = -math.inf
       self.lead_changes.clear()
       self.last_sample = -math.inf
     if self.store.full(now):
@@ -258,6 +263,18 @@ class AutoRecorder:
     self.can_last[key] = now
     self.store.append({'kind': 'can_sample', 'mono_ns': mono_ns, 'direction': direction,
                        'bus': bus, 'address': address, 'dlc': len(data), 'data': data.hex()}, now)
+
+  def panda_snapshot(self, states, mono_ns, now):
+    if self.state != 'recording' or not states or now - self.last_panda_sample < .5:
+      return
+    if self.store.full(now):
+      self.sampled_out += 1
+      return
+    if not 0 <= now - mono_ns / 1e9 <= .5:
+      self.stale_packets += 1
+      return
+    self.last_panda_sample = now
+    self.store.append({'kind': 'panda_snapshot', 'mono_ns': mono_ns, 'states': states[:4]}, now)
 
   def close(self):
     self.store.seal('server_shutdown')

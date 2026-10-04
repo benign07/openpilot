@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from aiohttp import web
@@ -11,7 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from .automatic import AutoRecorder, ChunkStore, control_mode
 from .automatic_routes import register
-from .automatic_runtime import AutomaticController, read_param, selected_fields
+from .automatic_runtime import AutomaticController, panda_summary, read_param, selected_fields
 from tools.can_auto_sync import analyze, download
 
 
@@ -67,6 +68,17 @@ class RuntimeTests(unittest.TestCase):
     self.assertIs(read_param(params, 'flag'), False)
     self.assertEqual(read_param(params, 'text'), 'current')
     self.assertIsNone(read_param(params, 'missing'))
+
+  def test_panda_summary_keeps_only_authority_and_transport_fields(self):
+    bus = SimpleNamespace(totalRxCnt=20, totalRxLostCnt=0, totalErrorCnt=0, busOff=False)
+    panda = SimpleNamespace(safetyModel='hyundaiCanfd', safetyParam=190, controlsAllowed=True,
+                            rxBufferOverflow=0, txBufferOverflow=0, spiChecksumErrorCount=12,
+                            safetyRxChecksInvalid=False, faults=[], canState0=bus, canState1=bus,
+                            canState2=bus)
+    summary = panda_summary(panda)
+    self.assertEqual((summary['safety_param'], summary['controls_allowed'], summary['spi_checksum_errors']),
+                     (190, True, 12))
+    self.assertEqual(len(summary['buses']), 3)
 
 
 class RecorderTests(unittest.TestCase):
@@ -131,6 +143,21 @@ class RecorderTests(unittest.TestCase):
     self.recorder.can_frame(0, 0x161, bytes(16), 98_000_000_000, 100)
     self.assertEqual(self.recorder.sampled_out, 1)
     self.assertEqual(self.recorder.stale_packets, 1)
+
+  def test_steering_path_and_panda_are_sampled_without_unbounded_stream(self):
+    self.recorder.update(services(), 100)
+    for address, length in ((0x10B, 16), (0x12A, 16), (0xCB, 24), (0xEA, 24)):
+      self.recorder.can_frame(2, address, bytes(length), 100_000_000_000, 100)
+    self.recorder.can_frame(2, 0xCB, bytes(24), 100_010_000_000, 100.01)
+    self.recorder.can_frame(2, 0x123, bytes(24), 100_000_000_000, 100)
+    state = {'safety_param': 190, 'controls_allowed': True, 'rx_overflow': 0}
+    for now in (100, 100.2, 100.6):
+      self.recorder.panda_snapshot([state], int(now * 1e9), now)
+    rows = self.rows()
+    self.assertEqual({row['address'] for row in rows if row['kind'] == 'can_sample'},
+                     {0x10B, 0x12A, 0xCB, 0xEA})
+    self.assertEqual(len([row for row in rows if row['kind'] == 'panda_snapshot']), 2)
+    self.assertLess(self.store.usage, self.store.quota)
 
   def test_fault_burst_cannot_grow_chunk_without_bound(self):
     self.recorder.update(services(), 100)
