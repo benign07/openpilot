@@ -220,6 +220,17 @@ class RecorderTests(unittest.TestCase):
     self.assertIn('tx_blocked', [r['field'] for r in rows if r.get('name') == 'panda_state_edge'])
     self.assertIn('lat_active', [r['field'] for r in rows if r.get('name') == 'host_state_edge'])
 
+  def test_lx3_extra_addresses_and_button_trigger_do_not_change_other_cars(self):
+    self.recorder.metadata['car_fingerprint'] = 'OTHER_CAR'
+    self.recorder.update(services(), 100)
+    self.recorder.can_frame(0, 0x2AF, bytes(8), 100_000_000_000, 100)
+    self.recorder.can_frame(0, 0x10B, bytes(16), 100_010_000_000, 100.01)
+    button = bytearray(16); button[10] = 0x80
+    self.recorder.can_frame(0, 0x10B, button, 100_100_000_000, 100.1)
+    rows = self.rows()
+    self.assertNotIn(0x2AF, {r['address'] for r in rows if r['kind'] == 'can_sample'})
+    self.assertEqual(self.recorder.trace_count, 0)
+
   def test_fault_burst_cannot_grow_chunk_without_bound(self):
     self.recorder.update(services(), 100)
     for index in range(1000):

@@ -162,6 +162,7 @@ class AutoRecorder:
   # the independent full CAN source when its route segments are retained.
   ADDRESSES = {0x0A0, 0x0CB, 0x0EA, 0x105, 0x10B, 0x12A, 0x161, 0x162, 0x175,
                0x1A0, 0x1AA, 0x1CF, 0x1EA, 0x2A4, 0x2AF, 0x362}
+  LX3_ONLY_ADDRESSES = {0x0A0, 0x105, 0x175, 0x1AA, 0x1CF, 0x2AF}
   TRACE_ADDRESSES = {0x0CB, 0x0EA, 0x10B, 0x12A, 0x161, 0x162, 0x1A0,
                      0x1EA, 0x2A4, 0x2AF, 0x362}
   # Raw samples are kept at 10 Hz outside a button trace. The full-rate trace
@@ -194,6 +195,11 @@ class AutoRecorder:
 
   def trace_active(self, now):
     return self.trace is not None and int(now * 1e9) <= self.trace['until_ns']
+
+  @staticmethod
+  def can_row(mono_ns, direction, bus, address, data):
+    return {'mono_ns': mono_ns, 'direction': direction, 'bus': bus,
+            'address': address, 'dlc': len(data), 'data': data.hex()}
 
   def close_trace(self, now, reason):
     if self.trace is not None:
@@ -242,9 +248,9 @@ class AutoRecorder:
                            'trace_id': self.trace['id'], 'button': button,
                            'pre_ns': self.BUTTON_TRACE_PRE_NS,
                            'post_ns': self.BUTTON_TRACE_POST_NS}, now)
-        for pre_ns, pre_row in self.trace_pre:
+        for pre_ns, pre_direction, pre_bus, pre_address, pre_data in self.trace_pre:
           if mono_ns - self.BUTTON_TRACE_PRE_NS <= pre_ns < mono_ns:
-            self.append_trace_frame(pre_row, now)
+            self.append_trace_frame(self.can_row(pre_ns, pre_direction, pre_bus, pre_address, pre_data), now)
       if self.trace is not None:
         self.trace['until_ns'] = min(self.trace['start_ns'] + self.BUTTON_TRACE_MAX_NS,
                                      mono_ns + self.BUTTON_TRACE_POST_NS)
@@ -359,7 +365,8 @@ class AutoRecorder:
     self.previous, self.last_sample = current, now
 
   def can_frame(self, bus, address, data, mono_ns, now, direction='rx'):
-    if self.state != 'recording' or address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64:
+    if (self.state != 'recording' or address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64 or
+        (address in self.LX3_ONLY_ADDRESSES and self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV')):
       return
     if self.store.full(now):
       # Rotate on the next context update; a burst must not bypass the chunk bound.
@@ -373,15 +380,13 @@ class AutoRecorder:
         direction = 'tx_rejected'
       elif bus >= 128:
         direction = 'tx_echo'
-    row = {'mono_ns': mono_ns, 'direction': direction, 'bus': bus,
-           'address': address, 'dlc': len(data), 'data': data.hex()}
     self.button_edges(bus, address, data, mono_ns, now, direction)
     if address in self.TRACE_ADDRESSES:
       if self.trace_active(now):
-        self.append_trace_frame(row, now)
+        self.append_trace_frame(self.can_row(mono_ns, direction, bus, address, data), now)
       if len(self.trace_pre) == self.trace_pre.maxlen:
         self.trace_pre_evicted += 1
-      self.trace_pre.append((mono_ns, row))
+      self.trace_pre.append((mono_ns, direction, bus, address, data))
       while self.trace_pre and mono_ns - self.trace_pre[0][0] > self.BUTTON_TRACE_PRE_NS:
         self.trace_pre.popleft()
     key = (direction, bus, address, len(data))
@@ -404,7 +409,7 @@ class AutoRecorder:
       self.sampled_out += 1
       return
     self.can_last[key] = now
-    self.store.append({'kind': 'can_sample', **row}, now)
+    self.store.append({'kind': 'can_sample', **self.can_row(mono_ns, direction, bus, address, data)}, now)
 
   def panda_snapshot(self, states, mono_ns, now):
     if self.state != 'recording' or not states or now - self.last_panda_sample < (.1 if self.trace_active(now) else .5):
