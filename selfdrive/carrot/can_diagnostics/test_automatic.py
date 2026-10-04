@@ -11,6 +11,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from .automatic import AutoRecorder, ChunkStore, control_mode
+from .button_trace_report import summarize as summarize_button_traces
 from .automatic_routes import register
 from .automatic_runtime import AutomaticController, panda_summary, read_param, selected_fields
 from tools.can_auto_sync import analyze, download
@@ -57,6 +58,9 @@ class RuntimeTests(unittest.TestCase):
       def to_dict(self): raise AssertionError('Full message conversion is unnecessary')
     self.assertEqual(selected_fields(Reader(), ('vEgo', 'gearShifter', 'cruiseState', 'speeds', 'absent')),
                      {'vEgo':12.5,'gearShifter':'drive','cruiseState':{'enabled':False},'speeds':[1.,2.],'absent':None})
+    Reader.buttonEvents = [SimpleNamespace(type='lfaButton', pressed=True)]
+    self.assertEqual(selected_fields(Reader(), ('buttonEvents',)),
+                     {'buttonEvents': [{'type': 'lfaButton', 'pressed': True}]})
 
   def test_typed_params_and_legacy_bytes_need_no_encoding_keyword(self):
     class Params:
@@ -72,12 +76,14 @@ class RuntimeTests(unittest.TestCase):
   def test_panda_summary_keeps_only_authority_and_transport_fields(self):
     bus = SimpleNamespace(totalRxCnt=20, totalRxLostCnt=0, totalErrorCnt=0, busOff=False)
     panda = SimpleNamespace(safetyModel='hyundaiCanfd', safetyParam=190, controlsAllowed=True,
+                            safetyTxBlocked=3,
                             rxBufferOverflow=0, txBufferOverflow=0, spiChecksumErrorCount=12,
                             safetyRxChecksInvalid=False, faults=[], canState0=bus, canState1=bus,
                             canState2=bus)
     summary = panda_summary(panda)
     self.assertEqual((summary['safety_param'], summary['controls_allowed'], summary['spi_checksum_errors']),
                      (190, True, 12))
+    self.assertEqual(summary['tx_blocked'], 3)
     self.assertEqual(len(summary['buses']), 3)
 
 
@@ -158,6 +164,61 @@ class RecorderTests(unittest.TestCase):
                      {0x10B, 0x12A, 0xCB, 0xEA})
     self.assertEqual(len([row for row in rows if row['kind'] == 'panda_snapshot']), 2)
     self.assertLess(self.store.usage, self.store.quota)
+
+  def test_physical_lfa_and_cruise_buttons_open_bounded_pre_post_trace(self):
+    self.recorder.update(services(), 100)
+    self.recorder.can_frame(2, 0xCB, bytes(24), 100_000_000_000, 100)
+    neutral = bytes(16)
+    lfa = bytearray(16); lfa[10] = 0x80
+    main = bytearray(16); main[10] = 8
+    self.recorder.can_frame(0, 0x10B, neutral, 100_010_000_000, 100.01)
+    self.recorder.can_frame(130, 0x10B, lfa, 100_020_000_000, 100.02)
+    self.assertEqual(self.recorder.trace_count, 0)
+    self.recorder.can_frame(0, 0x10B, lfa, 100_030_000_000, 100.03)
+    original = bytearray(24); original[2] = 7; original[3] = 0x10
+    sent = bytearray(original); sent[3] = 0x20
+    self.recorder.can_frame(2, 0xCB, original, 100_040_000_000, 100.04)
+    self.recorder.can_frame(128, 0xCB, sent, 100_040_000_000, 100.04)
+    self.recorder.can_frame(192, 0xCB, sent, 100_050_000_000, 100.05)
+    self.recorder.can_frame(0, 0x10B, neutral, 100_100_000_000, 100.1)
+    self.recorder.can_frame(0, 0x10B, main, 100_500_000_000, 100.5)
+    self.assertEqual(self.recorder.trace_count, 1)
+    self.recorder.update(services(109), 109)
+    rows = self.rows()
+    edges = [r for r in rows if r.get('name') == 'physical_button_edge']
+    self.assertEqual([r['button'] for r in edges], ['lfa', 'cruise_main'])
+    self.assertEqual({r['source'] for r in edges}, {'rx_bus0_0x10B'})
+    traces = [r for r in rows if r['kind'] == 'button_trace_can']
+    self.assertIn((2, 0xCB), {(r['bus'], r['address']) for r in traces})
+    self.assertIn((0, 0x10B), {(r['bus'], r['address']) for r in traces})
+    self.assertIn('tx_rejected', {r['direction'] for r in traces})
+    self.assertEqual(len([r for r in rows if r.get('name') == 'button_trace_end']), 1)
+    report = summarize_button_traces(self.root)
+    self.assertEqual(len(report['traces']), 1)
+    self.assertEqual(report['traces'][0]['button'], 'lfa')
+    self.assertTrue(report['traces'][0]['complete'])
+    self.assertEqual(report['traces'][0]['frame_counts']['rx/bus0/0x10B'], 4)
+    self.assertEqual(report['traces'][0]['forward_pairs']['0x0CB']['paired'], 1)
+    self.assertEqual(report['traces'][0]['forward_pairs']['0x0CB']['payload_changed'], 1)
+
+  def test_trace_captures_full_rate_can_and_panda_authority_edges(self):
+    self.recorder.update(services(), 100)
+    self.recorder.can_frame(0, 0x10B, bytes(16), 100_000_000_000, 100)
+    pressed = bytearray(16); pressed[10] = 1
+    self.recorder.can_frame(0, 0x10B, pressed, 100_100_000_000, 100.1)
+    for index in range(5):
+      now = 100.11 + index * .01
+      self.recorder.can_frame(2, 0xCB, bytes([index]) + bytes(23), int(now * 1e9), now)
+    allowed = {'controls_allowed': True, 'tx_blocked': 0, 'safety_param': 190}
+    blocked = {'controls_allowed': False, 'tx_blocked': 1, 'safety_param': 190}
+    self.recorder.panda_snapshot([allowed], 100_200_000_000, 100.2)
+    self.recorder.panda_snapshot([blocked], 100_310_000_000, 100.31)
+    self.recorder.update(services(100.4, lat=True), 100.4)
+    rows = self.rows()
+    self.assertEqual(len([r for r in rows if r['kind'] == 'button_trace_can' and r['address'] == 0xCB]), 5)
+    self.assertIn('controls_allowed', [r['field'] for r in rows if r.get('name') == 'panda_state_edge'])
+    self.assertIn('tx_blocked', [r['field'] for r in rows if r.get('name') == 'panda_state_edge'])
+    self.assertIn('lat_active', [r['field'] for r in rows if r.get('name') == 'host_state_edge'])
 
   def test_fault_burst_cannot_grow_chunk_without_bound(self):
     self.recorder.update(services(), 100)

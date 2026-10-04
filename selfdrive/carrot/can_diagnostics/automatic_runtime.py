@@ -11,7 +11,8 @@ FIELDS = {
   'deviceState': ('started',),
   'carState': ('vEgo', 'aEgo', 'standstill', 'gearShifter', 'canValid', 'canTimeout', 'brakePressed',
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
-               'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState'),
+               'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'latEnabled',
+               'steerFaultTemporary', 'steerFaultPermanent', 'buttonEvents'),
   'carControl': ('enabled', 'latActive', 'longActive', 'actuators'),
   'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
@@ -38,6 +39,8 @@ def selected_fields(reader, fields):
       value = list(value)
     elif key == 'errors' and value is not None:
       value = [str(error) for error in value]
+    elif key == 'buttonEvents' and value is not None:
+      value = [{'type': str(button.type), 'pressed': bool(button.pressed)} for button in value]
     elif hasattr(value, 'to_dict'):
       value = value.to_dict()
     result[key] = value
@@ -49,6 +52,7 @@ def panda_summary(panda):
   return {
     'safety_model': str(panda.safetyModel), 'safety_param': int(panda.safetyParam),
     'controls_allowed': bool(panda.controlsAllowed),
+    'tx_blocked': int(panda.safetyTxBlocked),
     'rx_overflow': int(panda.rxBufferOverflow), 'tx_overflow': int(panda.txBufferOverflow),
     'spi_checksum_errors': int(panda.spiChecksumErrorCount),
     'rx_checks_invalid': bool(panda.safetyRxChecksInvalid),
@@ -129,6 +133,10 @@ class AutomaticController:
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     metadata = {'boot_id': boot, 'route': None, 'car_fingerprint': None,
                 'rate_hz': 5, 'can_per_key_max_hz': 10, 'panda_max_hz': 2,
+                'button_trace': {'physical_input': 'bus0/0x10B', 'pre_s': 2, 'post_s': 8,
+                                 'max_window_s': 30, 'max_traces_per_trip': 24,
+                                 'max_frames_per_trace': 20000, 'can_source': 'selected_unthrottled',
+                                 'host_context_max_hz': 20, 'panda_max_hz': 10},
                 'physical_ecu_origin': 'not_inferred_from_bus'}
     repo = Path(__file__).resolve().parents[3]
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
@@ -157,7 +165,7 @@ class AutomaticController:
             with car.CarParams.from_bytes(raw) as cp:
               metadata['car_fingerprint'] = cp.carFingerprint
         last_metadata = now
-      if now - last_context >= .2:
+      if now - last_context >= (.05 if self.recorder.trace_active(now) else .2):
         # Read only required fields at the recorded rate. Full carState/deviceState
         # conversion on every CAN drain needlessly copies unrelated payloads.
         for name, fields in FIELDS.items():
