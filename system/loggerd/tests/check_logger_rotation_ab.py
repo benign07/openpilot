@@ -38,12 +38,17 @@ try:
   old_source = subprocess.check_output(['git', 'show', f'{baseline}:{relative}'], cwd=root)
   changed = subprocess.check_output(['git', 'diff', '--name-only', baseline, 'HEAD', '--', 'system/loggerd'],
                                     cwd=root, text=True).splitlines()
-  assert {name for name in changed if '/tests/' not in name} == {relative}, changed
+  assert {name for name in changed if '/tests/' not in name} == {relative, 'system/loggerd/loggerd.h'}, changed
+  old_header = subprocess.check_output(['git', 'show', f'{baseline}:system/loggerd/loggerd.h'], cwd=root)
+  new_header = (root / 'system/loggerd/loggerd.h').read_bytes()
+  assert sorted(old_header.splitlines()) == sorted(new_header.splitlines()), 'Compiler compatibility reorder only'
   assert hashlib.sha256(old_source).hexdigest() == '3bbea49d8122720ef4fa5f47fb40550836a684050c15ad3fc0c97c851f46b445'
   assert b'camera_streams_known' not in old_source
   candidate_source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
   candidate_binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
   report.update(baseline_logger_source_sha256=hashlib.sha256(old_source).hexdigest(),
+                shared_header_sha256=hashlib.sha256(new_header).hexdigest(),
+                shared_header_compatibility_reorder_only=True,
                 candidate_logger_source_sha256=candidate_source_hash,
                 candidate_logger_binary_sha256=candidate_binary_hash)
   for include_driver, record_front in ((False, True), (False, False), (True, True), (True, False)):
