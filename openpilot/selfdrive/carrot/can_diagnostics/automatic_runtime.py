@@ -20,7 +20,7 @@ FIELDS = {
 }
 PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFollowGap1', 'TFollowGap2',
           'TFollowGap3', 'TFollowGap4', 'LaneChangeNeedTorque', 'AlwaysLateral', 'TurnSpeedControlMode',
-          'ModelTurnSpeedFactor', 'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar')
+          'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar')
 
 
 def read_param(params, key):

@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -13,7 +14,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from .automatic import AutoRecorder, ChunkStore, control_mode
 from .button_trace_report import summarize as summarize_button_traces
 from .automatic_routes import register
-from .automatic_runtime import AutomaticController, panda_summary, read_param, selected_fields
+from .automatic_runtime import PARAMS, AutomaticController, panda_summary, read_param, selected_fields
 from tools.can_auto_sync import analyze, download
 
 
@@ -72,6 +73,12 @@ class RuntimeTests(unittest.TestCase):
     self.assertIs(read_param(params, 'flag'), False)
     self.assertEqual(read_param(params, 'text'), 'current')
     self.assertIsNone(read_param(params, 'missing'))
+
+  def test_diagnostic_settings_are_registered_in_current_source(self):
+    registry = Path(__file__).resolve().parents[4] / 'openpilot/common/params_keys.h'
+    keys = set(re.findall(r'^\s*\{"([^"]+)"\s*,', registry.read_text(encoding='utf-8'), re.MULTILINE))
+    self.assertTrue(keys)
+    self.assertEqual(set(PARAMS) - keys, set(), 'Removed settings must not stop the passive recorder')
 
   def test_panda_summary_keeps_only_authority_and_transport_fields(self):
     bus = SimpleNamespace(totalRxCnt=20, totalRxLostCnt=0, totalErrorCnt=0, busOff=False)
