@@ -103,6 +103,15 @@ def _encode_msgpack_payload(payload: dict) -> bytes | None:
   return None
 
 
+def create_carrot_hud_broker() -> "RealtimeBroker":
+  """Keep the Android HUD's compact state contract without graphics streams."""
+  return RealtimeBroker(
+    repo_flavor="c3",
+    include_optional=("carrotMan", "navInstructionCarrot", "navRoute"),
+    exclude_services=("controlsState", "liveCalibration", "modelV2", "roadCameraState", "deviceState"),
+  )
+
+
 class RealtimeBroker:
   def __init__(
     self,

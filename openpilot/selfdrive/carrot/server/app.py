@@ -20,7 +20,7 @@ from openpilot.cereal import messaging
 from ..realtime.transports import CameraWsHub, RawWsHub
 from . import features
 from .config import SELFDRIVE_ASSETS_DIR, WEB_DIR, migrate_legacy_carrot_state
-from .live_runtime.broker import RealtimeBroker
+from .live_runtime.broker import create_carrot_hud_broker
 from .services.auto_update import auto_update_loop
 from .services.git_status import git_status_loop
 from .services.heartbeat import heartbeat_loop
@@ -90,17 +90,9 @@ async def on_startup(app: web.Application) -> None:
   app["http"] = ClientSession()
   app["params"] = Params() if HAS_PARAMS and Params is not None else None
   app["hb_last"] = {"ok": None, "msg": "not yet", "ts": 0}
-  # Keep only route metadata plus the server-side engagement safety signal
-  # outside the compact HUD/overlay relay.
+  # The Android HUD uses compact vehicle/mode state in addition to route metadata.
   try:
-    broker = RealtimeBroker(
-      repo_flavor="c3",
-      include_optional=("navInstructionCarrot", "navRoute"),
-      exclude_services=(
-        "carState", "controlsState", "longitudinalPlan",
-        "liveCalibration", "modelV2", "roadCameraState", "deviceState",
-      ),
-    )
+    broker = create_carrot_hud_broker()
     app["realtime_broker"] = broker
     app["realtime_broker_error"] = None
   except Exception as exc:

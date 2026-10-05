@@ -258,6 +258,31 @@ class RecorderTests(unittest.TestCase):
     self.assertIn('rx/bus0/0x1CF', summarize_button_traces(self.root)['traces'][0]['frame_counts'])
     self.assertEqual(summarize_button_traces(self.root)['traces'][0]['forward_pairs'], {})
 
+  def test_ev9_other_hda2_commands_keep_raw_request_echo_and_rejection(self):
+    self.store.chunk_bytes = 32 * 1024
+    self.recorder.metadata['car_fingerprint'] = 'KIA_EV9'
+    self.recorder.update(services(), 100)
+    self.recorder.can_frame(0, 0x1CF, bytes(8), 100_000_000_000, 100)
+    lfa = bytearray(8); lfa[2] = 0x80
+    self.recorder.can_frame(0, 0x1CF, lfa, 100_010_000_000, 100.01)
+    for address, size in ((0x50, 16), (0x110, 32)):
+      for bus, direction in ((1, 'rx'), (0, 'tx_requested'), (128, 'rx'), (192, 'rx')):
+        for index in range(3):
+          now = 100.02 + index * .01
+          self.recorder.can_frame(bus, address, bytes([index]) + bytes(size-1), int(now * 1e9), now, direction)
+    traces = [row for row in self.rows() if row['kind'] == 'button_trace_can' and row['address'] in (0x50,0x110)]
+    self.assertEqual(len(traces), 24)
+    self.assertEqual({row['direction'] for row in traces}, {'rx', 'tx_requested', 'tx_echo', 'tx_rejected'})
+    self.assertEqual({row['bus'] for row in traces}, {0, 1, 128, 192})
+    self.assertTrue(all(bytes.fromhex(row['data'])[0] in range(3) for row in traces))
+
+  def test_ev9_extra_steering_capture_does_not_expand_other_vehicle_profiles(self):
+    self.recorder.update(services(), 100)
+    for address, size in ((0x50,16),(0x110,32)):
+      self.recorder.can_frame(1, address, bytes(size), 100_000_000_000, 100)
+    rows = self.rows()
+    self.assertFalse(any(row.get('address') in (0x50,0x110) for row in rows))
+
   def test_ev9_alternative_buttons_decode_on_second_physical_bus(self):
     self.recorder.metadata['car_fingerprint'] = 'KIA_EV9'
     self.recorder.update(services(), 100)

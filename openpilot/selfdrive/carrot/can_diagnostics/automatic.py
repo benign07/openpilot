@@ -160,10 +160,13 @@ class AutoRecorder:
   # Keep 10 Hz samples throughout the drive and an unthrottled, bounded
   # selection around physical LX3 button presses. The ordinary rlog remains
   # the independent full CAN source when its route segments are retained.
-  ADDRESSES = {0x0A0, 0x0CB, 0x0EA, 0x105, 0x10B, 0x12A, 0x161, 0x162, 0x175,
+  ADDRESSES = {0x050, 0x0A0, 0x0CB, 0x0EA, 0x105, 0x10B, 0x110, 0x12A, 0x161, 0x162, 0x175,
                0x1A0, 0x1AA, 0x1CF, 0x1EA, 0x2A4, 0x2AF, 0x362}
   LX3_ONLY_ADDRESSES = {0x0A0, 0x105, 0x175, 0x2AF}
-  TRACE_ADDRESSES = {0x0CB, 0x0EA, 0x10B, 0x12A, 0x161, 0x162, 0x1A0, 0x1AA, 0x1CF,
+  # Include the other HDA2 steering addresses so EV9 investigations do not
+  # infer complete command coverage from LFA_ALT alone. Receive/record only.
+  EV9_ONLY_ADDRESSES = {0x050, 0x110}
+  TRACE_ADDRESSES = {0x050, 0x0CB, 0x0EA, 0x10B, 0x110, 0x12A, 0x161, 0x162, 0x1A0, 0x1AA, 0x1CF,
                      0x1EA, 0x2A4, 0x2AF, 0x362}
   # Raw samples are kept at 10 Hz outside a button trace. The full-rate trace
   # is bounded in time, memory, and frames, and never transmits a CAN packet.
@@ -382,7 +385,8 @@ class AutoRecorder:
 
   def can_frame(self, bus, address, data, mono_ns, now, direction='rx'):
     if (self.state != 'recording' or address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64 or
-        (address in self.LX3_ONLY_ADDRESSES and self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV')):
+        (address in self.LX3_ONLY_ADDRESSES and self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV') or
+        (address in self.EV9_ONLY_ADDRESSES and self.metadata.get('car_fingerprint') != 'KIA_EV9')):
       return
     if self.store.full(now):
       # Rotate on the next context update; a burst must not bypass the chunk bound.
