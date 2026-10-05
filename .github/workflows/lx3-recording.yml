@@ -1,0 +1,55 @@
+name: LX3 restored recording and passive diagnostics validation
+on:
+  push:
+    branches: [review/lx3-recording-diagnostics-20261005]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  recording-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Linux recording build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+      - name: Install locked repository dependencies
+        run: |
+          uv sync --frozen --no-dev
+          uv pip install pytest
+      - name: Build actual recording programs and their dependencies
+        run: |
+          set -o pipefail
+          uv run --no-sync scons --minimal -j2 common cereal system/loggerd/loggerd system/loggerd/encoderd 2>&1 | tee lx3-recording-build.log
+      - name: Import passive diagnostic runtime
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run --no-sync python -c 'import selfdrive.carrot.can_diagnostics.automatic_runtime'
+      - name: Passive diagnostics and existing HUD chunk API
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          uv run --no-sync python -m unittest selfdrive.carrot.can_diagnostics.test_diagnostics selfdrive.carrot.can_diagnostics.test_automatic -v 2>&1 | tee lx3-passive-diagnostic-tests.log
+      - name: Real video rotation with exact old-source negative witnesses
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run --no-sync python system/loggerd/tests/check_logger_rotation_ab.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-restored-recording-validation
+          path: |
+            lx3-recording-build.log
+            lx3-passive-diagnostic-tests.log
+            lx3-logger-baseline-build.log
+            lx3-logger-candidate-restored-build.log
+            lx3-logger-rotation-ab.json
+      - name: Record scope
+        if: always()
+        run: echo 'Recording and passive-diagnostic changes only. No steering, Panda firmware, CAN publisher, OTA publication or vehicle installation. ARM device build is verified separately.' >> "$GITHUB_STEP_SUMMARY"
