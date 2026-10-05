@@ -25,7 +25,7 @@ jobs:
       - name: Build actual recording programs and their dependencies
         run: |
           set -o pipefail
-          uv run --no-sync scons --minimal -j2 common cereal system/loggerd/loggerd system/loggerd/encoderd 2>&1 | tee lx3-recording-build.log
+          uv run --no-sync scons --minimal -j2 common cereal msgq_repo system/loggerd/loggerd system/loggerd/encoderd 2>&1 | tee lx3-recording-build.log
       - name: Import passive diagnostic runtime
         env:
           PYTHONPATH: ${{ github.workspace }}
