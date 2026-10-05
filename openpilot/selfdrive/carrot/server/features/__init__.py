@@ -1,4 +1,5 @@
 from aiohttp import web
+from ...can_diagnostics import automatic_routes
 
 from . import (
   bluetooth,
@@ -32,6 +33,7 @@ from . import (
 
 
 def register_all(app: web.Application) -> None:
+  automatic_routes.register(app)
   bluetooth.register(app)
   static.register(app)
   intro.register(app)

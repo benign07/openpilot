@@ -30,6 +30,8 @@ def empty_live_payload(*, repo_flavor: str, selected_camera: str = DEFAULT_CAMER
       "generatedAtMs": now_ms,
       "snapshotFresh": False,
       "serviceAlive": {},
+      "serviceValid": {},
+      "serviceAgeMs": {},
       "coreServicesAlive": {},
       "optionalServicesAlive": {},
       "activeCoreServices": 0,
@@ -81,6 +83,19 @@ def build_live_payload(
 
   service_alive = _ensure_dict(runtime, "serviceAlive")
   _update_alive_map(sm, service_alive)
+  service_valid = _ensure_dict(runtime, "serviceValid")
+  service_age = _ensure_dict(runtime, "serviceAgeMs")
+  service_valid.clear()
+  service_age.clear()
+  now_mono_ns = time.monotonic_ns()
+  for name in service_alive:
+    try:
+      service_valid[name] = bool(sm.valid[name])
+      timestamp_ns = int(sm.logMonoTime[name])
+      service_age[name] = max(0, (now_mono_ns - timestamp_ns) / 1e6) if timestamp_ns > 0 else None
+    except (KeyError, TypeError, ValueError, AttributeError):
+      service_valid[name] = False
+      service_age[name] = None
   core_alive = _ensure_dict(runtime, "coreServicesAlive")
   _update_alive_subset(service_alive, tuple(name for name in common_services() if name in service_alive), core_alive)
   optional_alive = _ensure_dict(runtime, "optionalServicesAlive")
@@ -337,6 +352,13 @@ def _build_car_state(service: Any, previous: dict[str, Any] | None = None) -> di
   p["vEgoCluster"] = safe_float(safe_get(service, "vEgoCluster"))
   p["vCruiseCluster"] = safe_float(safe_get(service, "vCruiseCluster"))
   p["steeringAngleDeg"] = safe_float(safe_get(service, "steeringAngleDeg"))
+  p["canValid"] = safe_bool(safe_get(service, "canValid"))
+  p["canTimeout"] = safe_bool(safe_get(service, "canTimeout"))
+  cruise = safe_get(service, "cruiseState")
+  p["cruiseState"] = {
+    "enabled": safe_bool(safe_get(cruise, "enabled")),
+    "speed": safe_float(safe_get(cruise, "speed")),
+  }
   p["useLaneLineSpeed"] = safe_int(safe_get(service, "useLaneLineSpeed"))
   p["leftLaneLine"] = safe_int(safe_get(service, "leftLaneLine"))
   p["rightLaneLine"] = safe_int(safe_get(service, "rightLaneLine"))

@@ -21,6 +21,9 @@ from ..services.time_sync import TIME_SYNC_DEBUG_DEFAULT, sync_system_time_from_
 
 
 _LIVE_RUNTIME_SERVICE_NAMES = (
+  "carState",
+  "carrotMan",
+  "longitudinalPlan",
   "navInstructionCarrot",
   "navRoute",
 )
@@ -134,7 +137,9 @@ async def api_live_runtime(request: web.Request) -> web.Response:
   if broker is None:
     return web.json_response({"ok": False, "error": broker_error or "realtime broker unavailable"}, status=503)
 
-  force = request.query.get("force") == "1"
+  # The Android Carrot HUD widget requires a snapshot younger than one second.
+  # Refresh for that identified client without increasing every Carrot Web poll.
+  force = request.query.get("force") == "1" or request.headers.get("User-Agent", "").startswith("CarrotHud")
   runtime = broker.last_snapshot.get("runtime") if isinstance(broker.last_snapshot, dict) else None
   if not isinstance(runtime, dict):
     runtime = {}
