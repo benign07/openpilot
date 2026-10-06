@@ -370,6 +370,9 @@ class AutoRecorder:
       return
     if self.store.full(now):
       # Rotate on the next context update; a burst must not bypass the chunk bound.
+      if (self.trace_active(now) and address in self.TRACE_ADDRESSES and
+          0 <= now - mono_ns / 1e9 <= .5):
+        self.trace['dropped_full'] += 1
       self.sampled_out += 1
       return
     if not 0 <= now - mono_ns / 1e9 <= .5:
@@ -412,21 +415,32 @@ class AutoRecorder:
     self.store.append({'kind': 'can_sample', **self.can_row(mono_ns, direction, bus, address, data)}, now)
 
   def panda_snapshot(self, states, mono_ns, now):
-    if self.state != 'recording' or not states or now - self.last_panda_sample < (.1 if self.trace_active(now) else .5):
-      return
-    if self.store.full(now):
-      self.sampled_out += 1
+    if self.state != 'recording' or not states:
       return
     if not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
       return
+    current = states[0]
+    fields = ('controls_allowed', 'rx_checks_invalid', 'rx_overflow', 'tx_overflow',
+              'tx_blocked', 'safety_model', 'safety_param')
+    # Cumulative counters remain visible in periodic samples. Their sustained
+    # growth must not turn ordinary recording into full-rate health logging.
+    edge_fields = ('controls_allowed', 'rx_checks_invalid', 'safety_model', 'safety_param')
+    changed = self.last_panda_state is not None and any(
+      self.last_panda_state.get(field) != current.get(field) for field in edge_fields)
+    # Keep ordinary sampling bounded, but preserve received LX3 authority or
+    # configuration changes even when a short pulse falls between periodic samples.
+    lx3_edge = self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV' and changed
+    if now - self.last_panda_sample < (.1 if self.trace_active(now) else .5) and not lx3_edge:
+      return
+    if self.store.full(now):
+      self.sampled_out += 1
+      return
     self.last_panda_sample = now
     self.store.append({'kind': 'panda_snapshot', 'mono_ns': mono_ns, 'states': states[:4],
                        'trace_id': self.trace['id'] if self.trace_active(now) else None}, now)
-    current = states[0]
     if self.last_panda_state is not None:
-      for field in ('controls_allowed', 'rx_checks_invalid', 'rx_overflow', 'tx_overflow',
-                    'tx_blocked', 'safety_model', 'safety_param'):
+      for field in fields:
         before, after = self.last_panda_state.get(field), current.get(field)
         if before != after:
           self.store.append({'kind': 'event', 'name': 'panda_state_edge', 'mono_ns': mono_ns,

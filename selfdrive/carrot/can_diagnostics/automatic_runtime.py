@@ -132,11 +132,12 @@ class AutomaticController:
     panda_socket = messaging.sub_sock('pandaStates', timeout=0, conflate=True)
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     metadata = {'boot_id': boot, 'route': None, 'car_fingerprint': None,
-                'rate_hz': 5, 'can_per_key_max_hz': 10, 'panda_max_hz': 2,
+                'rate_hz': 5, 'can_per_key_max_hz': 10, 'panda_max_hz': 20, 'panda_periodic_max_hz': 2,
+                'panda_state_changes': 'received_valid_lx3_snapshots_bypass_periodic_limit',
                 'button_trace': {'physical_input': 'bus0/0x10B', 'pre_s': 2, 'post_s': 8,
                                  'max_window_s': 30, 'max_traces_per_trip': 24,
                                  'max_frames_per_trace': 20000, 'can_source': 'selected_unthrottled',
-                                 'host_context_max_hz': 20, 'panda_max_hz': 10},
+                                 'host_context_max_hz': 20, 'panda_max_hz': 20, 'panda_periodic_max_hz': 10},
                 'physical_ecu_origin': 'not_inferred_from_bus'}
     repo = Path(__file__).resolve().parents[3]
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',

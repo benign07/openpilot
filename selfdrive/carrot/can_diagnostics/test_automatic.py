@@ -165,6 +165,58 @@ class RecorderTests(unittest.TestCase):
     self.assertEqual(len([row for row in rows if row['kind'] == 'panda_snapshot']), 2)
     self.assertLess(self.store.usage, self.store.quota)
 
+  def test_short_received_panda_authority_pulse_is_retained_outside_button_trace(self):
+    self.recorder.update(services(), 100)
+    for now, allowed in ((100, False), (100.1, True), (100.2, False), (100.25, False)):
+      state = {'safety_param': 190, 'controls_allowed': allowed, 'rx_overflow': 0}
+      self.recorder.panda_snapshot([state], int(now * 1e9), now)
+    rows = self.rows()
+    self.assertEqual([row['states'][0]['controls_allowed'] for row in rows if row['kind'] == 'panda_snapshot'],
+                     [False, True, False])
+    edges = [row for row in rows if row.get('name') == 'panda_state_edge']
+    self.assertEqual([(row['before'], row['after']) for row in edges], [(False, True), (True, False)])
+    self.assertEqual([row['mono_ns'] for row in edges], [100_100_000_000, 100_200_000_000])
+
+  def test_trace_reports_frames_lost_at_chunk_limit(self):
+    self.recorder.update(services(), 100)
+    self.recorder.can_frame(0, 0x10B, bytes(16), 100_010_000_000, 100.01)
+    press = bytearray(16); press[10] = 0x80
+    self.recorder.can_frame(0, 0x10B, press, 100_030_000_000, 100.03)
+    self.assertEqual(self.recorder.trace_count, 1)
+    self.store.chunk_bytes = self.store.size
+    self.recorder.can_frame(2, 0xCB, bytes(24), 100_050_000_000, 100.05)
+    rows = self.rows()
+    end = next(row for row in rows if row.get('name') == 'button_trace_end')
+    self.assertEqual(end['dropped_full'], 1)
+    self.assertEqual(len([row for row in rows if row['kind'] == 'button_trace_can' and row['address'] == 0xCB]), 0)
+
+  def test_panda_pulse_capture_rejects_stale_states_and_preserves_other_car_sampling(self):
+    self.recorder.update(services(), 100)
+    self.recorder.panda_snapshot([{'controls_allowed': False}], 100_000_000_000, 100)
+    self.recorder.panda_snapshot([{'controls_allowed': True}], 99_000_000_000, 100.1)
+    self.assertEqual(self.recorder.stale_packets, 1)
+    self.recorder.metadata['car_fingerprint'] = 'OTHER_CAR'
+    self.recorder.panda_snapshot([{'controls_allowed': True}], 100_100_000_000, 100.1)
+    self.recorder.panda_snapshot([{'controls_allowed': False}], 100_200_000_000, 100.2)
+    self.recorder.panda_snapshot([{'controls_allowed': False}], 100_600_000_000, 100.6)
+    rows = self.rows()
+    self.assertEqual(len([row for row in rows if row['kind'] == 'panda_snapshot']), 2)
+    self.assertFalse(any(row.get('name') == 'panda_state_edge' for row in rows))
+
+  def test_cumulative_panda_counters_keep_periodic_sample_limit(self):
+    self.store.seconds = 120
+    self.store.chunk_bytes = 2 * 1024**2
+    self.recorder.update(services(), 100)
+    for index in range(1201):
+      mono_ns = 100_000_000_000 + index * 50_000_000
+      state = {'controls_allowed': False, 'safety_param': 190, 'tx_blocked': index}
+      self.recorder.panda_snapshot([state], mono_ns, mono_ns / 1e9)
+    rows = self.rows()
+    snapshots = [row for row in rows if row['kind'] == 'panda_snapshot']
+    self.assertLessEqual(len(snapshots), 121)
+    self.assertGreaterEqual(len(snapshots), 110)
+    self.assertGreaterEqual(snapshots[-1]['states'][0]['tx_blocked'], 1190)
+
   def test_physical_lfa_and_cruise_buttons_open_bounded_pre_post_trace(self):
     self.recorder.update(services(), 100)
     self.recorder.can_frame(2, 0xCB, bytes(24), 100_000_000_000, 100)
