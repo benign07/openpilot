@@ -31,3 +31,8 @@
 GitHub에는 소스, 공개 가능한 배포 명세·서명된 bundle, 변경 이력과 검증 결과를 보관한다. 원본 주행 기록, rlog, Params 백업, 개인 위치 정보, 연결 토큰과 서명 비밀키는 비공개 PC 저장소에 보관한다.
 
 최초 업데이트 기능 설치, 배포 가능 파일과 복구 제약, 실제 명령은 [업데이트 구현 안내](../../selfdrive/carrot/hud_update/README.md)를 따른다.
+
+
+## Latest verified publication
+
+[palisade-20261006-01](releases/palisade-20261006-01.md) / sequence 4. The source branch alone is not an OTA release. Publish the signed bundle, pinned index, change notes and verification record together. Application remains parked and hash-bound.
