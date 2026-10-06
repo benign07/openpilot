@@ -271,7 +271,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                    'deviceState': SimpleNamespace(started=False),
                    'carState': SimpleNamespace(canValid=True)}
     class FakeHealth(dict):
-      def update(self, _): pass
+      def update(self, _):
+        # This fixture represents publishers that remain healthy/fresh. CI disk
+        # or event-loop delays must not age one static sample into a stale state.
+        self.logMonoTime = {name: int(service.time.monotonic() * 1e9) for name in self}
     health = FakeHealth(fake_states)
     health.alive = health.valid = {'managerState': True, 'deviceState': True, 'carState': True}
     health.logMonoTime = {name: int(now * 1e9) for name in ('managerState', 'deviceState', 'carState')}
@@ -315,7 +318,8 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': name, 'sha256': core.sha(target.read_bytes())}]},
                       'applied_at': service.time.time() - 3600}
     class FakeHealth(dict):
-      def update(self, _): pass
+      def update(self, _):
+        self.logMonoTime = {name: int(service.time.monotonic() * 1e9) for name in self}
     now = service.time.monotonic()
     health = FakeHealth(managerState=SimpleNamespace(processes=[]), deviceState=SimpleNamespace(started=False),
                         carState=SimpleNamespace(canValid=False))
@@ -346,7 +350,8 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'validated source\n')
     self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': name, 'sha256': core.sha(target.read_bytes())}]}}
     class FakeHealth(dict):
-      def update(self, _): pass
+      def update(self, _):
+        self.logMonoTime = {name: int(service.time.monotonic() * 1e9) for name in self}
     now = service.time.monotonic()
     health = FakeHealth(managerState=SimpleNamespace(processes=[SimpleNamespace(name=n, running=True, pid=i + 100)
                                                        for i, n in enumerate(service.REQUIRED)]),
