@@ -1,0 +1,33 @@
+name: LX3 HUD source updater and passive diagnostics
+on:
+  push:
+    branches: [review/lx3-fable-diagnostics-20261006]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install aiohttp cryptography requests
+      - name: Signed source transactions, HUD API and passive diagnostics
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          python -m unittest selfdrive.carrot.tests.test_hud_updater selfdrive.carrot.can_diagnostics.test_diagnostics selfdrive.carrot.can_diagnostics.test_automatic -v 2>&1 | tee lx3-hud-source-tests.log
+          bash -n launch_chffrplus.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-hud-source-python-${{ matrix.python }}
+          path: lx3-hud-source-tests.log
+      - name: Scope
+        run: echo 'Python/API/signed source transactions only; no firmware/native build, secrets, publication or vehicle qualification.' >> "$GITHUB_STEP_SUMMARY"
