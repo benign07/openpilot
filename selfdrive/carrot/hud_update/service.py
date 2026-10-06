@@ -69,10 +69,19 @@ class UpdateService:
 
   def public(self):
     installed = core.load(self.folder / 'installed.json', {})
+    rollback = {'available': False}
+    if self.config and self.state.get('phase') not in ACTIVE:
+      try:
+        candidate = core.prepare_rollback(self.root, self.folder, installed, self.config['public_key'])
+        rollback = {'available': True, 'installed_release_id': installed['release_id'],
+                    'target_release_id': candidate['restored_release_id']}
+      except Exception:
+        pass
     return {'ok': True, 'configured': bool(self.config), 'installed': installed, 'latest': self.latest,
             'phase': self.state.get('phase', 'idle'), 'message': self.state.get('message', ''),
             'requested_release': (self.state.get('index') or {}).get('release_id'),
-            'history': self.history[-30:], 'cancel_available': self.state.get('phase') in ('waiting_parked', 'countdown')}
+            'history': self.history[-30:], 'rollback': rollback,
+            'cancel_available': self.state.get('phase') in ('waiting_parked', 'countdown')}
 
   def change(self, phase, message, **extra):
     self.state.update(phase=phase, message=message, **extra)
@@ -158,8 +167,8 @@ class UpdateService:
                 time.monotonic() - self.onroad_verify_started_mono > ONROAD_HEALTH_DEADLINE):
             self.change('health_warning', '차량 시작 후 상태 정보가 끊겨 실행 확인 실패 · PC 점검 필요')
             return
-          if self.state.get('message') != '제어 소스 적용됨 · 차량 시작 후 프로세스·CAN 확인 대기':
-            self.change('verifying', '제어 소스 적용됨 · 차량 시작 후 프로세스·CAN 확인 대기')
+          if self.state.get('message') != '업데이트 파일 적용됨 · 차량 시작 후 프로세스·CAN 확인 대기':
+            self.change('verifying', '업데이트 파일 적용됨 · 차량 시작 후 프로세스·CAN 확인 대기')
           return
         if critical:
           if self.onroad_verify_started_mono is None:
@@ -203,17 +212,25 @@ class UpdateService:
       if phase == 'waiting_parked':
         index = self.state['index']  # Exact user-selected release, never a moving latest pointer.
         self.change('downloading', '선택한 버전 다운로드·서명·호환성 검사 중')
-        raw = await asyncio.to_thread(fetch, core.bundle_url(index), core.LIMIT)
-        current = core.load(self.folder / 'installed.json', {}).get('sequence', 0)
-        release = core.verify_bundle(raw, index, self.config['public_key'], current)
+        previous = core.load(self.folder / 'installed.json', {})
+        restoring = self.state.get('operation') == 'rollback'
+        if restoring:
+          release = self.state['release']
+        else:
+          raw = await asyncio.to_thread(fetch, core.bundle_url(index), core.LIMIT)
+          release = core.verify_bundle(raw, index, self.config['public_key'], previous.get('sequence', 0))
         # Disconnect or gear change during download leaves all production files untouched.
         if not await self.parked():
           self.parked_since = None
           self.change('waiting_parked', '차량 상태 변경 · P 정차 후 다시 준비합니다')
           return
-        await asyncio.to_thread(core.stage, self.root, self.folder, release)
+        directory = await asyncio.to_thread(core.stage, self.root, self.folder, release)
+        if not restoring:
+          core.atomic(directory / 'signed_bundle.json', raw)
+          core.save(directory / 'index.json', index)
+          core.save(directory / 'previous_installed.json', previous)
         self.state['release'] = release
-        self.state['previous_installed'] = core.load(self.folder / 'installed.json', {})
+        self.state['previous_installed'] = previous
         self.countdown_since = time.monotonic()
         self.change('countdown', '검증·백업 완료 · P 상태가 유지되면 10초 뒤 재부팅합니다')
         return
@@ -282,6 +299,22 @@ async def action(request):
       service.state = {'index': index, 'requested_at': time.time()}
       service.parked_since = service.countdown_since = None
       service.change('waiting_parked', '예약됨 · P 정차·속도 0·제어 해제 10초를 기다립니다')
+    elif command == 'rollback':
+      if service.state.get('phase') in ACTIVE:
+        raise web.HTTPConflict(text='업데이트 처리 중에는 복원을 예약할 수 없습니다.')
+      installed = core.load(service.folder / 'installed.json', {})
+      if body.get('release_id') != installed.get('release_id'):
+        raise web.HTTPConflict(text='설치 버전이 달라졌습니다. 상태를 다시 확인하세요.')
+      try:
+        release = await asyncio.to_thread(core.prepare_rollback, service.root, service.folder,
+                                         installed, service.config['public_key'])
+      except Exception:
+        raise web.HTTPConflict(text='직전 버전 백업을 확인하지 못했습니다. 기존 파일을 유지합니다.')
+      service.state = {'operation': 'rollback', 'release': release,
+                       'index': {k: release[k] for k in ('release_id', 'sequence', 'notes')},
+                       'requested_at': time.time()}
+      service.parked_since = service.countdown_since = None
+      service.change('waiting_parked', '직전 버전 복원 예약됨 · P 정차·제어 해제 후 적용합니다')
     else: raise web.HTTPBadRequest(text='Unknown action')
   return web.json_response(service.public())
 

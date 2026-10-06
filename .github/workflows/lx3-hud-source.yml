@@ -22,7 +22,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -o pipefail
-          python -m unittest selfdrive.carrot.tests.test_hud_updater selfdrive.carrot.can_diagnostics.test_diagnostics selfdrive.carrot.can_diagnostics.test_automatic -v 2>&1 | tee lx3-hud-source-tests.log
+          python -m unittest selfdrive.carrot.tests.test_hud_updater selfdrive.carrot.tests.test_hud_rollback selfdrive.carrot.can_diagnostics.test_diagnostics selfdrive.carrot.can_diagnostics.test_automatic -v 2>&1 | tee lx3-hud-source-tests.log
           bash -n launch_chffrplus.sh
       - uses: actions/upload-artifact@v4
         if: always()

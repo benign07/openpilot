@@ -215,7 +215,50 @@ def apply_at_boot(root=ROOT, state_root=STATE_ROOT, boot_id=None, now=None, writ
   except BaseException:
     rollback(root, state_root, state)
     raise
-  save(state_root / 'installed.json', {k: release[k] for k in ('release_id', 'sequence', 'notes', 'source_commit')})
+  installed = {k: release[k] for k in ('release_id', 'sequence', 'notes', 'source_commit')}
+  for name in ('rollback_of', 'restored_release_id'):
+    if name in release: installed[name] = release[name]
+  save(state_root / 'installed.json', installed)
   state.update(phase='verifying', applied_boot=boot_id, applied_at=now, message='새 버전 파일 적용 · 기기 시작 확인 중')
   save(state_root / 'state.json', state)
   return 'applied'
+
+
+def prepare_rollback(root, state_root, installed, public_key):
+  """Read/verify the last signed update and backups; never mutate live files.
+
+  Keep the highest installed sequence so an old channel cannot reinstall a
+  withdrawn update after rollback. The next corrected publication increments it.
+  """
+  name = installed.get('release_id', '')
+  if not RELEASE.fullmatch(name) or installed.get('rollback_of'):
+    raise ValueError('복원 가능한 직전 업데이트가 없습니다.')
+  folder = state_root / 'releases' / name
+  index = load(folder / 'index.json')
+  previous = load(folder / 'previous_installed.json')
+  if not index or not previous:
+    raise ValueError('직전 버전 확인 자료가 없습니다. PC 점검이 필요합니다.')
+  current = verify_bundle((folder / 'signed_bundle.json').read_bytes(), index, public_key,
+                          current_sequence=installed['sequence'] - 1)
+  if (current['release_id'] != name or current['sequence'] != installed['sequence'] or
+      current['source_commit'] != installed['source_commit']):
+    raise ValueError('설치 버전과 복원 자료가 일치하지 않습니다.')
+  if (not RELEASE.fullmatch(previous.get('release_id', '')) or
+      not re.fullmatch(r'[a-f0-9]{40}', previous.get('source_commit', '')) or
+      type(previous.get('sequence')) is not int or previous['sequence'] >= installed['sequence']):
+    raise ValueError('직전 설치 버전의 기록이 유효하지 않습니다.')
+  reverse = {'schema': 1, 'release_id': 'rollback-' + name + '-' + format(time.time_ns(), 'x'),
+             'sequence': installed['sequence'], 'car_fingerprint': current['car_fingerprint'],
+             'source_commit': previous['source_commit'], 'rollback_of': name,
+             'restored_release_id': previous['release_id'],
+             'notes': ['직전 소스 업데이트 복원: ' + previous['release_id']], 'files': []}
+  for row in current['files']:
+    target = checked_path(root, row['path'])
+    backup = folder / 'original' / row['path']
+    if sha(target.read_bytes()) != row['sha256'] or sha(backup.read_bytes()) != row['before']:
+      raise ValueError('복원 파일의 무결성 확인 실패 · 기존 파일 유지: ' + row['path'])
+    data = backup.read_bytes()
+    reverse['files'].append({'path': row['path'], 'before': row['sha256'],
+                            'sha256': row['before'], 'bytes': len(data),
+                            'data': base64.b64encode(data).decode()})
+  return reverse
