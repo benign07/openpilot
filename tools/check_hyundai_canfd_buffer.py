@@ -14,7 +14,7 @@ def main():
   parser.add_argument('--compiler', nargs='+', default=['cc'])
   parser.add_argument('--safety-root', type=Path, default=root / 'opendbc_repo/opendbc/safety')
   parser.add_argument('--output', type=Path, required=True)
-  parser.add_argument('--mode', choices=['all', 'refill', 'admission', 'grant'], default='all')
+  parser.add_argument('--mode', choices=['all', 'refill', 'admission', 'grant', 'suppression'], default='all')
   parser.add_argument('--sanitize', action='store_true')
   args = parser.parse_args()
   args.output.mkdir(parents=True, exist_ok=True)

@@ -263,7 +263,10 @@ bool safety_tx_hook(CANPacket_t *to_send) {
 
   // Hooks can enqueue deferred forwarding or change permission. A frame rejected
   // by the outer policy must not reach those side effects before we reject it.
-  const bool safety_allowed = allowed && !relay_malfunction && current_hooks->tx(to_send);
+  bool safety_allowed = false;
+  if (allowed && !relay_malfunction) {
+    safety_allowed = current_hooks->tx(to_send);
+  }
 
   /*
   int addr = GET_ADDR(to_send);

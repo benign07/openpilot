@@ -18,10 +18,16 @@ stateful per-car hook. Previously safety_tx_hook computed the outer rejection,
 still ran the hook, and only combined the results afterward. A wrong-length CB
 was rejected to its caller yet buffered and later forwarded; a wrong-bus SCC
 could set controls_allowed despite rejection. Both are reproduced in actual C.
-The dispatcher now short-circuits those rejected inputs before any hook side
+The dispatcher now uses an explicit admission if-statement before any hook side
 effects. Existing all-output/ELM327 exceptions are retained; valid admitted
 frames still use the same hooks. This fixes outer rejection, not every possible
 side effect of a frame rejected inside a per-car hook.
+Rejected nonbuffered TX also no longer starts or renews the timer that suppresses
+the corresponding original frame. This is an intentional behavior correction:
+no host command was admitted, so it must not silently remove OEM traffic. A
+separate regression preserves suppression after a valid TX and its normal expiry.
+The ring and dispatcher corrections must stay together; the earlier ring-only
+candidate allowed rejected traffic to evict accepted commands and is not usable.
 
 The old two-entry buffered-forward FIFO silently discarded a newly accepted
 host command when full. A new inactive CB command could therefore be lost.
@@ -50,7 +56,8 @@ test_hyundai_canfd_buffer.c includes the actual production safety implementation
 It covers full-ring release retention, initial/refill timing, bounded reuse,
 reset, ring wrap, invalid target/deep copy, actual forwarding counter/CRC,
 rejected TX not evicting accepted commands or being forwarded later, rejected
-SCC not granting permission, existing special policy exceptions, and 17 profile
+SCC not granting permission, rejected TX not suppressing originals, existing
+special policy exceptions, and 17 profile
 initializations with all six rings. Profile initialization is not per-vehicle
 functional validation.
 tools/check_hyundai_canfd_buffer.py records source hashes and build/run output.
@@ -87,7 +94,10 @@ Root correction contract — not implemented by this queue patch
 6. Stock driver steering coexistence is retained. Pedal/AutoEngage/AutoCruise/
    LfaButtonMode and host suspension behavior must be enumerated before native
    short-press toggles or a brake policy are imposed. Do not silently change
-   their meanings in one layer while leaving the other unchanged.
+   their meanings in one layer while leaving the other unchanged. Runtime setting
+   changes need a defined synchronization contract with native init-time settings.
+   Thirty host loop iterations are not thirty physical CAN frames; native timing
+   must use elapsed time rather than duplicate that loop counter.
 
 Acceptance scenarios for the paired authority correction
 --------------------------------------------------------

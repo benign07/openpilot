@@ -240,6 +240,29 @@ static void special_policy_exceptions(void) {
   puts("PASS existing all-output/ELM327 exceptions and silent policy retained");
 }
 
+static void rejected_tx_cannot_suppress_original(void) {
+  reset(190U);
+  CANPacket_t p = command(0x1E0, 0, 1U, 1U); // 24 bytes, not the allowed 16
+  CanfdTxState *st = find_canfd_tx_state(0, 0x1E0);
+  assert(st != NULL && canfd_bfwd_find(0x1E0, 0) == NULL);
+  assert(!safety_tx_hook(&p));
+  assert(st->last_tx_us == 0U);
+  CANPacket_t original = p; original.bus = 2U; original.data_len_code = 10U;
+  assert(safety_fwd_hook(&original) == 0);
+
+  p.data_len_code = 10U;
+  assert(safety_tx_hook(&p));
+  const uint32_t accepted_at = st->last_tx_us;
+  assert(accepted_at == timer.CNT);
+  assert(safety_fwd_hook(&original) == -1); // real admitted TX still blocks original
+  timer.CNT += st->timeout_us + 1U;
+  p.data_len_code = 12U;
+  assert(!safety_tx_hook(&p));
+  assert(st->last_tx_us == accepted_at); // rejected traffic cannot extend ownership
+  assert(safety_fwd_hook(&original) == 0);
+  puts("PASS rejected nonbuffer TX cannot start or renew suppression of original traffic");
+}
+
 static void profile_compatibility(void) {
   const unsigned profiles[] = {0U, 2U, 4U, 8U, 12U, 16U, 20U, 24U, 28U, 32U, 40U, 56U, 60U, 144U, 156U, 188U, 190U};
   for (unsigned i = 0U; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
@@ -267,6 +290,7 @@ int main(int argc, char **argv) {
   if (argc > 1 && strcmp(argv[1], "refill") == 0) { refill_does_not_reuse_active(); return 0; }
   if (argc > 1 && strcmp(argv[1], "admission") == 0) { rejected_tx_has_no_deferred_send(); return 0; }
   if (argc > 1 && strcmp(argv[1], "grant") == 0) { rejected_scc_cannot_grant(); return 0; }
+  if (argc > 1 && strcmp(argv[1], "suppression") == 0) { rejected_tx_cannot_suppress_original(); return 0; }
   overflow_retains_release();
   lone_command_is_not_delayed();
   refill_does_not_reuse_active();
@@ -278,6 +302,7 @@ int main(int argc, char **argv) {
   rejected_tx_has_no_deferred_send();
   rejected_scc_cannot_grant();
   special_policy_exceptions();
+  rejected_tx_cannot_suppress_original();
   profile_compatibility();
   puts("ALL BUFFER REGRESSIONS PASS; AUTHORITY AND OEM FAULTS ARE NOT QUALIFIED");
   return 0;
