@@ -32,6 +32,7 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.carrot.carrot_controls import CarrotControls
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 from openpilot.selfdrive.car.lx3_authority import configure_control
+from openpilot.selfdrive.monitoring.lx3_monitoring import monitoring_enabled, uses_wheel_monitoring
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -130,7 +131,9 @@ class Controls:
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
     if uses_lx3_authority(self.CP):
       now = time.monotonic_ns()
-      fresh = self.sm.all_checks(['carState', 'selfdriveState', 'onroadEvents', 'driverMonitoringState']) and all(
+      dm_fresh = (self.sm.alive['driverMonitoringState'] and self.sm.valid['driverMonitoringState'] and
+                  (uses_wheel_monitoring(self.CP, self.params.get_int('DisableDM')) or self.sm.freq_ok['driverMonitoringState']))
+      fresh = dm_fresh and self.sm.all_checks(['carState', 'selfdriveState', 'onroadEvents']) and all(
         0 <= now - self.sm.logMonoTime[s] < 100_000_000 for s in ('carState', 'selfdriveState'))
       lat_allowed, long_allowed = configure_control(CC, CS, self.sm['onroadEvents'], CC.enabled,
         self.params.get_bool('AlwaysLateral'), driving_gear, fresh, now,
@@ -319,7 +322,7 @@ class Controls:
     cs.uiAccelCmd = float(self.LoC.pid.i)
     cs.ufAccelCmd = float(self.LoC.pid.f)
     cs.forceDecel = False
-    if self.params.get_int("DisableDM") == 0:
+    if monitoring_enabled(self.CP, self.params.get_int("DisableDM")):
       cs.forceDecel = bool((self.sm['driverMonitoringState'].alertLevel == log.DriverMonitoringState.AlertLevel.three) or
                            (self.sm['selfdriveState'].state == State.softDisabling))
 

@@ -30,6 +30,11 @@ through Carrot HUD, rather than stopping after a source-branch push.
   Opus 5.5 CLI with high effort and save the actual model/result, as requested
   on 2026-10-07. A usage-limit failure is not a review pass. Historical Fable
   reviews do not count as a new Opus review.
+- The owner's LX3 clone has no driver-facing camera and uses DisableDM=1.
+  Do not force DisableDM=0 to satisfy an installation check. The explicit
+  camera-less candidate must use real vehicle interaction monitoring, keep
+  road-camera/model checks, and be verified separately from the old vision-only
+  candidate. Camera selection does not authorize fabricated healthy inputs.
 
 The 2026-10-06 source release uses diagnostic commit 013fcfdb with updater
 integration d4cf0377; the annotated release `palisade-20261006-01` identifies

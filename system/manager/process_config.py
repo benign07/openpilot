@@ -7,6 +7,7 @@ from cereal import car
 from openpilot.common.params import Params
 from openpilot.system.hardware import PC, TICI
 from openpilot.system.manager.process import PythonProcess, NativeProcess, DaemonProcess
+from openpilot.selfdrive.monitoring.lx3_monitoring import uses_wheel_monitoring
 
 FLASK_AVAILABLE = importlib.util.find_spec("flask") is not None
 
@@ -76,6 +77,10 @@ def and_(*fns):
 def enable_dm(started, params, CP: car.CarParams) -> bool:
   return (started or params.get_bool("IsDriverViewEnabled")) and params.get_int("DisableDM") == 0
 
+
+def enable_wheel_monitoring(started, params, CP: car.CarParams) -> bool:
+  return started and uses_wheel_monitoring(CP, params.get_int("DisableDM"))
+
 #def enable_connect(started, params, CP: car.CarParams) -> bool:
 #  return params.get_int("EnableConnect") > 0
 
@@ -121,6 +126,7 @@ procs = [
   PythonProcess("card", "selfdrive.car.card", only_onroad),
   PythonProcess("deleter", "system.loggerd.deleter", always_run),
   PythonProcess("dmonitoringd", "selfdrive.monitoring.dmonitoringd", enable_dm, enabled=(WEBCAM or not PC)),
+  PythonProcess("wheel_monitord", "selfdrive.monitoring.wheel_monitord", enable_wheel_monitoring),
   PythonProcess("qcomgpsd", "system.qcomgpsd.qcomgpsd", qcomgps, enabled=TICI),
   PythonProcess("navd", "selfdrive.navd.navd", only_onroad),
   PythonProcess("pandad", "selfdrive.pandad.pandad", always_run),
