@@ -29,7 +29,9 @@ def copy_status(CS, sm, now_ns):
     CS.lx3Authority = states[0].lx3Authority
     CS.lx3Authority.statusMonoTime = sm.logMonoTime['pandaStates']
   else:
-    CS.lx3Authority = {}
+    # Assigning an empty dict merges a capnp struct; it does not clear fields
+    # already copied into this builder earlier in the same card iteration.
+    CS.init('lx3Authority')
   CS.lx3Authority.buttonHealthy = healthy
 
 

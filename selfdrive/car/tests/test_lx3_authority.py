@@ -137,6 +137,21 @@ class TestLx3Authority(unittest.TestCase):
     self.assertEqual(CC.lx3Authority.pendingGeneration, 0)
     self.assertFalse(authority.monitor_lateral(CS.lx3Authority))
 
+  def test_stale_status_clears_existing_capnp_permission_fields(self):
+    CS = self.state(3)
+    class Messages(dict):
+      valid = {'pandaStates': True}
+      alive = {'pandaStates': True}
+      logMonoTime = {'pandaStates': 0}
+    sm = Messages(pandaStates=[])
+    authority.copy_status(CS, sm, self.now)
+    self.assertFalse(authority.verified(CS.lx3Authority))
+    self.assertEqual(CS.lx3Authority.allowed, 0)
+    self.assertEqual(CS.lx3Authority.epoch, 0)
+    self.assertEqual(CS.lx3Authority.lateralGeneration, 0)
+    self.assertEqual(CS.lx3Authority.longitudinalGeneration, 0)
+    self.assertTrue(CS.lx3Authority.buttonHealthy)
+
   def test_mixed_host_native_protocol_cannot_supply_permission(self):
     CS = self.state(3)
     self.assertTrue(authority.verified(CS.lx3Authority))

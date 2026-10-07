@@ -27,6 +27,7 @@ class WheelMonitoring:
     self.remainder = 0.
     self.previous = None
     self.lateral_active = False
+    self.recovery_required = True
 
   def update(self, CS, SS, now, valid):
     elapsed = 0. if self.last_time is None else now - self.last_time
@@ -36,9 +37,20 @@ class WheelMonitoring:
       # Publishing invalid removes permission through the normal host path.
       self.remainder = 0.
       self.previous = None
+      self.recovery_required = True
       return self.dm.get_state_packet(valid=False)
 
     a = CS.lx3Authority
+    if self.recovery_required:
+      # Hold the failure until assistance is actually off. A single invalid
+      # message could otherwise be lost when IPC conflates fast catch-up ticks.
+      # Also prevent a daemon restart from forgiving an ongoing session.
+      if SS.enabled or CS.latEnabled or a.allowed:
+        return self.dm.get_state_packet(valid=False)
+      self.recovery_required = False
+      self.lateral_active = False
+      self.previous = None
+      self.remainder = 0.
     if verified(a) and 0 <= now * 1e9 - a.statusMonoTime <= STATUS_MAX_NS:
       self.lateral_active = bool(a.allowed & LAT)
     elif not CS.latEnabled:

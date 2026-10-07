@@ -12,3 +12,8 @@ def uses_wheel_monitoring(CP, disable_dm):
 
 def monitoring_enabled(CP, disable_dm):
   return disable_dm == 0 or uses_wheel_monitoring(CP, disable_dm)
+
+
+def monitoring_state_ready(CP, disable_dm, sm):
+  return (sm.alive['driverMonitoringState'] and sm.valid['driverMonitoringState'] and
+          (uses_wheel_monitoring(CP, disable_dm) or sm.freq_ok['driverMonitoringState']))

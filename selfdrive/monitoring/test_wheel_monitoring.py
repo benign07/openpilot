@@ -9,7 +9,7 @@ from cereal import car, log
 import cereal.messaging as messaging
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
-from openpilot.selfdrive.monitoring.lx3_monitoring import monitoring_enabled
+from openpilot.selfdrive.monitoring.lx3_monitoring import monitoring_enabled, monitoring_state_ready
 from openpilot.selfdrive.monitoring.policy import DriverMonitoring
 from openpilot.selfdrive.monitoring.wheel_monitord import WheelMonitoring, inputs_valid
 
@@ -35,10 +35,14 @@ class TestWheelMonitoring(unittest.TestCase):
     self.CP = lx3_params()
     self.CS = car.CarState.new_message(canValid=True, latEnabled=True, gearShifter='drive')
     self.SS = log.SelfdriveState.new_message()
-    self.monitor = WheelMonitoring()
     self.now = 100.
     self.CS.lx3Authority = dict(version=4, profile=1, epoch=1, inputReady=True, allowed=1, lateralGeneration=1,
                                 statusMonoTime=int(self.now * 1e9))
+    self.reset_monitor()
+
+  def reset_monitor(self):
+    self.monitor = WheelMonitoring()
+    self.monitor.update(car.CarState.new_message(), log.SelfdriveState.new_message(), self.now, True)
     self.monitor.update(self.CS, self.SS, self.now, True)
 
   def advance(self, seconds, dt=.05, valid=True):
@@ -52,8 +56,7 @@ class TestWheelMonitoring(unittest.TestCase):
   def test_stock_deadlines_in_real_elapsed_time(self):
     for dt in (.05, .2):
       with self.subTest(dt=dt):
-        self.monitor = WheelMonitoring()
-        self.monitor.update(self.CS, self.SS, self.now, True)
+        self.reset_monitor()
         for duration, expected in ((14.8, AlertLevel.none), (.4, AlertLevel.one),
                                    (8.6, AlertLevel.one), (.4, AlertLevel.two),
                                    (5.6, AlertLevel.two), (.4, AlertLevel.three)):
@@ -89,12 +92,11 @@ class TestWheelMonitoring(unittest.TestCase):
     self.advance(60.)
     self.assertEqual(self.monitor.dm.alert_level, AlertLevel.none)
     self.assertGreater(self.monitor.dm.awareness, 0.)
-    self.monitor = WheelMonitoring()
     self.CS.standstill = False
     self.CS.latEnabled = False
     self.CS.lx3Authority.allowed = 0
     self.CS.lx3Authority.lateralGeneration = 0
-    self.monitor.update(self.CS, self.SS, self.now, True)
+    self.reset_monitor()
     self.advance(60.)
     self.assertEqual(self.monitor.dm.alert_level, AlertLevel.none)
     self.assertEqual(self.monitor.dm.awareness, 1.)
@@ -111,16 +113,15 @@ class TestWheelMonitoring(unittest.TestCase):
     self.assertEqual(self.monitor.dm.terminal_alert_cnt, 0)
 
   def test_unverified_pending_lfa_never_starts_monitoring_session(self):
-    self.monitor = WheelMonitoring()
-    self.CS.lx3Authority = {}
-    self.monitor.update(self.CS, self.SS, self.now, True)
+    self.CS.init('lx3Authority')
+    self.reset_monitor()
     self.advance(60.)
     self.assertEqual(self.monitor.dm.awareness, 1.)
 
   def test_unknown_native_status_keeps_lfa_only_awareness(self):
     self.advance(24.1)
     before = self.monitor.dm.awareness
-    self.CS.lx3Authority = {}
+    self.CS.init('lx3Authority')
     self.assertFalse(self.SS.enabled)
     self.advance(.1)
     self.assertLess(self.monitor.dm.awareness, before)
@@ -136,12 +137,22 @@ class TestWheelMonitoring(unittest.TestCase):
     self.assertFalse(packet.valid)
     self.assertEqual(self.monitor.dm.awareness, before)
     self.CS.latEnabled = True
-    self.advance(.05)
+    self.assertFalse(self.advance(.05).valid)
     self.assertEqual(self.monitor.dm.awareness, before)
     packet = self.advance(.5, dt=.5)
     self.assertFalse(packet.valid)
     self.assertEqual(self.monitor.dm.awareness, before)
     self.assertFalse(self.monitor.update(self.CS, self.SS, self.now - 1., True).valid)
+
+  def test_restart_or_invalid_packet_requires_observed_disengagement(self):
+    self.monitor = WheelMonitoring()
+    self.assertFalse(self.monitor.update(self.CS, self.SS, self.now, True).valid)
+    for _ in range(100):
+      self.now += .001  # Catch-up can overwrite an invalid IPC sample quickly.
+      self.assertFalse(self.monitor.update(self.CS, self.SS, self.now, True).valid)
+    self.CS.latEnabled = False
+    self.CS.init('lx3Authority')
+    self.assertTrue(self.advance(.05).valid)
 
   def test_no_elapsed_time_cannot_recover_attention(self):
     self.advance(24.1)
@@ -163,8 +174,7 @@ class TestWheelMonitoring(unittest.TestCase):
       self.CS.lx3Authority.allowed = 1
       self.CS.lx3Authority.lateralGeneration = 1
     self.assertTrue(self.monitor.dm.too_distracted)
-    self.monitor = WheelMonitoring()
-    self.monitor.update(self.CS, self.SS, self.now, True)
+    self.reset_monitor()
     self.advance(60.2)
     self.assertTrue(self.monitor.dm.too_distracted)
 
@@ -181,8 +191,20 @@ class TestWheelMonitoring(unittest.TestCase):
             self.assertEqual(enable_dm(started, self.params, self.CP), started and mode == 0)
             wheel = started and mode == 1 and fingerprint == 'HYUNDAI_PALISADE_LX3_HEV' and profile == 2238
             self.assertEqual(enable_wheel_monitoring(started, self.params, self.CP), wheel)
-            self.assertEqual(monitoring_enabled(self.CP, mode), mode == 0 or (wheel and started) or
-                             (not started and mode == 1 and fingerprint == 'HYUNDAI_PALISADE_LX3_HEV' and profile == 2238))
+            self.assertEqual(monitoring_enabled(self.CP, mode), mode == 0 or
+                             (mode == 1 and fingerprint == 'HYUNDAI_PALISADE_LX3_HEV' and profile == 2238))
+
+  def test_control_readiness_keeps_physical_monitor_checks(self):
+    sm = SimpleNamespace(alive={}, valid={}, freq_ok={})
+    for mode in (0, 1):
+      for alive in (False, True):
+        for valid in (False, True):
+          for rate in (False, True):
+            sm.alive['driverMonitoringState'] = alive
+            sm.valid['driverMonitoringState'] = valid
+            sm.freq_ok['driverMonitoringState'] = rate
+            expected = alive and valid and (mode == 1 or rate)
+            self.assertEqual(monitoring_state_ready(self.CP, mode, sm), expected)
 
   def test_input_validity_requires_fresh_valid_physical_data(self):
     sm = messaging.SubMaster(['carState', 'selfdriveState'])
@@ -292,15 +314,19 @@ class TestWheelMonitoring(unittest.TestCase):
     self.params.put('CarParams', self.CP.to_bytes())
     publisher = messaging.PubMaster(['carState', 'selfdriveState'])
     subscriber = messaging.SubMaster(['driverMonitoringState'])
+    self.CS.latEnabled = False
+    self.CS.init('lx3Authority')
     proc = subprocess.Popen([sys.executable, '-m', 'openpilot.selfdrive.monitoring.wheel_monitord'])
+    def publish():
+      for name, value in (('carState', self.CS), ('selfdriveState', self.SS)):
+        msg = messaging.new_message(name, valid=True)
+        setattr(msg, name, value)
+        publisher.send(name, msg)
     try:
       deadline = time.monotonic() + 12.
       got_valid = False
       while time.monotonic() < deadline:
-        for name, value in (('carState', self.CS), ('selfdriveState', self.SS)):
-          msg = messaging.new_message(name, valid=True)
-          setattr(msg, name, value)
-          publisher.send(name, msg)
+        publish()
         subscriber.update(25)
         if subscriber.valid['driverMonitoringState']:
           got_valid = True
@@ -313,10 +339,34 @@ class TestWheelMonitoring(unittest.TestCase):
       while time.monotonic() < deadline and subscriber.valid['driverMonitoringState']:
         subscriber.update(100)
       self.assertFalse(subscriber.valid['driverMonitoringState'])
+      deadline = time.monotonic() + 2.
+      while time.monotonic() < deadline and not subscriber.valid['driverMonitoringState']:
+        publish()
+        subscriber.update(25)
+      self.assertTrue(subscriber.valid['driverMonitoringState'])
+      self.params.put_int('DisableDM', 0)
+      deadline = time.monotonic() + 2.
+      while time.monotonic() < deadline and subscriber.valid['driverMonitoringState']:
+        publish()
+        subscriber.update(25)
+      self.assertFalse(subscriber.valid['driverMonitoringState'])
+      self.params.put_int('DisableDM', 1)
+      deadline = time.monotonic() + .3
+      while time.monotonic() < deadline:
+        publish()
+        subscriber.update(25)
+        self.assertFalse(subscriber.valid['driverMonitoringState'])
       self.assertIsNone(proc.poll())
     finally:
       proc.terminate()
       proc.wait(timeout=5)
+
+  def test_daemon_exits_for_other_car(self):
+    self.CP.carFingerprint = 'KIA_EV9'
+    self.params.put_int('DisableDM', 1)
+    self.params.put('CarParams', self.CP.to_bytes())
+    result = subprocess.run([sys.executable, '-m', 'openpilot.selfdrive.monitoring.wheel_monitord'], timeout=10)
+    self.assertEqual(result.returncode, 0)
 
 
 if __name__ == '__main__':
