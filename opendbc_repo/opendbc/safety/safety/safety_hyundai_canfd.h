@@ -398,9 +398,11 @@ static void canfd_bfwd_push(CanfdBufferedFwd* st, const CANPacket_t* pkt) {
   if ((st == NULL) || !st->enabled) return;
   if (GET_BUS(pkt) != st->dst_bus) return;
 
-  // queue�� �̹� 2���� �̹� �� packet�� ����
+  // Upstream Carrot: preserve the newest command when a burst fills the ring.
+  // Keep our existing capacity/start timing; a release must not wait for refill.
   if (st->count >= CANFD_BFWD_MAX_QUEUE) {
-    return;
+    st->head = (st->head + 1U) % CANFD_BFWD_MAX_QUEUE;
+    st->count--;
   }
 
   canfd_copy_packet(&st->q[st->tail], pkt);

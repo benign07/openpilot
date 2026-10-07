@@ -26,9 +26,10 @@ through Carrot HUD, rather than stopping after a source-branch push.
 - Record GitHub publication, actual installation and functional/road
   verification as separate states. Keep Carrot HUD 1.0.27's download/API contract.
   The EV9 work is on hold; LX3 releases must not be installed on it.
-- When a new same-topic cross-review is useful, use the installed Claude Fable
-  CLI with high effort and save the actual model/result. A usage-limit failure
-  is not a review pass, and historical Opus reviews are not Fable reviews.
+- When a new same-topic cross-review is useful, use the installed Claude
+  Opus 5.5 CLI with high effort and save the actual model/result, as requested
+  on 2026-10-07. A usage-limit failure is not a review pass. Historical Fable
+  reviews do not count as a new Opus review.
 
 The 2026-10-06 source release uses diagnostic commit 013fcfdb with updater
 integration d4cf0377; the annotated release `palisade-20261006-01` identifies

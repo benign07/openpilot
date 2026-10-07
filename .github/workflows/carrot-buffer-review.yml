@@ -1,0 +1,52 @@
+name: Carrot buffered forwarding review
+on:
+  push:
+    branches: [review/lx3-stock-authority-20261007]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-buffer:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Actual policy buffer tests with undefined-behavior checks
+        run: python3 tools/check_hyundai_canfd_buffer.py --compiler ${{ matrix.compiler }} --sanitize --output buffer-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: buffer-review-${{ matrix.compiler }}
+          path: buffer-evidence
+  board-firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install H7 build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi
+          python -m pip install scons pycryptodome
+      - name: Build actual H7 firmware for review only
+        working-directory: panda
+        run: |
+          set -o pipefail
+          mkdir -p board/obj
+          scons --minimal -j2 board/obj/panda_h7.bin.signed 2>&1 | tee h7-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: buffer-review-h7-development-not-qualified
+          path: |
+            panda/h7-build.log
+            panda/board/obj/panda_h7.bin.signed
+            panda/board/obj/version
+      - name: Record scope
+        if: always()
+        run: echo 'Development build only. Authority/angle enforcement and OEM warnings remain unresolved. No release, OTA, vehicle installation or road qualification.' >> "$GITHUB_STEP_SUMMARY"

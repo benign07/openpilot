@@ -1,0 +1,118 @@
+LX3: stock-derived buffered-forwarding correction and authority work boundary
+2026-10-07 — PC review candidate, not a vehicle update
+
+Reference and intent
+--------------------
+Baseline a0aa2282 retains the September 27 restored 0627 control path.
+The checked ajouatom/carrot-wip reference is
+9fc06dcd6094ccc88dc9006c67e9863c0071dcb7 (2026-10-07 fetch).
+Its safety/heartbeat files are unchanged from the previously inspected eb5bbf27.
+Keep stock Carrot's control/MDPS/driver-yielding architecture. Carry verified
+stock improvements separately from LX3-specific authorization corrections.
+Stock provenance is not by itself proof that a change solves the LX3 problem.
+
+Implemented now
+---------------
+Reject disallowed address/bus/length and relay-fault TX before invoking a
+stateful per-car hook. Previously safety_tx_hook computed the outer rejection,
+still ran the hook, and only combined the results afterward. A wrong-length CB
+was rejected to its caller yet buffered and later forwarded; a wrong-bus SCC
+could set controls_allowed despite rejection. Both are reproduced in actual C.
+The dispatcher now short-circuits those rejected inputs before any hook side
+effects. Existing all-output/ELM327 exceptions are retained; valid admitted
+frames still use the same hooks. This fixes outer rejection, not every possible
+side effect of a frame rejected inside a per-car hook.
+
+The old two-entry buffered-forward FIFO silently discarded a newly accepted
+host command when full. A new inactive CB command could therefore be lost.
+Port the upstream drop-oldest/retain-newest logic in canfd_bfwd_push only.
+The ring remains two entries, starts with one entry, and permits two reuses.
+This retains a pending release; it does NOT preempt all earlier queued commands
+or guarantee an immediate stop on authorization loss.
+
+Do not copy the complete upstream six-entry/start-at-two policy in this patch.
+An exact-upstream C counterexample drains an active queue, enqueues one inactive
+command, then receives the next OEM frame. The two-entry start threshold causes
+the stored active command to be reused instead of the pending inactive command.
+Keeping immediate single-entry consumption avoids adding that refill delay.
+Larger queues also change maximum queued command age. No new age limit or angle
+limit is inferred from the queue regression.
+
+Both negative witnesses use unchanged archived production safety headers and
+the same C test source. The first fixture builds needed a missing board-glue
+symbol and an upstream mock putui compatibility adjustment; those compile
+errors are not counted as behavioral witnesses. Corrected builds fail the
+targeted assertions, while the candidate passes. Original evidence is private.
+
+Tests and limits
+----------------
+test_hyundai_canfd_buffer.c includes the actual production safety implementation.
+It covers full-ring release retention, initial/refill timing, bounded reuse,
+reset, ring wrap, invalid target/deep copy, actual forwarding counter/CRC,
+rejected TX not evicting accepted commands or being forwarded later, rejected
+SCC not granting permission, existing special policy exceptions, and 17 profile
+initializations with all six rings. Profile initialization is not per-vehicle
+functional validation.
+tools/check_hyundai_canfd_buffer.py records source hashes and build/run output.
+The CI workflow builds the tests with GCC and Clang/UBSan and builds the actual
+H7 development firmware. A workflow definition is not a completed CI result.
+This change does not alter the health-packet ABI, heartbeat, DBC, Python controls,
+MDPS rewrite, driver torque yielding, or HUD download/diagnostic API.
+
+Root correction contract — not implemented by this queue patch
+--------------------------------------------------------------
+1. Real bus0/0x10B input must be interpreted by the LX3 native policy as well
+   as the host. 0x1AA remains a compatibility input for other cars. A physical
+   button edge is intent, not proof that required RX/speed/angle health is good.
+   The LX3 MAIN raw8 debounce, neutral startup, short versus long LFA presses,
+   held buttons across restart, and simultaneous inputs need real-data replay.
+2. LFA-only and SCC+LFA need distinguishable permissions. A host acceleration
+   request or SCC TX mode must not independently grant LX3 permission. A single
+   overall enabled flag cannot describe which actuator is authorized.
+3. Host state, pandad heartbeat and native permission expiration must agree.
+   Merely OR-ing latActive into the heartbeat can keep stale longitudinal
+   permission alive. Current 0xF3 accepts exactly value 1 as engaged; encoding
+   additional bits without matching receiver/version handling is not compatible.
+   Do not change the health ABI or invent a protocol without a paired test.
+4. An active CB must be checked at admission AND when released from the queue.
+   Revocation must invalidate queued and reusable active commands. The forwarding
+   call bypasses the ordinary TX hook, so enqueue checks alone are insufficient.
+   Angle/rate/driver-yield limits require LX3 feedback and units validation;
+   another car's constants are not acceptable proof of safe LX3 limits.
+5. OEM handover must explicitly distinguish preserved status/sensor traffic from
+   actuator commands. Blocking the whole ADAS bus loses required information.
+   Clearing a host queue can expose active OEM fallback; that is not equivalent
+   to proving all steering is off. No fabricated MDPS, warning masking, synthetic
+   buttons or CAN grant messages are introduced as a fix.
+6. Stock driver steering coexistence is retained. Pedal/AutoEngage/AutoCruise/
+   LfaButtonMode and host suspension behavior must be enumerated before native
+   short-press toggles or a brake policy are imposed. Do not silently change
+   their meanings in one layer while leaving the other unchanged.
+
+Acceptance scenarios for the paired authority correction
+--------------------------------------------------------
+- Healthy RX alone, host nonzero accel alone, and rejected TX cannot grant.
+- Invalid/stale RX, a held boot-time button, or old cached intent cannot grant.
+- Physical LFA short press grants only the intended lateral function; its long
+  press settings action and another LFA press retain their stock semantics.
+- Physical cruise engagement and cancellation keep host/native axis states in
+  agreement, including stock auto-resume policy and driver intervention.
+- LFA-only remains distinguishable from a dead host or stopped longitudinal
+  controller; stale heartbeats revoke the relevant permission.
+- Revocation between enqueue and forwarding cannot release an old active frame.
+- Off/on bursts, missing host packets and OEM fallback are separately observable.
+- No physical CAN TX, firmware/ABI mismatch, or source-only OTA is used to test
+  an incomplete authority policy. First reproduce with production C and logs.
+
+Still unresolved
+----------------
+The restored grant from otherwise admitted host SCC/accel, enabled-only heartbeat
+and unchecked active-CB forwarding
+are deliberately NOT claimed fixed by the ring change. The original 14 C probes
+still reproduce them. They establish existing behavior, not safety acceptance.
+The OEM LSS/MDPS warning cause remains unproven; its first observed rise was while
+Panda permission was true. RX plus bus128 TX echo is not evidence of duplicate
+physical transmission, and TX echo is not an ECU acknowledgment/torque reading.
+No vehicle installation, OTA release, health-packet version change or road
+qualification is part of this PC patch. Native firmware needs a separate,
+verified deployment; Carrot HUD's Python source bundle cannot carry this change.
