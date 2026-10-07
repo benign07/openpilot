@@ -137,6 +137,18 @@ class TestLx3Authority(unittest.TestCase):
     self.assertEqual(CC.lx3Authority.pendingGeneration, 0)
     self.assertFalse(authority.monitor_lateral(CS.lx3Authority))
 
+  def test_transient_freshness_failure_stops_output_without_latching_lfa_off(self):
+    CS = self.state(1)
+    CC, active = self.control(CS, fresh=False)
+    self.assertEqual(active, (False, False))
+    self.assertEqual(CC.lx3Authority.intent, 0)
+    self.assertFalse(CC.lx3Authority.lateralRefused)
+    self.assertEqual(self.control(CS)[1], (True, False))
+    fault = self.log.OnroadEvent.new_message(name='driverDistracted3', warning=True)
+    CC, active = self.control(CS, events=[fault])
+    self.assertFalse(active[0])
+    self.assertTrue(CC.lx3Authority.lateralRefused)  # A real fault is still latched.
+
   def test_independent_citations_in_two_heartbeats(self):
     CS = self.state()
     a = CS.lx3Authority

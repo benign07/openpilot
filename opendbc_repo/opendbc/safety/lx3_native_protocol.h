@@ -13,6 +13,8 @@ static uint16_t lx3_long_ms_accepted;
 static uint16_t lx3_revision_staged;
 static uint8_t lx3_stage_parts;
 static uint32_t lx3_stage_us;
+static bool lx3_refuse_active;
+static uint32_t lx3_refused_sequence;
 
 static inline void lx3_protocol_reset(void) {
   lx3_epoch_staged = 0U;
@@ -27,6 +29,8 @@ static inline void lx3_protocol_reset(void) {
   lx3_revision_staged = 0U;
   lx3_stage_parts = 0U;
   lx3_stage_us = 0U;
+  lx3_refuse_active = false;
+  lx3_refused_sequence = 0U;
 }
 
 static inline lx3_status_t lx3_native_status(void) {
@@ -45,6 +49,7 @@ static inline lx3_status_t lx3_native_status(void) {
   s.longitudinal_generation = lx3_auth.longitudinal_generation;
   s.epoch = lx3_auth.epoch;
   s.sequence = lx3_sequence_accepted;
+  s.refused_sequence = lx3_refused_sequence;
   s.config = lx3_config_accepted;
   s.lfa_long_ms = lx3_long_ms_accepted;
   s.oem_lateral_passthrough = lx3_oem_lat_count;
@@ -138,11 +143,17 @@ static inline void lx3_native_control(uint8_t request, uint16_t value, uint16_t 
     const uint8_t button = kind == 1U ? 128U : kind == 2U ? 8U : kind == 3U ? 1U : kind == 4U ? 2U : 0U;
     const uint16_t key = ((uint16_t)button << 8U) | (value >> 8U);
     const uint8_t previous = lx3_auth.allowed;
-    if ((value & 8U) != 0U) {
+    const bool refuse = (value & 8U) != 0U;
+    if (refuse && !lx3_refuse_active) {
       // The host refused a pending engagement. Do not leave an unaccepted
       // longitudinal session armed for a later automatic resume.
-      lx3_authority_revoke(&lx3_auth, LX3_LONG, LX3_REASON_HOST_OFF, true);
+      // Apply once per refusal episode. Independent LAT gestures and physical
+      // retries received after this acknowledgement must not be erased by
+      // repetitions of the same host refusal while IPC catches up.
+      lx3_authority_revoke_scoped(&lx3_auth, LX3_LONG, LX3_REASON_HOST_OFF, true, LX3_LONG);
+      lx3_refused_sequence = lx3_sequence_accepted;
     }
+    lx3_refuse_active = refuse;
     (void)lx3_authority_heartbeat(&lx3_auth, now, lx3_auth.epoch, value & 3U, index, key,
       (value & 4U) != 0U, lx3_native_healthy(), brake_pressed, gas_pressed, lx3_revision_staged);
     if (previous != lx3_auth.allowed) lx3_native_purge(previous & (uint8_t)~lx3_auth.allowed);

@@ -235,6 +235,7 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
       a.setLongPendingKey(s.long_pending_key); a.setLongPendingGeneration(s.long_pending_generation);
       a.setLongPendingAgeMs(s.long_pending_age_ms);
       a.setPendingAxes(s.pending_axes); a.setLongPendingAxes(s.long_pending_axes);
+      a.setRefusedSequence(s.refused_sequence);
       ps.setControlsAllowed((s.allowed & 2U) != 0U);
       ps.setControlsAllowedRESERVED1((s.allowed & 1U) != 0U);
       ps.setControlsAllowedRESERVED2((s.allowed & 2U) != 0U);

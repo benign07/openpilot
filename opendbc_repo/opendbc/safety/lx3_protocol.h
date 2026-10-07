@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 #define LX3_PROTOCOL_VERSION 3U
-#define LX3_STATUS_SIZE 58U
+#define LX3_STATUS_SIZE 62U
 #define LX3_STATUS_REQUEST 0xC7U
 #define LX3_EPOCH_HIGH_REQUEST 0xC8U
 #define LX3_EPOCH_LOW_REQUEST 0xC9U
@@ -42,6 +42,7 @@ typedef struct __attribute__((packed)) {
   uint16_t long_pending_age_ms;
   uint8_t pending_axes;
   uint8_t long_pending_axes;
+  uint32_t refused_sequence;  // First applied STATE of the current/last refusal.
 } lx3_status_t;
 
 static inline bool lx3_status_valid(const lx3_status_t *s, int bytes) {

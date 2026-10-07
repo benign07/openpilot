@@ -10,7 +10,7 @@ Scope:
   Native pending per axis survives separate LFA/SET gestures; MAIN debounce does
   not revoke a later RES grant. Boot AutoEngage alone is not physical permission.
 - Versioned paired STATE/epoch transport; universal health v16/CAN v4 retained.
-  The v3 companion is 58 bytes; expected/actual size is logged on mismatch.
+  The v3 companion is 62 bytes; expected/actual size is logged on mismatch.
   controlsAllowed means longitudinal; lateral permission is explicitly reported.
 - Admission, OEM-triggered buffered replacement and pre-TXBAR software queue
   checks reject active commands with stale epoch, generation or age.
@@ -25,6 +25,9 @@ Scope:
   an acknowledged, current-generation grant completes the regular state change.
   Refusal stays asserted until a newer native acknowledgement. A pedal or
   Carrot's internal pause preserves resume eligibility; faults do not.
+  An explicit refusal acknowledgement applies only to its LONG episode and
+  cannot erase independent LFA gestures or later physical retries. A held
+  brake at standstill cannot turn expired RES into a session-disarming fault.
 - Carrot commits automatic hold only after accepted engagement. A real MAIN,
   RES or SET supersedes a pending auto request and cannot inherit its hold.
 - LX3 angle startup waits visibly when the measured angle is outside the

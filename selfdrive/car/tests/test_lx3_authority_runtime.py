@@ -43,7 +43,7 @@ class Status(ct.LittleEndianStructure):
     (ct.c_uint64, 'epoch'), (ct.c_uint32, 'sequence'), (ct.c_uint16, 'config longPressMs'),
     (ct.c_uint32, 'oemLateralPassthrough oemLongitudinalPassthrough'),
     (ct.c_uint16, 'heartbeatAgeMs inputReady lateralRevision longitudinalRevision oemEmergency longPendingKey longPendingGeneration longPendingAgeMs'),
-    (ct.c_uint8, 'pendingAxes longPendingAxes')
+    (ct.c_uint8, 'pendingAxes longPendingAxes'), (ct.c_uint32, 'refusedSequence')
   ) for n in names.split()]
 
   def message(self):
@@ -71,7 +71,7 @@ class TestLx3Runtime(unittest.TestCase):
     cls.native.fixture_status.argtypes = [ct.POINTER(Status)]
     cls.native.fixture_rx.argtypes = [ct.c_uint, ct.c_char_p, ct.c_uint]
     cls.native.fixture_tx.argtypes = [ct.c_uint, ct.c_char_p, ct.c_uint, ct.c_uint]
-    assert ct.sizeof(Status) == 58
+    assert ct.sizeof(Status) == 62
 
   @classmethod
   def tearDownClass(cls):
@@ -126,7 +126,7 @@ class TestLx3Runtime(unittest.TestCase):
   def status(self):
     s = Status(); self.native.fixture_status(ct.byref(s)); return s
 
-  def step(self, key=0, ticks=1, brake=False, gas=0, extra=(), angle=0, speed=80):
+  def step(self, key=0, ticks=1, brake=False, gas=0, extra=(), angle=0, speed=80, host_fresh=True):
     for _ in range(ticks):
       self.frame += 1; self.now += 10_000_000; self.native.fixture_time(self.now // 1000)
       frames = [self.msg('ACCELERATOR_ALT', {'ACCELERATOR_PEDAL': gas}), self.msg('TCS', {'DriverBraking': int(brake)}),
@@ -148,13 +148,17 @@ class TestLx3Runtime(unittest.TestCase):
       CS.vCruise = float(self.cruise.v_cruise_kph); CS.softHoldActive = self.cruise._soft_hold_active
       populate_car_state(CS,self.sm,self.cruise,self.params,self.now)
       events = self.car_events.update(CS,self.prev,self.CC)
-      if brake or (gas and self.params.get_bool('DisengageOnAccelerator')): events.add(EventName.pedalPressed)
+      # Same edge/standstill rule as selfdrived, including held brake in P/S&G.
+      if ((CS.gasPressed and not self.prev.gasPressed and self.params.get_bool('DisengageOnAccelerator')) or
+          (CS.brakePressed and (not self.prev.brakePressed or not CS.standstill)) or
+          (CS.regenBraking and (not self.prev.regenBraking or not CS.standstill))):
+        events.add(EventName.pedalPressed)
       for event in extra: events.add(event)
       self.handshake.update(events,CS,self.enabled,self.now)
       self.enabled,_ = self.machine.update(events)
       CC = car.CarControl.new_message(enabled=self.enabled)
       CC.latActive, CC.longActive = configure_control(CC,CS,events.to_msg(),self.enabled,
-        self.params.get_bool('AlwaysLateral'),True,True,self.now,self.handshake.request,self.handshake.refusing)
+        self.params.get_bool('AlwaysLateral'),True,host_fresh,self.now,self.handshake.request,self.handshake.refusing)
       if self.frame % 10 == 0:
         a = CC.lx3Authority
         self.native.fixture_state(a.intent,a.decisionKey,a.pendingGeneration,int(a.autoResume),a.observedLongRevision,a.config,int(a.refuseLong))
@@ -236,6 +240,39 @@ class TestLx3Runtime(unittest.TestCase):
     self.step(ticks=100)
     self.assertTrue(self.enabled)
     self.assertEqual(self.status().allowed,3)
+
+  def test_res_while_brake_held_preserves_armed_pedal_resume(self):
+    self.main(); self.step(brake=True,speed=0,ticks=300)
+    self.step(1,brake=True,speed=0,ticks=8)
+    self.step(brake=True,speed=0,ticks=110)
+    self.assertFalse(self.enabled)
+    self.assertFalse(self.handshake.refusing)
+    self.assertTrue(self.status().armed & 2)
+    self.assertFalse(self.status().allowed & 2)
+    self.step(speed=0,ticks=70)
+    self.assertTrue(self.enabled)
+    self.assertEqual(self.status().allowed,3)
+
+  def test_one_stale_host_snapshot_stops_output_without_lfa_toggle(self):
+    self.lfa(); self.assertEqual(self.frame % 10,8)
+    self.step(host_fresh=False)
+    self.assertFalse(self.CC.latActive)
+    self.assertFalse(self.CC.lx3Authority.lateralRefused)
+    self.step(ticks=3)
+    self.assertTrue(self.CS.latEnabled)
+    self.assertTrue(self.CC.latActive)
+
+  def test_lfa_received_during_long_refusal_is_independent(self):
+    self.step(8,ticks=8); self.step(ticks=32)
+    self.step(extra=(EventName.seatbeltNotLatched,))
+    self.assertTrue(self.handshake.refusing)
+    # The real fault clears the ungranted MAIN lateral request. This fresh
+    # LFA release arrives before the first refusal STATE at frame 270.
+    self.step(128,ticks=3); self.step(ticks=44)
+    self.assertFalse(self.enabled)
+    self.assertEqual(self.status().allowed,1)
+    self.assertFalse(self.handshake.refusing)
+    self.assertGreater(self.status().refusedSequence,0)
 
   def test_lfa_brake_and_rejected_press_need_one_press(self):
     self.params.put_bool('AlwaysLateral',False); self.lfa(); self.step(brake=True,ticks=15)

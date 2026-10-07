@@ -119,5 +119,8 @@ def configure_control(CC, CS, events, enabled, always_lateral, driving, fresh, n
                    bool(a.armed & LONG) and lateral_events_clear(events, True))
   # Do not resurrect a rejected pending LFA request when a short fault clears
   # before its citation expires. Keep full-session pedal resume as a suspend.
-  a.lateralRefused = bool(CS.latEnabled and not lat and not pedal_suspend)
+  # A short freshness gap immediately makes output/intent inactive, but only
+  # an actual evaluated refusal latches the driver's request off. A sustained
+  # gap still revokes through the normal native heartbeat/host-off path.
+  a.lateralRefused = bool(CS.latEnabled and ready and not lat and not pedal_suspend)
   return bool(lat and a.allowed & LAT and not a.oemEmergency), bool(long and a.allowed & LONG)

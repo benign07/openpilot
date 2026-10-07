@@ -240,7 +240,32 @@ static void initial_angle_history(void) {
   puts("PASS real MDPS history aligns lagged first command without widening steady-state rate");
 }
 
+static void refusal_preserves_unrelated_gestures(void) {
+  reset(); lfa();
+  const uint16_t lat_key=lx3_auth.pending_key, lat_gen=lx3_auth.pending_generation;
+  rx_tick(2U,false,false); rx_tick(0U,false,false);
+  state_refuse=true; state(0U,0U,0U,false,0U);
+  const uint32_t first_refusal=sequence;
+  assert(lx3_native_status().refused_sequence==first_refusal);
+  assert(lx3_auth.pending_axis_generation[0]==lat_gen);
+  assert(lx3_auth.pending_axis_generation[1]==0U && !lx3_auth.longitudinal_armed);
+  // A new physical retry after the refusal must survive later copies of that
+  // same refusal while the host waits for the explicit acknowledgement.
+  rx_tick(1U,false,false); rx_tick(0U,false,false);
+  const uint16_t long_key=lx3_auth.pending_axis_key[1], long_gen=lx3_auth.pending_axis_generation[1];
+  state(LX3_LAT,lat_key,lat_gen,false,lx3_auth.longitudinal_revision);
+  assert(lx3_native_status().refused_sequence==first_refusal);
+  assert(lx3_auth.allowed==LX3_LAT && lx3_auth.pending_axis_generation[1]==long_gen);
+  state_refuse=false; state(LX3_ALL,long_key,long_gen,false,lx3_auth.longitudinal_revision);
+  assert(lx3_auth.allowed==LX3_ALL);
+  state_refuse=true; state(LX3_LAT,0U,0U,false,lx3_auth.longitudinal_revision);
+  assert(lx3_auth.allowed==LX3_LAT && !lx3_auth.longitudinal_armed);
+  assert(lx3_native_status().refused_sequence>first_refusal);
+  puts("PASS longitudinal refusal preserves independent LFA and post-refusal physical retry");
+}
+
 int main(void) {
+  refusal_preserves_unrelated_gestures();
   brake_res_and_lateral_only(); initial_angle_history();
   physical_grant_and_final_revoke(); separate_pending_and_main_tail(); input_and_transport_failures();
   pedal_revision_and_epoch(); emergency_and_corrupt_original(); stale_head_and_limit_recovery();

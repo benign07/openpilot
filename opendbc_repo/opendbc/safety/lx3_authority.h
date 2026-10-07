@@ -93,7 +93,7 @@ static inline uint16_t lx3_authority_next(lx3_authority_t *s) {
   return ++s->sequence;
 }
 
-static inline void lx3_authority_revoke(lx3_authority_t *s, uint8_t axes, uint8_t reason, bool disarm) {
+static inline void lx3_authority_revoke_scoped(lx3_authority_t *s, uint8_t axes, uint8_t reason, bool disarm, uint8_t pending_axes) {
   if ((((s->allowed | s->pending_axes) & axes) != 0U) ||
       (((axes & LX3_LONG) != 0U) && s->longitudinal_armed) || (((axes & LX3_LAT) != 0U) && s->lateral_armed)) {
     const uint16_t revision = lx3_authority_next(s);
@@ -105,9 +105,15 @@ static inline void lx3_authority_revoke(lx3_authority_t *s, uint8_t axes, uint8_
   if ((axes & LX3_LONG) != 0U) { s->longitudinal_generation = 0U; s->longitudinal_key = 0U; }
   if (disarm && ((axes & LX3_LONG) != 0U)) s->longitudinal_armed = false;
   if (disarm && ((axes & LX3_LAT) != 0U)) s->lateral_armed = false;
-  // No gesture observed before a revocation can subsequently restore an axis.
-  lx3_authority_pending_clear(s);
+  for (unsigned i = 0U; i < 2U; i++) if ((pending_axes & (1U << i)) != 0U) s->pending_axis_generation[i] = 0U;
+  lx3_authority_pending_refresh(s);
   s->reason = reason;
+}
+
+static inline void lx3_authority_revoke(lx3_authority_t *s, uint8_t axes, uint8_t reason, bool disarm) {
+  // Physical cancellation, input faults and expired leases invalidate every
+  // older gesture. Only an explicit host LONG refusal uses axis-local pending.
+  lx3_authority_revoke_scoped(s, axes, reason, disarm, LX3_ALL);
 }
 
 static inline void lx3_authority_maintain(lx3_authority_t *s, uint32_t now, bool input_healthy) {

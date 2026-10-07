@@ -866,6 +866,7 @@ struct Lx3Authority {
   pendingAxes @36 :UInt8;
   longPendingAxes @37 :UInt8;
   refuseLong @38 :Bool;
+  refusedSequence @39 :UInt32;
 }
 
 struct Lx3TxIdentity {
