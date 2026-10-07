@@ -50,6 +50,7 @@ private:
   bool lx3_guard_ = false;
   uint64_t lx3_epoch_ = 0;
   uint32_t lx3_sequence_ = 0;
+  bool seal_lx3_epoch();
 
 public:
   Panda(std::string serial);

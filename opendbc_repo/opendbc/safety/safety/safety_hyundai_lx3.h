@@ -54,7 +54,7 @@ typedef struct {
 static lx3_envelope_t lx3_admit_envelope;
 static lx3_envelope_t lx3_final_envelope;
 static bool lx3_packet_active(const CANPacket_t *p);
-static unsigned lx3_limit_rejections;
+static unsigned lx3_limit_rejections[2];
 
 static void lx3_purge_active_slot(CanfdBufferedFwd *st) {
   CANPacket_t retained[CANFD_BFWD_MAX_QUEUE];
@@ -78,7 +78,8 @@ static void lx3_native_purge(uint8_t axes) {
   if ((axes & LX3_LAT) != 0U) {
     lx3_admit_envelope = (lx3_envelope_t){0};
     lx3_final_envelope = (lx3_envelope_t){0};
-    lx3_limit_rejections = 0U;
+    lx3_limit_rejections[0] = 0U;
+    lx3_limit_rejections[1] = 0U;
   }
 }
 
@@ -245,9 +246,10 @@ static bool lx3_native_packet(const CANPacket_t *p, const lx3_queue_stamp_t *sta
   if (!tagged || !lx3_packet_shape(p, permitted)) return false;
   if ((GET_ADDR(p) == 0xCB) && lx3_packet_active(p)) {
     const bool ok = lx3_angle_envelope(p, final ? &lx3_final_envelope : &lx3_admit_envelope, commit);
-    if (commit) {
-      lx3_limit_rejections = ok ? 0U : lx3_limit_rejections + 1U;
-      if (lx3_limit_rejections >= 3U) {
+    if (commit || !ok) {
+      const unsigned at = final ? 1U : 0U;
+      lx3_limit_rejections[at] = ok ? 0U : lx3_limit_rejections[at] + 1U;
+      if (lx3_limit_rejections[at] >= 3U) {
         lx3_authority_revoke(&lx3_auth, LX3_LAT, LX3_REASON_LIMIT, true);
         lx3_native_purge(LX3_LAT);
         lx3_native_maintain();
@@ -257,7 +259,7 @@ static bool lx3_native_packet(const CANPacket_t *p, const lx3_queue_stamp_t *sta
   }
   if ((GET_ADDR(p) == 0xCB) && commit) {
     *(final ? &lx3_final_envelope : &lx3_admit_envelope) = (lx3_envelope_t){0};
-    lx3_limit_rejections = 0U;
+    lx3_limit_rejections[final ? 1U : 0U] = 0U;
   }
   return true;
 }

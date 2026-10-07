@@ -57,20 +57,25 @@ void Panda::set_safety_model(cereal::CarParams::SafetyModel safety_model, uint16
       handle->control_write(0xdc, (uint16_t)cereal::CarParams::SafetyModel::NO_OUTPUT, 0);
       return;
     }
-    std::random_device random;
-    uint64_t epoch = 0;
-    do { epoch = (uint64_t(random()) << 32U) | uint64_t(random()); } while (epoch == 0U);
-    handle->control_write(LX3_EPOCH_HIGH_REQUEST, epoch >> 48U, epoch >> 32U);
-    handle->control_write(LX3_EPOCH_LOW_REQUEST, epoch >> 16U, epoch);
-    const auto sealed = get_lx3_status();
-    if (!sealed || sealed->epoch != epoch) {
+    if (!seal_lx3_epoch()) {
       LOGE("LX3 authority transport incarnation failed");
       handle->control_write(0xdc, (uint16_t)cereal::CarParams::SafetyModel::NO_OUTPUT, 0);
       return;
     }
     lx3_guard_ = true;
-    lx3_epoch_ = epoch;
   }
+}
+
+bool Panda::seal_lx3_epoch() {
+  std::random_device random;
+  uint64_t epoch = 0;
+  do { epoch = (uint64_t(random()) << 32U) | uint64_t(random()); } while (epoch == 0U);
+  handle->control_write(LX3_EPOCH_HIGH_REQUEST, uint16_t(epoch >> 48U), uint16_t(epoch >> 32U));
+  handle->control_write(LX3_EPOCH_LOW_REQUEST, uint16_t(epoch >> 16U), uint16_t(epoch));
+  const auto sealed = get_lx3_status();
+  if (!sealed || sealed->profile != 1U || sealed->epoch != epoch || sealed->allowed != 0U) return false;
+  lx3_epoch_ = epoch; lx3_sequence_ = 0;
+  return true;
 }
 
 std::optional<lx3_status_t> Panda::get_lx3_status() {
@@ -106,6 +111,11 @@ void Panda::send_lx3_state(cereal::Lx3Authority::Reader a, bool fresh) {
     reinterpret_cast<unsigned char*>(&status), sizeof(status));
   if (!lx3_status_valid(&status, n) || status.epoch != lx3_epoch_ || status.sequence != sequence) {
     LOGE("LX3 STATE not acknowledged");
+    if (lx3_status_valid(&status, n) && status.profile == 1U && status.epoch == 0U) {
+      // A comms/mode reset invalidated all queued identities. Establish a new
+      // session only; old host intent still cannot cite a new physical event.
+      if (!seal_lx3_epoch()) set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
+    }
   }
 }
 

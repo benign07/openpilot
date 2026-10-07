@@ -39,7 +39,7 @@ static inline lx3_status_t lx3_native_status(void) {
   s.reason = lx3_auth.reason;
   s.pending_key = lx3_auth.pending_key;
   s.pending_generation = lx3_auth.pending_axes != 0U ? lx3_auth.pending_generation : 0U;
-  s.pending_age_ms = MIN((microsecond_timer_get() - lx3_auth.pending_us) / 1000U, UINT16_MAX);
+  s.pending_age_ms = MIN((microsecond_timer_get() - lx3_auth.pending_us) / 1000U, (uint32_t)UINT16_MAX);
   s.lateral_generation = lx3_auth.lateral_generation;
   s.longitudinal_generation = lx3_auth.longitudinal_generation;
   s.epoch = lx3_auth.epoch;
@@ -48,7 +48,7 @@ static inline lx3_status_t lx3_native_status(void) {
   s.lfa_long_ms = lx3_long_ms_accepted;
   s.oem_lateral_passthrough = lx3_oem_lat_count;
   s.oem_longitudinal_passthrough = lx3_oem_long_count;
-  s.heartbeat_age_ms = lx3_auth.heartbeat_seen ? MIN((microsecond_timer_get() - lx3_auth.heartbeat_us) / 1000U, UINT16_MAX) : UINT16_MAX;
+  s.heartbeat_age_ms = lx3_auth.heartbeat_seen ? MIN((microsecond_timer_get() - lx3_auth.heartbeat_us) / 1000U, (uint32_t)UINT16_MAX) : (uint32_t)UINT16_MAX;
   s.input_ready = lx3_native_healthy();
   s.lateral_revision = lx3_auth.lateral_revision;
   s.longitudinal_revision = lx3_auth.longitudinal_revision;
