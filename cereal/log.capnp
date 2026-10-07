@@ -161,6 +161,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     soundsUnavailableDEPRECATED @47;
     lx3AuthorityDenied @123;
     lx3MonitoringRequired @124;
+    lx3SteeringLimited @125;
   }
 }
 

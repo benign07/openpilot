@@ -1086,6 +1086,9 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("운전자 모니터링을 확인하세요"),
     ET.PERMANENT: NormalPermanentAlert("LX3 운전자 모니터링 필요", "모니터링 설정과 카메라 상태를 확인하세요"),
   },
+  EventName.lx3SteeringLimited: {
+    ET.PERMANENT: NormalPermanentAlert("조향 보조 시작 대기", "현재 조향각을 줄여 주세요"),
+  },
   EventName.stopStop: {
      ET.WARNING: EngagementAlert(AudibleAlert.stopStop),
   },

@@ -261,6 +261,7 @@ struct CarState {
   rightRearLatDist @80 :Float32; # rear-right corner radar lateral distance
   trailerConnected @81 :Bool; # trailer connection state after disconnect debounce
   lx3Authority @82 :Lx3Authority;
+  lx3SteeringLimited @83 :Bool;
 
   struct Tpms {
     fl @0 :Float32;
@@ -425,6 +426,7 @@ struct CarControl {
 
     jerk @9: Float32;  # m/s^3
     aTarget @10: Float32;  # m/s^2
+    lx3AngleLimited @11 :Bool;
 
     enum LongControlState @0xe40f3a917d908282{
       off @0;

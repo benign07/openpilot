@@ -7,13 +7,14 @@ No vehicle, USB transport, model inference or closed-loop dynamics is simulated.
 import binascii
 from collections import defaultdict
 import ctypes as ct
+import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from cereal import car, log
+from cereal import car, log, custom
 from opendbc.can.packer import CANPacker
 from opendbc.car import Bus
 from opendbc.car.hyundai.interface import CarInterface
@@ -79,7 +80,7 @@ class TestLx3Runtime(unittest.TestCase):
     values = {'HyundaiCameraSCC': 1, 'CanfdHDA2': 1, 'AutoCruiseControl': 2, 'AutoEngage': 2,
               'LfaButtonMode': 0, 'CancelButtonMode': 0, 'CruiseButtonLongDelay': 40, 'CruiseSpeedUnit': 10,
               'CruiseSpeedUnitBasic': 1, 'CruiseButtonMode': 2, 'AutoGasTokSpeed': 30, 'AutoGasCancelSpeed': 30,
-              'LongitudinalPersonalityMax': 4, 'MaxAngleFrames': 89, 'UseLaneLineSpeed': 40}
+              'LongitudinalPersonalityMax': 4, 'MaxAngleFrames': 89, 'UseLaneLineSpeed': 40, 'HDPuse': 0}
     for k, v in values.items(): self.params.put_int(k, v)
     self.params.put_bool('ControlsReady', True); self.params.put_bool('AlwaysLateral', True)
     fp = {i: {} for i in range(8)}
@@ -94,11 +95,20 @@ class TestLx3Runtime(unittest.TestCase):
     self.machine = StateMachine(); self.handshake = Lx3Engagement(); self.sm = Messages()
     self.prev = car.CarState.new_message(); self.CC = self.sm['carControl']; self.CS = self.prev
     self.now = 2_000_000_000; self.frame = 0; self.counters = defaultdict(int)
-    self.enabled = False; self.trace = []; self.native.fixture_init()
+    self.enabled = False; self.trace = []; self.details = []; self.native.fixture_init()
     self.gear = next(k for k,v in self.CI.CS.shifter_values.items() if v == 'D')
     self.step(0, ticks=220)
     self.assertFalse(self.enabled)
     self.assertFalse(self.CS.latEnabled)  # AutoEngage preference cannot grant at boot.
+
+  def tearDown(self):
+    # Include state transitions, not just the final assertion, in CI evidence.
+    previous = None
+    for row in self.details:
+      state = {k:v for k,v in row.items() if k != 'frame'}
+      if state != previous:
+        print('TRACE', self._testMethodName, json.dumps(row, sort_keys=True))
+        previous = state
 
   def msg(self, name, values, bus=0):
     address, raw, _ = self.packer.make_can_msg(name, bus, values)
@@ -149,6 +159,13 @@ class TestLx3Runtime(unittest.TestCase):
         self.sm['pandaStates']=[ps]; self.sm.alive['pandaStates']=self.sm.valid['pandaStates']=True
         self.sm.logMonoTime['pandaStates']=self.now
       self.trace.append((self.frame,self.enabled,self.status().allowed,self.handshake.request,tuple(events.names)))
+      s=self.status()
+      self.details.append({'frame':self.frame,'enabled':self.enabled,'native':s.allowed,'armed':s.armed,'reason':s.reason,
+        'hostIntent':CC.lx3Authority.intent,'hostLat':CS.latEnabled,'latKey':CS.lx3Authority.lateralDecisionKey,
+        'longKey':CS.lx3Authority.longitudinalDecisionKey,'pending':s.pendingKey,'generation':s.pendingGeneration,
+        'request':self.handshake.request,'refuse':self.handshake.refusing,'auto':CS.lx3Authority.autoResume,
+        'activate':CS.activateCruise,'blocked':self.cruise.lx3_auto_blocked,'carrotLog':self.cruise.log,
+        'gear':str(CS.gearShifter),'events':list(events.names),'mode':self.cruise._lfa_button_mode})
       self.CC=CC; self.CS=CS; self.prev=CS.as_reader(); self.sm['carControl']=CC
     return self.CS
 
@@ -205,7 +222,7 @@ class TestLx3Runtime(unittest.TestCase):
   def test_auto_without_physical_arm_and_remote_cannot_enable(self):
     self.step(brake=True,ticks=8); self.step(ticks=250)
     self.assertFalse(self.enabled); self.assertEqual(self.status().allowed,0)
-    self.sm['carrotMan']=log.CarrotMan.new_message(carrotCmdIndex=1,carrotCmd='CRUISE',carrotArg='ON')
+    self.sm['carrotMan']=custom.CarrotMan.new_message(carrotCmdIndex=1,carrotCmd='CRUISE',carrotArg='ON')
     self.sm.alive['carrotMan']=True; self.step(ticks=250)
     self.assertFalse(self.enabled); self.assertEqual(self.status().allowed,0)
     self.assertTrue(all(EventName.controlsMismatch not in e for *_,e in self.trace))

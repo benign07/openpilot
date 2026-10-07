@@ -129,6 +129,7 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
     # emergency indication. Preserve the actual OEM source, not a host copy.
     return ret
 
+  angle_active = lat_active if uses_lx3_authority(CP) else CC.latActive
   if angle_control:
     if CS.lfa_alt is not None:
       values = copy.copy(CS.lfa_alt)
@@ -137,9 +138,9 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
         pass
       else:
         #values = {} #CS.lfa_alt
-        values["LKAS_ANGLE_ACTIVE"] = 2 if CC.latActive else 1
+        values["LKAS_ANGLE_ACTIVE"] = 2 if angle_active else 1
         values["LKAS_ANGLE_CMD"] = -apply_angle
-        values["LKAS_ANGLE_MAX_TORQUE"] = max_torque if CC.latActive else 0
+        values["LKAS_ANGLE_MAX_TORQUE"] = max_torque if angle_active else 0
       ret.append(packer.make_can_msg("LFA_ALT", CAN.ECAN, values, rx_counter = rx_counter))
 
     if CS.lfa is not None:
@@ -147,12 +148,12 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
       rx_counter = values.pop("COUNTER", None)
       if not emergency_steering:
         values["LKA_MODE"] = 0
-        values["LKA_ICON"] = 2 if CC.latActive else 1
+        values["LKA_ICON"] = 2 if angle_active else 1
         values["TORQUE_REQUEST"] = -1024  # apply_steer,
         values["VALUE63"] = 0 # LKA_ASSIST
         values["STEER_REQ"] = 0  # 1 if lat_active else 0,
         values["HAS_LANE_SAFETY"] = 0  # hide LKAS settings
-        values["LKA_ACTIVE"] = 3 if CC.latActive else 0  # this changes sometimes, 3 seems to indicate engaged
+        values["LKA_ACTIVE"] = 3 if angle_active else 0  # this changes sometimes, 3 seems to indicate engaged
         values["VALUE64"] = 0  #STEER_MODE, NEW_SIGNAL_2
         values["LKAS_ANGLE_CMD"] = -25.6 #-apply_angle,
         values["LKAS_ANGLE_ACTIVE"] = 0 #2 if lat_active else 1,

@@ -207,6 +207,8 @@ class SelfdriveD:
         self.events.add(EventName.lx3MonitoringRequired)
       if CS.lx3Authority.lateralRefused:
         self.events.add(EventName.lx3AuthorityDenied)
+      if CS.lx3SteeringLimited:
+        self.events.add(EventName.lx3SteeringLimited)
 
     # Handle DM
     if not self.CP.notCar and self.params.get_int("DisableDM") == 0:

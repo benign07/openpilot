@@ -6,6 +6,7 @@ from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS, HyundaiExtFlags
+from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.vehicle_model import VehicleModel
 
@@ -69,7 +70,7 @@ def apply_steer_angle_limits_physics(desired_sw_deg: float,
                                      wheelbase_m: float,
                                      steer_ratio: float,
                                      steer_sw_max_deg: float,
-                                     model_v2=None) -> float:
+                                     model_v2=None, limit_target_first=False) -> float:
   max_lat_accel = 8.5   # m/s^2
   max_lat_jerk  = 4.0   # m/s^3
   y_std_1s = 0.1
@@ -106,10 +107,16 @@ def apply_steer_angle_limits_physics(desired_sw_deg: float,
   )
 
   # --- rate limit ---
+  if limit_target_first:
+    # With an already active command, a shrinking acceleration envelope must
+    # not create an instantaneous angle jump. Converge toward the new envelope
+    # at the existing jerk/rate limit; never increase an existing excess.
+    target_rw = float(np.clip(target_rw, -rw_max, rw_max))
   cmd_rw = rate_limit(target_rw, last_rw, -max_drw_per_tick_deg, max_drw_per_tick_deg)
 
   # --- accel clip ---
-  cmd_rw = float(np.clip(cmd_rw, -rw_max, rw_max))
+  if not limit_target_first:
+    cmd_rw = float(np.clip(cmd_rw, -rw_max, rw_max))
 
   if not lat_active:
     cmd_rw = float(steering_sw_deg) / steer_ratio
@@ -149,6 +156,8 @@ class CarController(CarControllerBase):
     self.button_spam3 = 1
 
     self.apply_angle_last = 0
+    self.lx3_angle_active_last = False
+    self.lx3_angle_limited = False
     self.lkas_max_torque = 0
     self.angle_max_torque = 250
     self.steering_pressed_prev = False
@@ -228,13 +237,25 @@ class CarController(CarControllerBase):
       self.params.STEER_DELTA_DOWN = self.steerDeltaDown
     
     angle_control = self.CP.flags & HyundaiFlags.ANGLE_CONTROL
+    lx3_guard = uses_lx3_authority(self.CP)
+    lat_active = CC.latActive
+    self.lx3_angle_limited = False
+    if lx3_guard and lat_active and not self.lx3_angle_active_last:
+      bound = min(self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
+                  float(np.degrees(np.arctan(8.5 * self.CP.wheelbase / max(CS.out.vEgoRaw, 1.0) ** 2))) * self.CP.steerRatio)
+      # No previous actuation to preserve: wait until the *measured* wheel is
+      # inside the envelope. Do not snap to its edge when assistance starts.
+      margin = 0.5 if getattr(self, 'lx3_angle_waiting', False) else 0.0
+      self.lx3_angle_limited = abs(CS.out.steeringAngleDeg) > max(0.0, bound - margin)
+      lat_active = not self.lx3_angle_limited
+    self.lx3_angle_waiting = self.lx3_angle_limited
 
     # steering torque
     new_torque = int(round(actuators.torque * self.params.STEER_MAX))
     apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
 
     # >90 degree steering fault prevention
-    self.angle_limit_counter, apply_steer_req = common_fault_avoidance(abs(CS.out.steeringAngleDeg) >= MAX_ANGLE, CC.latActive,
+    self.angle_limit_counter, apply_steer_req = common_fault_avoidance(abs(CS.out.steeringAngleDeg) >= MAX_ANGLE, lat_active,
                                                                        self.angle_limit_counter, self.max_angle_frames,
                                                                        MAX_ANGLE_CONSECUTIVE_FRAMES)
 
@@ -246,16 +267,17 @@ class CarController(CarControllerBase):
       self.apply_angle_last,
       CS.out.vEgoRaw,
       CS.out.steeringAngleDeg,
-      CC.latActive,
+      lat_active,
       self.CP.wheelbase,
       self.CP.steerRatio,
       self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
       CS.modelV2,
+      limit_target_first=lx3_guard,
     )
 
     
     if angle_control:
-      apply_steer_req = CC.latActive
+      apply_steer_req = lat_active
 
     steering_pressed_rising = CS.out.steeringPressed and not self.steering_pressed_prev
     if steering_pressed_rising:
@@ -266,7 +288,7 @@ class CarController(CarControllerBase):
 
     torque_threshold = max(self.params.STEER_THRESHOLD, 1.0)
     driver_torque_abs = abs(float(CS.out.steeringTorque))
-    if not CC.latActive:
+    if not lat_active:
       self.driver_torque_filtered = driver_torque_abs
       self.driver_torque_filtered_prev = driver_torque_abs
     else:
@@ -283,7 +305,7 @@ class CarController(CarControllerBase):
       predicted_torque_ratio,
       [PRE_OVERRIDE_START_RATIO, 1.0],
       [0.0, 1.0],
-    )) if CC.latActive and not CS.out.steeringPressed else 0.0
+    )) if lat_active and not CS.out.steeringPressed else 0.0
     recovery_allowed = False
 
     if CS.out.steeringPressed:
@@ -340,7 +362,7 @@ class CarController(CarControllerBase):
         self.full_recovery_frames = 0
         self.repeated_override_count = 0
 
-    if not CC.latActive:
+    if not lat_active:
       apply_torque = 0
       self.lkas_max_torque = 0
       self.recovering_from_override = False
@@ -351,15 +373,16 @@ class CarController(CarControllerBase):
       self.driver_torque_filtered = 0.0
       self.driver_torque_filtered_prev = 0.0
 
-    self.steering_pressed_prev = CS.out.steeringPressed if CC.latActive else False
+    self.steering_pressed_prev = CS.out.steeringPressed if lat_active else False
 
-    if not CC.latActive:  # v22: carrot 원본만 — v15(LFA_ICON GRAY)와 v17(CC.enabled) 제거. 다중 가드가 ANGLE_CONTROL 모드에서 토크 송출 막던 문제 fix
+    if not lat_active:
         apply_torque = 0
         self.lkas_max_torque = 0
         apply_steer_req = False
         apply_angle = CS.out.steeringAngleDeg
     
     self.apply_angle_last = apply_angle
+    self.lx3_angle_active_last = lat_active
 
     # Hold torque with induced temporary fault when cutting the actuation bit
     torque_fault = CC.latActive and not apply_steer_req
@@ -530,6 +553,7 @@ class CarController(CarControllerBase):
     new_actuators.torque = apply_torque / self.params.STEER_MAX
     new_actuators.torqueOutputCan = apply_torque
     new_actuators.steeringAngleDeg = float(apply_angle)
+    new_actuators.lx3AngleLimited = self.lx3_angle_limited
     new_actuators.accel = accel
 
     self.frame += 1

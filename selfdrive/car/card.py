@@ -221,6 +221,7 @@ class Car:
     CS.carrotCruise = 1 if self.v_cruise_helper.carrot_cruise_active else 0
     if uses_lx3_authority(self.CP):
       populate_car_state(CS, self.sm, self.v_cruise_helper, self.params, time.monotonic_ns())
+      CS.lx3SteeringLimited = self.last_actuators_output.lx3AngleLimited
 
     self.CI.CS.softHoldActive = CS.softHoldActive
     return CS, RD
