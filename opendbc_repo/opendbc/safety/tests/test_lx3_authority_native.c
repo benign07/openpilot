@@ -8,10 +8,15 @@
 #include <math.h>
 #include "fake_stm.h"
 void putui(uint32_t n) { printf("%u", n); }
+#ifndef LX3_BOARD_TEST
 bool safety_tx_buffered_for_fwd;
+#else
+extern bool safety_tx_buffered_for_fwd;
+#endif
 #include "can.h"
 #include "faults.h"
 #include "safety.h"
+_Static_assert(sizeof(lx3_status_t) == LX3_STATUS_SIZE, "paired status layout");
 
 static uint8_t counters[6];
 static uint32_t sequence;
@@ -175,8 +180,25 @@ static void emergency_and_corrupt_original(void) {
   puts("PASS corrupt OEM source not repaired; actual emergency source flushes OP replacements and stays OEM");
 }
 
+static void stale_head_and_limit_recovery(void) {
+  reset(); lfa(); cite(LX3_LAT);
+  CANPacket_t active = cb(2U,25U,0), off = cb(1U,0U,0);
+  const uint16_t generation = lx3_auth.lateral_generation;
+  assert(send(&active,generation));
+  rx_tick(0U,false,false); rx_tick(0U,false,false);
+  assert(send(&off,generation)); rx_tick(0U,false,false);
+  CANPacket_t source = cb(2U,90U,0); source.bus=2U;
+  assert(safety_fwd_hook(&source)==0 && source.data[6]==0U);
+  assert(lx3_forward_stamp.origin==1U && lx3_native_final_tx(&source,&lx3_forward_stamp));
+  reset(); lfa(); cite(LX3_LAT);
+  CANPacket_t bad = cb(2U,26U,0);
+  for (unsigned i=0U;i<3U;i++) assert(!send(&bad,lx3_auth.lateral_generation));
+  assert(lx3_auth.allowed==0U && lx3_auth.reason==LX3_REASON_LIMIT);
+  puts("PASS stale buffered head retains fresh inactive follower; three envelope failures revoke with reason");
+}
+
 int main(void) {
   physical_grant_and_final_revoke(); separate_pending_and_main_tail(); input_and_transport_failures();
-  pedal_revision_and_epoch(); emergency_and_corrupt_original();
+  pedal_revision_and_epoch(); emergency_and_corrupt_original(); stale_head_and_limit_recovery();
   return 0;
 }

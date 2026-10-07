@@ -9,6 +9,7 @@ jobs:
   native-buffer:
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         compiler: [gcc, clang]
     steps:
@@ -24,6 +25,8 @@ jobs:
               opendbc_repo/opendbc/safety/tests/test_lx3_authority_${suite}.c -lm -o /tmp/lx3-${suite}
             /tmp/lx3-${suite} | tee buffer-evidence/authority-${suite}.log
           done
+      - name: Real comms, stamped software queues and pre-TXBAR with register model
+        run: python3 tools/check_lx3_board_delivery.py --compiler ${{ matrix.compiler }} --sanitize --output buffer-evidence/board-delivery
       - uses: actions/upload-artifact@v4
         if: always()
         with:

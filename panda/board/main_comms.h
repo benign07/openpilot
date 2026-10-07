@@ -77,7 +77,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
 #ifdef CANFD
     case LX3_STATUS_REQUEST:
     case LX3_STATE_REQUEST: {
-      COMPILE_TIME_ASSERT(sizeof(lx3_status_t) == 48U);
+      COMPILE_TIME_ASSERT(sizeof(lx3_status_t) == LX3_STATUS_SIZE);
       ENTER_CRITICAL();
       if (req->request == LX3_STATE_REQUEST) lx3_native_control(req->request, req->param1, req->param2);
       const lx3_status_t status = lx3_native_status();

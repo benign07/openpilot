@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #define LX3_PROTOCOL_VERSION 3U
+#define LX3_STATUS_SIZE 50U
 #define LX3_STATUS_REQUEST 0xC7U
 #define LX3_EPOCH_HIGH_REQUEST 0xC8U
 #define LX3_EPOCH_LOW_REQUEST 0xC9U
@@ -40,7 +41,7 @@ typedef struct __attribute__((packed)) {
 
 static inline bool lx3_status_valid(const lx3_status_t *s, int bytes) {
   return (s != 0) && (bytes == (int)sizeof(*s)) && (s->version == LX3_PROTOCOL_VERSION) &&
-    (s->profile <= 2U) && (s->allowed <= 3U) && (s->armed <= 1U) &&
+    (s->profile <= 2U) && (s->allowed <= 3U) && (s->armed <= 1U) && (s->input_ready <= 1U) && (s->oem_emergency <= 1U) &&
     (((s->allowed & 1U) == 0U) == (s->lateral_generation == 0U)) &&
     (((s->allowed & 2U) == 0U) == (s->longitudinal_generation == 0U));
 }

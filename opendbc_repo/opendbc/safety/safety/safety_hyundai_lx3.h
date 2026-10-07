@@ -224,7 +224,8 @@ static bool lx3_packet_shape(const CANPacket_t *p, bool permitted) {
     const unsigned stop = GET_BYTE(p, 23) & 3U;
     if (stop > 1U) return false;
     if ((mode != 0U) && (mode != 1U) && (mode != 2U) && (mode != 4U)) return false;
-    if ((raw < -400) || (raw > 250) || (val < -400) || (val > 250)) return false;
+    if ((raw < HYUNDAI_LONG_LIMITS.min_accel) || (raw > HYUNDAI_LONG_LIMITS.max_accel) ||
+        (val < HYUNDAI_LONG_LIMITS.min_accel) || (val > HYUNDAI_LONG_LIMITS.max_accel)) return false;
     if ((mode == 0U) || (mode == 4U) || (mode == 2U)) {
       if ((raw != 0) || (val != 0) || (stop != 0U)) return false;
     }

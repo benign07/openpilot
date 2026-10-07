@@ -12,6 +12,7 @@
 #include "common/util.h"
 
 const bool PANDAD_MAXOUT = getenv("PANDAD_MAXOUT") != nullptr;
+static_assert(sizeof(lx3_status_t) == LX3_STATUS_SIZE, "paired status layout");
 
 Panda::Panda(std::string serial) {
   handle = std::make_unique<PandaSpiHandle>(serial);

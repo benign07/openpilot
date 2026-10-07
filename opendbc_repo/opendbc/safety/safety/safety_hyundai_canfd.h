@@ -709,6 +709,16 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
       CANPacket_t buffered_pkt;
       bool use_buffered = canfd_bfwd_pop(bfwd, &buffered_pkt);
 
+      if (lx3_native_active() && lx3_tx_guarded_address(addr)) {
+        // A stale active head must not discard a fresh release behind it.
+        while (use_buffered && !lx3_native_packet(&buffered_pkt, &lx3_forward_stamp, true, false)) {
+          bfwd->has_last_pkt = false;
+          bfwd->reuse_left = 0U;
+          lx3_forward_stamp = (lx3_queue_stamp_t){0};
+          use_buffered = canfd_bfwd_pop(bfwd, &buffered_pkt);
+        }
+      }
+
       // queue�� ������� ������ ������ 1~2ȸ ����
       if (!use_buffered) {
         use_buffered = canfd_bfwd_reuse_last(bfwd, &buffered_pkt);
@@ -720,7 +730,8 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
       if (use_buffered) {
         if (lx3_native_active() && lx3_tx_guarded_address(addr) &&
             !lx3_native_packet(&buffered_pkt, &lx3_forward_stamp, true, false)) {
-          canfd_bfwd_reset(bfwd);
+          bfwd->has_last_pkt = false;
+          bfwd->reuse_left = 0U;
           lx3_forward_stamp = (lx3_queue_stamp_t){0};
           lx3_native_oem(to_send);
           return bus_fwd;
