@@ -42,7 +42,7 @@ class TestLx3Authority(unittest.TestCase):
     capnp.remove_import_hook()
     cls.log = capnp.load(str(d / 'log.capnp'))
     cls.car = capnp.load(str(d / 'car.capnp'))
-    with patch.dict(sys.modules, {'cereal': SimpleNamespace(log=cls.log)}):
+    with patch.dict(sys.modules, {'cereal': SimpleNamespace(log=cls.log), 'openpilot.selfdrive.car.lx3_authority': authority}):
       cls.serializer = module('lx3_serializer_test_source', 'selfdrive/pandad/pandad_api_impl.py')
 
   @classmethod
