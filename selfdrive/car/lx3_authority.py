@@ -36,9 +36,11 @@ def copy_status(CS, sm, now_ns):
 def reconcile_lateral(cruise, CS, always_lateral, now_ns):
   a = CS.lx3Authority
   valid_status = a.version == VERSION and a.profile == 1 and a.epoch != 0
+  new_request = any(b.physical and not b.pressed and b.physicalKey == cruise.lx3_lat_key for b in CS.buttonEvents)
+  pedal_block = not always_lateral and (CS.brakePressed or (CS.gasPressed and a.config & 2))
   blocked = (str(CS.gearShifter) not in ('drive', 'sport', 'manumatic', 'eco') or
              CS.steerFaultTemporary or CS.steerFaultPermanent or
-             (not always_lateral and (CS.brakePressed or (CS.gasPressed and a.config & 2))))
+             (pedal_block and (not a.armed & LONG or new_request)))
   live = cruise.lx3_lat_key and (0 <= now_ns - cruise.lx3_lat_time < DECISION_MAX_NS or
                                  a.statusMonoTime <= cruise.lx3_lat_time + DECISION_MAX_NS)
   revoked = valid_status and not (a.allowed & LAT or a.armed & LAT) and (
