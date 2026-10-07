@@ -11,10 +11,12 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from cereal import car, log, custom
+import cereal.messaging as messaging
 from opendbc.can.packer import CANPacker
 from opendbc.car import Bus
 from opendbc.car.hyundai.interface import CarInterface
@@ -182,6 +184,27 @@ class TestLx3Runtime(unittest.TestCase):
     self.lfa(); self.assertEqual(self.status().allowed,0); self.assertFalse(self.CS.latEnabled)
     self.main(); self.assertTrue(self.enabled); self.assertEqual(self.status().allowed,3)
     self.assertTrue(all(not en or allow & 2 for _,en,allow,_,_ in self.trace))
+
+  def test_real_ipc_preserves_independent_native_authority(self):
+    self.lfa()
+    publisher=messaging.pub_sock('pandaStates')
+    subscriber=messaging.sub_sock('pandaStates',timeout=0)
+    message=messaging.new_message('pandaStates',1)
+    message.valid=True
+    message.pandaStates[0].lx3Authority=self.status().message()
+    received=None
+    for _ in range(50):
+      publisher.send(message.to_bytes())
+      received=messaging.recv_one_or_none(subscriber)
+      if received is not None:
+        break
+      time.sleep(.01)
+    self.assertIsNotNone(received)
+    a=received.pandaStates[0].lx3Authority
+    self.assertEqual(a.allowed,1)
+    self.assertGreater(a.lateralGeneration,0)
+    self.assertEqual(a.longitudinalGeneration,0)
+    self.assertEqual(a.epoch,self.status().epoch)
 
   def test_main_before_ready_does_not_latch_or_engage_later(self):
     self.CI.CS.controls_ready_count = 0
