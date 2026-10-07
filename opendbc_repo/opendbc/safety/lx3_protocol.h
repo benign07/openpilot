@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define LX3_PROTOCOL_VERSION 3U
+#define LX3_PROTOCOL_VERSION 4U
 #define LX3_STATUS_SIZE 62U
 #define LX3_STATUS_REQUEST 0xC7U
 #define LX3_EPOCH_HIGH_REQUEST 0xC8U

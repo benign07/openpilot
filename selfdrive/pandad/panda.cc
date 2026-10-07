@@ -46,7 +46,7 @@ void Panda::set_safety_model(cereal::CarParams::SafetyModel safety_model, uint16
   if (guarded && !get_lx3_status()) {
     // Old firmware ignores unknown safety bits. Never send it 190|2048 and
     // accidentally activate the legacy unrestricted policy.
-    LOGE("LX3 authority v3 firmware capability missing");
+    LOGE("LX3 authority v%d firmware capability missing", LX3_PROTOCOL_VERSION);
     handle->control_write(0xdc, (uint16_t)cereal::CarParams::SafetyModel::NO_OUTPUT, 0);
     return;
   }

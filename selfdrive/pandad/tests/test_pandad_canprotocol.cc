@@ -186,3 +186,14 @@ TEST_CASE("LX3 identities bind one payload without changing CAN packet v4") {
   }
   REQUIRE(pos == bytes.size());
 }
+
+TEST_CASE("LX3 capability rejects same-size obsolete firmware before arming") {
+  lx3_status_t status{};
+  status.version = LX3_PROTOCOL_VERSION;
+  REQUIRE(lx3_status_valid(&status, sizeof(status)));
+  REQUIRE_FALSE(lx3_status_valid(&status, sizeof(status) - 1));
+  status.version = 3;  // Previous 62-byte candidate, no refusal-episode stage.
+  REQUIRE_FALSE(lx3_status_valid(&status, sizeof(status)));
+  status.version = 0;
+  REQUIRE_FALSE(lx3_status_valid(&status, sizeof(status)));
+}

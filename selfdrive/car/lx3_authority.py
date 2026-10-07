@@ -5,7 +5,7 @@ The MCU remains the only source of permission/generation; neither a HUD command
 nor an OEM cruise-state packet supplies a physical event citation.
 """
 LAT, LONG = 1, 2
-VERSION = 3
+VERSION = 4
 STATUS_MAX_NS = 250_000_000
 DECISION_MAX_NS = 600_000_000
 

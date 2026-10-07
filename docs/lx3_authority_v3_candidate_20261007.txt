@@ -1,4 +1,4 @@
-LX3 paired authority v3 - development candidate, NOT a vehicle release
+LX3 paired authority v4 - development candidate, NOT a vehicle release
 
 Starting point: review/lx3-stock-authority-20261007 at b2d53c1c.
 Installed September 27 restored0627/diagnostic seq4 is unchanged.
@@ -10,7 +10,9 @@ Scope:
   Native pending per axis survives separate LFA/SET gestures; MAIN debounce does
   not revoke a later RES grant. Boot AutoEngage alone is not physical permission.
 - Versioned paired STATE/epoch transport; universal health v16/CAN v4 retained.
-  The v3 companion is 62 bytes; expected/actual size is logged on mismatch.
+  The v4 companion is 62 bytes; expected/actual size is logged on mismatch.
+  Version 4 rejects earlier same-size v3 candidates before arming, since the
+  refusal-episode stage is mandatory. Universal health/CAN versions stay fixed.
   controlsAllowed means longitudinal; lateral permission is explicitly reported.
 - Admission, OEM-triggered buffered replacement and pre-TXBAR software queue
   checks reject active commands with stale epoch, generation or age.

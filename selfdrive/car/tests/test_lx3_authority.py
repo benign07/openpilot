@@ -66,7 +66,7 @@ class TestLx3Authority(unittest.TestCase):
 
   def state(self, allowed=0):
     CS = self.car.CarState.new_message(latEnabled=True, gearShifter='drive')
-    CS.lx3Authority = {'version': 3, 'profile': 1, 'epoch': 123456789, 'allowed': allowed,
+    CS.lx3Authority = {'version': 4, 'profile': 1, 'epoch': 123456789, 'allowed': allowed,
       'inputReady': True, 'buttonHealthy': True, 'lateralGeneration': 4 if allowed & 1 else 0,
       'longitudinalGeneration': 5 if allowed & 2 else 0, 'config': 5, 'longPressMs': 700}
     return CS
@@ -136,6 +136,16 @@ class TestLx3Authority(unittest.TestCase):
     self.assertEqual(active, (False, False))
     self.assertEqual(CC.lx3Authority.pendingGeneration, 0)
     self.assertFalse(authority.monitor_lateral(CS.lx3Authority))
+
+  def test_mixed_host_native_protocol_cannot_supply_permission(self):
+    CS = self.state(3)
+    self.assertTrue(authority.verified(CS.lx3Authority))
+    with patch.object(authority, 'VERSION', 3):
+      self.assertFalse(authority.verified(CS.lx3Authority))
+      self.assertEqual(self.control(CS, enabled=True)[1], (False, False))
+    CS.lx3Authority.version = 3
+    self.assertFalse(authority.verified(CS.lx3Authority))
+    self.assertEqual(self.control(CS, enabled=True)[1], (False, False))
 
   def test_transient_freshness_failure_stops_output_without_latching_lfa_off(self):
     CS = self.state(1)

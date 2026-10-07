@@ -3,9 +3,9 @@
 #include <stdint.h>
 #include "lx3_buttons.h"
 
-// Version 3 is deliberately incompatible with the October 1 experiment.
+// Version 4 adds explicit refusal-episode binding to the paired candidate.
 // This is host/MCU state, not a vehicle CAN message or a replacement MDPS reply.
-#define LX3_AUTHORITY_VERSION 3U
+#define LX3_AUTHORITY_VERSION 4U
 #define LX3_AUTHORITY_PARAM 2048U
 #define LX3_AUTHORITY_PROFILE (LX3_AUTHORITY_PARAM | 190U)
 #define LX3_LAT 1U
