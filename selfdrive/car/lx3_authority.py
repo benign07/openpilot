@@ -8,6 +8,19 @@ LAT, LONG = 1, 2
 VERSION = 4
 STATUS_MAX_NS = 250_000_000
 DECISION_MAX_NS = 600_000_000
+EVENTS_MAX_NS = 1_500_000_000
+
+
+def control_inputs_fresh(sm, now_ns):
+  # onroadEvents is periodic *and* published on every event-name change.
+  # Its nominal 1 Hz maximum is not an input-health constraint: an enable
+  # sound or pedal transition legitimately sends extra messages. Keep its
+  # validity/liveness and an explicit age bound, plus the normal frequency
+  # checks and 100 ms age limits for the continuously published state inputs.
+  return (sm.all_checks(['carState', 'selfdriveState']) and
+          sm.alive['onroadEvents'] and sm.valid['onroadEvents'] and
+          0 <= now_ns - sm.logMonoTime['onroadEvents'] < EVENTS_MAX_NS and
+          all(0 <= now_ns - sm.logMonoTime[s] < 100_000_000 for s in ('carState', 'selfdriveState')))
 
 
 def verified(a):

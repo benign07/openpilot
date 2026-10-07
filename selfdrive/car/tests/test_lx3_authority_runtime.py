@@ -26,7 +26,7 @@ from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.car_specific import CarSpecificEvents
 from openpilot.selfdrive.car.cruise import VCruiseCarrot
-from openpilot.selfdrive.car.lx3_authority import copy_status, populate_car_state, configure_control
+from openpilot.selfdrive.car.lx3_authority import copy_status, populate_car_state, configure_control, control_inputs_fresh
 from openpilot.selfdrive.car.lx3_engagement import Lx3Engagement
 from openpilot.selfdrive.selfdrived.events import ET
 from openpilot.selfdrive.selfdrived.state import StateMachine
@@ -99,6 +99,9 @@ class TestLx3Runtime(unittest.TestCase):
     self.prev = car.CarState.new_message(); self.CC = self.sm['carControl']; self.CS = self.prev
     self.now = 2_000_000_000; self.frame = 0; self.counters = defaultdict(int)
     self.enabled = False; self.trace = []; self.details = []; self.native.fixture_init()
+    self.input_sm = None
+    self.input_gate = control_inputs_fresh
+    self.input_events_prev = None
     self.gear = next(k for k,v in self.CI.CS.shifter_values.items() if v == 'D')
     self.step(0, ticks=220)
     self.assertFalse(self.enabled)
@@ -154,8 +157,26 @@ class TestLx3Runtime(unittest.TestCase):
           (CS.regenBraking and (not self.prev.regenBraking or not CS.standstill))):
         events.add(EventName.pedalPressed)
       for event in extra: events.add(event)
+      if self.input_sm is not None and CS.latEnabled != self.prev.latEnabled:
+        events.add(EventName.audioPrompt)
       self.handshake.update(events,CS,self.enabled,self.now)
       self.enabled,_ = self.machine.update(events)
+      if self.input_sm is not None:
+        # Real SubMaster/trackers receive the stock producer's periodic and
+        # on-change delivery pattern. Only message delivery and time are fake.
+        cs_msg=messaging.new_message('carState',valid=True,logMonoTime=self.now)
+        cs_msg.carState=CS
+        sd_msg=messaging.new_message('selfdriveState',valid=True,logMonoTime=self.now)
+        sd_msg.selfdriveState.enabled=self.enabled
+        msgs=[cs_msg.as_reader(),sd_msg.as_reader()]
+        names=tuple(events.names)
+        if self.frame % 100 == 0 or names != self.input_events_prev:
+          ev_msg=messaging.new_message('onroadEvents',len(events),valid=True,logMonoTime=self.now)
+          ev_msg.onroadEvents=events.to_msg()
+          msgs.append(ev_msg.as_reader())
+        self.input_events_prev=names
+        self.input_sm.update_msgs(self.now/1e9,msgs)
+        host_fresh=self.input_gate(self.input_sm,self.now)
       CC = car.CarControl.new_message(enabled=self.enabled)
       CC.latActive, CC.longActive = configure_control(CC,CS,events.to_msg(),self.enabled,
         self.params.get_bool('AlwaysLateral'),True,host_fresh,self.now,self.handshake.request,self.handshake.refusing,self.handshake.refusal_sequence)
@@ -173,6 +194,8 @@ class TestLx3Runtime(unittest.TestCase):
         'request':self.handshake.request,'refuse':self.handshake.refusing,'auto':CS.lx3Authority.autoResume,
         'activate':CS.activateCruise,'blocked':self.cruise.lx3_auto_blocked,'carrotLog':self.cruise.log,
         'gear':str(CS.gearShifter),'events':list(events.names),'mode':self.cruise._lfa_button_mode})
+      if self.input_sm is not None:
+        self.details[-1].update(inputFresh=host_fresh,eventFreqOK=self.input_sm.freq_ok['onroadEvents'])
       self.CC=CC; self.CS=CS; self.prev=CS.as_reader(); self.sm['carControl']=CC
       self.CI.CS.softHoldActive = CS.softHoldActive  # same bridge as card
     return self.CS
@@ -188,6 +211,64 @@ class TestLx3Runtime(unittest.TestCase):
     self.lfa(); self.assertEqual(self.status().allowed,0); self.assertFalse(self.CS.latEnabled)
     self.main(); self.assertTrue(self.enabled); self.assertEqual(self.status().allowed,3)
     self.assertTrue(all(not en or allow & 2 for _,en,allow,_,_ in self.trace))
+
+  def start_input_checks(self):
+    with patch.dict('os.environ',{'SIMULATION':'0'}):
+      self.input_sm=messaging.SubMaster(['carState','selfdriveState','onroadEvents'],poll='selfdriveState')
+    self.step(ticks=1100)
+    self.assertTrue(control_inputs_fresh(self.input_sm,self.now))
+
+  def test_event_changes_keep_lfa_and_main_authority(self):
+    self.start_input_checks()
+    self.lfa()
+    self.assertEqual(self.status().allowed,1)
+    self.assertTrue(self.CC.latActive)
+    self.assertFalse(self.enabled)
+    self.assertTrue(any(d.get('eventFreqOK') is False and d['native']==1 for d in self.details))
+    self.main()
+    self.assertTrue(self.enabled)
+    self.assertEqual(self.status().allowed,3)
+    # A grant/enable event changing to no event must not revoke permission.
+    self.step(ticks=300)
+    self.assertTrue(self.enabled)
+    self.assertEqual(self.status().allowed,3)
+    self.assertTrue(all(not en or allow & 2 for _,en,allow,_,_ in self.trace))
+
+  def test_old_event_frequency_gate_refuses_real_lfa_request(self):
+    self.start_input_checks()
+    # Exact e1cb407c controlsd expression, retained solely as the negative
+    # witness. Physical CAN, handshake and native policy remain unchanged.
+    self.input_gate=lambda sm,now: sm.all_checks(['carState','selfdriveState','onroadEvents']) and all(
+      0<=now-sm.logMonoTime[s]<100_000_000 for s in ('carState','selfdriveState'))
+    self.lfa()
+    self.step(ticks=100)
+    self.assertEqual(self.status().allowed,0)
+    self.assertFalse(self.enabled)
+    self.assertFalse(self.CS.latEnabled)
+
+  def test_event_gate_keeps_real_stale_invalid_and_frequency_rejection(self):
+    self.start_input_checks()
+    self.input_sm.logMonoTime['onroadEvents']=self.now-1_500_000_000
+    self.assertFalse(control_inputs_fresh(self.input_sm,self.now))
+    self.input_sm.logMonoTime['onroadEvents']=self.now-1_499_999_999
+    self.assertTrue(control_inputs_fresh(self.input_sm,self.now))
+    self.input_sm.valid['onroadEvents']=False
+    self.assertFalse(control_inputs_fresh(self.input_sm,self.now))
+    self.input_sm.valid['onroadEvents']=True
+    self.input_sm.alive['onroadEvents']=False
+    self.assertFalse(control_inputs_fresh(self.input_sm,self.now))
+    self.input_sm.alive['onroadEvents']=True
+    for service in ('carState','selfdriveState'):
+      stamp=self.input_sm.logMonoTime[service]
+      for bad_stamp in (self.now-100_000_000,self.now+1):
+        self.input_sm.logMonoTime[service]=bad_stamp
+        self.assertFalse(control_inputs_fresh(self.input_sm,self.now))
+      self.input_sm.logMonoTime[service]=stamp
+      self.input_sm.freq_ok[service]=False
+      self.assertFalse(control_inputs_fresh(self.input_sm,self.now))
+      self.input_sm.freq_ok[service]=True
+    self.input_sm.logMonoTime['onroadEvents']=self.now+1
+    self.assertFalse(control_inputs_fresh(self.input_sm,self.now))
 
   def test_real_ipc_preserves_independent_native_authority(self):
     self.lfa()

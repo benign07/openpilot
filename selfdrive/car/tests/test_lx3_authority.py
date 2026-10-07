@@ -3,6 +3,7 @@
 Schemas are copied solely because Windows Git checkouts store symlinks as text.
 The serializer, decision helpers and switch decoder are the actual source files.
 """
+import ast
 import binascii
 import importlib.util
 from pathlib import Path
@@ -28,6 +29,17 @@ def module(name, path):
 
 buttons = module('lx3_physical_test_source', 'opendbc_repo/opendbc/car/hyundai/lx3_buttons.py')
 authority = module('lx3_decision_test_source', 'selfdrive/car/lx3_authority.py')
+
+
+def production_event_tracker():
+  # These two production classes have no native IPC dependency. The Linux
+  # runtime suite additionally exercises real SubMaster and physical RX.
+  namespace = {}
+  for path, name in (('common/utils.py', 'MovingAverage'), ('cereal/messaging/__init__.py', 'FrequencyTracker')):
+    cls = next(n for n in ast.parse((ROOT/path).read_text(encoding='utf8')).body
+               if isinstance(n, ast.ClassDef) and n.name == name)
+    exec(compile(ast.Module(body=[cls], type_ignores=[]), path, 'exec'), namespace)
+  return namespace['FrequencyTracker'](1, 100, False)
 
 
 class TestLx3Authority(unittest.TestCase):
@@ -136,6 +148,34 @@ class TestLx3Authority(unittest.TestCase):
     self.assertEqual(active, (False, False))
     self.assertEqual(CC.lx3Authority.pendingGeneration, 0)
     self.assertFalse(authority.monitor_lateral(CS.lx3Authority))
+
+  def test_real_event_frequency_burst_keeps_valid_longitudinal_intent(self):
+    tracker=production_event_tracker()
+    for t in range(1,12): tracker.record_recv_time(float(t))
+    self.assertTrue(tracker.valid)
+    for t in (11.4,11.41,12.0): tracker.record_recv_time(t)
+    self.assertFalse(tracker.valid)
+    self.now=12_000_000_000
+    class Inputs:
+      alive=dict.fromkeys(('carState','selfdriveState','onroadEvents'),True)
+      valid=alive.copy()
+      freq_ok={'carState':True,'selfdriveState':True,'onroadEvents':tracker.valid}
+      logMonoTime=dict.fromkeys(alive,self.now)
+      def all_checks(self,names):
+        return all(self.alive[n] and self.valid[n] and self.freq_ok[n] for n in names)
+    sm=Inputs()
+    old=sm.all_checks(['carState','selfdriveState','onroadEvents'])
+    self.assertFalse(old)
+    current=authority.control_inputs_fresh(sm,self.now)
+    self.assertTrue(current)
+    CS=self.state(2); CS.latEnabled=False
+    self.assertEqual(self.control(CS,enabled=True,fresh=old)[0].lx3Authority.intent,0)
+    self.assertEqual(self.control(CS,enabled=True,fresh=current)[0].lx3Authority.intent,2)
+    sm.logMonoTime['onroadEvents']=self.now-1_500_000_000
+    self.assertFalse(authority.control_inputs_fresh(sm,self.now))
+    sm.logMonoTime['onroadEvents']=self.now
+    sm.valid['onroadEvents']=False
+    self.assertFalse(authority.control_inputs_fresh(sm,self.now))
 
   def test_stale_status_clears_existing_capnp_permission_fields(self):
     CS = self.state(3)
