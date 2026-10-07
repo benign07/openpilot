@@ -224,7 +224,16 @@ static void initial_angle_history(void) {
   CANPacket_t active=cb(2U,25U,133);
   assert(send(&active,lx3_auth.lateral_generation));
   lx3_queue_stamp_t stamp=lx3_current_tx_stamp;
+  // Queueing must not move the initial measured-angle window forward. Fill
+  // the history with newer (ineligible at admission) samples before TXBAR.
+  for (int i=0;i<10;i++) {
+    timer.CNT += 10000U;
+    CANPacket_t p=packet(0xEA,0U,24U); p.data[2]=++counters[3];
+    hyundai_canfd_update_checksum(&p); assert(safety_rx_hook(&p));
+  }
   assert(lx3_native_final_tx(&active,&stamp));
+  timer.CNT += 1U;
+  assert(!lx3_native_final_tx(&active,&stamp)); // More than 100 ms is stale.
   // A jump outside every fresh measurement and existing first-step allowance fails.
   CANPacket_t off=cb(1U,0U,95); assert(send(&off,lx3_auth.lateral_generation));
   active=cb(2U,25U,200); assert(!send(&active,lx3_auth.lateral_generation));

@@ -159,6 +159,8 @@ class VCruiseCarrot:
     self.lx3_remote_cycle = False
     self.lx3_lat_was_allowed = False
     self.lx3_lateral_refused = False
+    self.lx3_auto_blocked = False
+    self.lx3_auto_pending = None
     self.frame = 0
     self.params_memory = Params("/dev/shm/params")
     self.params = Params()
@@ -310,6 +312,25 @@ class VCruiseCarrot:
       self.autoCruiseControl_cancel_timer = max(0, self.autoCruiseControl_cancel_timer - 1)
 
     CC = sm['carControl']
+    if self.lx3_authority:
+      pending = self.lx3_auto_pending
+      if CC.enabled:
+        if pending and pending[2] and not (CS.brakePressed or CS.gasPressed):
+          self._soft_hold_active = 2
+        self.lx3_auto_pending = None
+        self.lx3_auto_blocked = False
+      elif CS.brakePressed or CS.gasPressed:
+        self.lx3_auto_pending = None
+      elif CC.lx3Authority.refuseLong or (pending and self.frame >= pending[0]):
+        if pending:
+          self._cruise_ready = pending[1]
+        # A refused hold is not a held vehicle. In particular it must not
+        # turn a subsequent physical SET into Carrot's "leave hold" cancel.
+        self._soft_hold_active = 0
+        self.lx3_auto_pending = None
+        self.lx3_auto_until = 0
+        self.lx3_auto_blocked = True
+      self.lx3_long_armed = bool(CS.lx3Authority.armed & 2)
     if sm.alive['carrotMan']:
       carrot_man = sm['carrotMan']
       self.nRoadLimitSpeed = carrot_man.nRoadLimitSpeed
@@ -345,7 +366,8 @@ class VCruiseCarrot:
 
     if self._activate_cruise > 0:
       #self.events.append(EventName.buttonEnable)
-      self._cruise_ready = False
+      if not self.lx3_authority or CC.enabled:
+        self._cruise_ready = False
     elif self._activate_cruise < 0:
       #self.events.append(EventName.buttonCancel)
       self._cruise_ready = True if self._activate_cruise == -2 else False
@@ -714,6 +736,12 @@ class VCruiseCarrot:
     return v_cruise_kph
 
   def _cruise_control(self, enable, cancel_timer, reason):
+    if self.lx3_authority and enable > 0 and not self.lx3_remote_cycle:
+      if self.lx3_auto_blocked or not getattr(self, 'lx3_long_armed', False):
+        if not self.lx3_auto_blocked:
+          self._add_log(reason + ' > physical cruise arming required')
+        self.lx3_auto_blocked = True
+        return
     if self._cruise_cancel_state: # and self._soft_hold_active != 2:
       self._add_log(reason + " > Cancel state")
     elif enable > 0 and self._cancel_timer > 0 and cancel_timer >= 0:
@@ -733,6 +761,8 @@ class VCruiseCarrot:
       if self.lx3_authority:
         if enable > 0 and not self.lx3_remote_cycle:
           self.lx3_auto_until = self.frame + 100
+          if self.lx3_auto_pending is None:
+            self.lx3_auto_pending = (self.frame + 100, self._cruise_ready, self._soft_hold_active > 0)
         elif enable < 0:
           self.lx3_auto_until = 0
       self._cancel_timer = int(cancel_timer / 0.01)   # DT_CTRL: 0.01
@@ -755,7 +785,8 @@ class VCruiseCarrot:
     if not CC.enabled:
       #self._pause_auto_speed_up = False
       if self._brake_pressed_count == -1 and self._soft_hold_active > 0:
-        self._soft_hold_active = 2
+        if not self.lx3_authority:
+          self._soft_hold_active = 2
         #self.autoCruiseControl_cancel_timer = 0
         self._cruise_control(1, -1, "Cruise on (soft hold)")
       # GM: autoResume

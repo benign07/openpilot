@@ -84,6 +84,7 @@ class TestLx3Runtime(unittest.TestCase):
     self.params.put_bool('ControlsReady', True); self.params.put_bool('AlwaysLateral', True)
     fp = {i: {} for i in range(8)}
     fp[0] = {0x105:32, 0x10B:16, 0x175:24, 0xA0:24, 0xEA:24, 0x1AA:16, 69:24}
+    fp[1] = {0x110:32}  # Real alternate HDA2 fingerprint, not a forced safety parameter.
     fp[2] = {0xCB:24, 0x12A:16, 0x1A0:32, 0x161:32}
     self.params.put('FingerPrints', str(fp))
     self.CP = CarInterface.get_params(CAR.HYUNDAI_PALISADE_LX3_HEV, fp, [], True, False, False)
@@ -163,6 +164,18 @@ class TestLx3Runtime(unittest.TestCase):
     self.main(); self.assertTrue(self.enabled); self.assertEqual(self.status().allowed,3)
     self.assertTrue(all(not en or allow & 2 for _,en,allow,_,_ in self.trace))
 
+  def test_main_before_ready_does_not_latch_or_engage_later(self):
+    self.CI.CS.controls_ready_count = 0
+    self.main()
+    self.assertFalse(self.CI.CS.main_enabled)
+    self.assertFalse(self.enabled)
+    self.step(ticks=220)
+    self.assertFalse(self.enabled)
+    self.assertEqual(self.status().allowed, 0)
+    self.main()
+    self.assertTrue(self.enabled)
+    self.assertEqual(self.status().allowed, 3)
+
   def test_brake_short_auto_resume_and_res(self):
     self.params.put_bool('AlwaysLateral',False); self.main(); self.assertEqual(self.status().allowed,3)
     self.step(brake=True,ticks=8); self.assertFalse(self.enabled); self.assertEqual(self.status().allowed,0)
@@ -170,6 +183,17 @@ class TestLx3Runtime(unittest.TestCase):
     self.params.put_int('AutoCruiseControl',0); self.step(brake=True,ticks=20); self.step(ticks=20)
     self.step(1,ticks=8); self.step(ticks=35)
     self.assertTrue(self.enabled); self.assertEqual(self.status().allowed,3)
+
+  def test_brake_again_while_auto_request_pending_retains_arming(self):
+    self.main()
+    self.step(brake=True,ticks=8)
+    self.step(ticks=1)
+    self.step(brake=True,ticks=8)
+    self.assertTrue(self.status().armed & 2)
+    self.assertFalse(self.handshake.refusing)
+    self.step(ticks=100)
+    self.assertTrue(self.enabled)
+    self.assertEqual(self.status().allowed,3)
 
   def test_lfa_brake_and_rejected_press_need_one_press(self):
     self.params.put_bool('AlwaysLateral',False); self.lfa(); self.step(brake=True,ticks=15)

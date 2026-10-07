@@ -36,7 +36,13 @@ class Lx3Engagement:
       # Preserve stock no-entry alerts and all disabling events.
       if self.deadline and events.contains(ET.NO_ENTRY) and not enabling:
         events.add(EventName.buttonEnable)
-      self.refusing |= bool(self.deadline)
+      # Pedals suspend a physically armed session; they do not cancel its
+      # resume eligibility. A second brake while awaiting OFF acknowledgement
+      # must have the same semantics as the first brake on the MCU.
+      non_pedal_block = any(e != EventName.pedalPressed and any(
+        t in EVENTS.get(e, {}) for t in (ET.NO_ENTRY, ET.USER_DISABLE, ET.IMMEDIATE_DISABLE, ET.SOFT_DISABLE))
+        for e in events.events)
+      self.refusing |= bool(self.deadline and non_pedal_block)
       self.deadline = 0
       return
     if enabling:

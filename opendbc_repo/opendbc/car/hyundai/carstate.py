@@ -809,7 +809,10 @@ class CarState(CarStateBase):
         b.durationMs, b.observedMonoTime = e.held_ns // 1_000_000, e.mono_ns
         physical_events.append(b)
         if e.button == MAIN and not e.pressed:
-          self.main_enabled = not self.main_enabled
+          # An early enable request gets the normal not-ready/no-entry alert,
+          # but must not latch MAIN on and make the next real press turn it off.
+          if self.main_enabled or self.controls_ready_count >= READY_COUNT_OK:
+            self.main_enabled = not self.main_enabled
       paddles = [b for b in ret.buttonEvents if b.type in (ButtonType.paddleLeft, ButtonType.paddleRight)]
       ret.buttonEvents = physical_events + paddles
       healthy = self.lx3_buttons.stream_healthy(self.lx3_now_ns)
@@ -836,7 +839,8 @@ class CarState(CarStateBase):
     if self.lx3_buttons is not None and not self.CP.pcmCruise:
       if not self.lx3_buttons.healthy(self.lx3_now_ns):
         return False
-      if self.main_enabled and any(b.type == ButtonType.mainCruise and not b.pressed and b.physical for b in buttonEvents):
+      if (self.main_enabled or self.controls_ready_count < READY_COUNT_OK) and any(
+          b.type == ButtonType.mainCruise and not b.pressed and b.physical for b in buttonEvents):
         return True
     return super().update_button_enable(buttonEvents)
 
