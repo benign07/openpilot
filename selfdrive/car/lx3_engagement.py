@@ -26,7 +26,8 @@ class Lx3Engagement:
     self.request = False
     a = CS.lx3Authority
     fresh = verified(a) and a.buttonHealthy and 0 <= now_ns - a.statusMonoTime <= STATUS_MAX_NS
-    if fresh and a.sequence > self.refusal_sequence and not ((a.allowed | a.armed) & LONG):
+    if (fresh and a.sequence > self.refusal_sequence and not ((a.allowed | a.armed) & LONG) and
+        not a.longPendingGeneration):
       self.refusing = False
     if enabled:
       self.deadline = 0
