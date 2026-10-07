@@ -293,10 +293,17 @@ class TestLx3Runtime(unittest.TestCase):
     self.assertTrue(self.enabled)
 
   def physical_during_pending_hold(self, button):
-    self.main(); self.step(brake=True,speed=0,ticks=300)
-    self.step(speed=0,ticks=1)
+    self.main(); self.step(brake=True,speed=0,ticks=298)
+    # Start the physical press while braking, then release it during the next
+    # pending auto window (before the 10 Hz grant). A SET released *after* a
+    # successful automatic hold correctly cancels that hold in stock Carrot.
+    self.step(button,brake=True,speed=0,ticks=8)
+    self.step(button,speed=0,ticks=1)
     self.assertTrue(self.handshake.deadline)
-    self.step(button,speed=0,ticks=8); self.step(speed=0,ticks=40)
+    self.assertFalse(self.enabled)
+    self.step(speed=0,ticks=3)
+    self.assertFalse(self.enabled)
+    self.step(speed=0,ticks=40)
     self.assertTrue(self.enabled)
     self.assertEqual(self.CS.softHoldActive,0)
     self.assertIsNone(self.cruise.lx3_auto_pending)
