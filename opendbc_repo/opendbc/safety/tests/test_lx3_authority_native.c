@@ -20,6 +20,8 @@ _Static_assert(sizeof(lx3_status_t) == LX3_STATUS_SIZE, "paired status layout");
 
 static uint8_t counters[6];
 static uint32_t sequence;
+static uint16_t state_config = 5U;
+static bool state_refuse;
 static const uint64_t epoch = 0x3141592653589793ULL;
 
 static CANPacket_t packet(int address, unsigned bus, unsigned length) {
@@ -44,8 +46,8 @@ static void rx_tick(uint8_t key, bool brake, bool gas) {
 static void state(uint8_t intent, uint16_t key, uint16_t generation, bool automatic, uint16_t revision) {
   uint8_t button = key >> 8U;
   uint8_t kind = button == 128U ? 1U : button == 8U ? 2U : button == 1U ? 3U : button == 2U ? 4U : 0U;
-  const uint16_t value = (uint16_t)((key & 255U) << 8U) | (kind << 4U) | intent | (automatic ? 4U : 0U);
-  const uint16_t config = 5U; // AlwaysLateral + armed automatic resume.
+  const uint16_t value = (uint16_t)((key & 255U) << 8U) | (kind << 4U) | intent | (automatic ? 4U : 0U) | (state_refuse ? 8U : 0U);
+  const uint16_t config = state_config;
   const uint64_t binding = lx3_state_binding(epoch, ++sequence, value, generation, config, 700U, revision);
   lx3_native_control(LX3_CONFIG_REQUEST, config, 700U);
   lx3_native_control(LX3_SEQUENCE_REQUEST, sequence >> 16U, sequence);
@@ -63,7 +65,7 @@ static void cite(uint8_t intent) {
 }
 
 static void reset(void) {
-  timer.CNT = 2000000U; sequence = 0U; memset(counters, 0, sizeof(counters));
+  timer.CNT = 2000000U; sequence = 0U; state_config = 5U; state_refuse=false; memset(counters, 0, sizeof(counters));
   assert(set_safety_hooks(SAFETY_HYUNDAI_CANFD, LX3_AUTHORITY_PROFILE) == 0);
   lx3_native_control(LX3_EPOCH_HIGH_REQUEST, (uint16_t)(epoch >> 48U), (uint16_t)(epoch >> 32U));
   lx3_native_control(LX3_EPOCH_LOW_REQUEST, (uint16_t)(epoch >> 16U), (uint16_t)epoch);
@@ -197,7 +199,40 @@ static void stale_head_and_limit_recovery(void) {
   puts("PASS stale buffered head retains fresh inactive follower; three envelope failures revoke with reason");
 }
 
+static void brake_res_and_lateral_only(void) {
+  reset(); state_config = 4U; state(0U,0U,0U,false,0U); main_button(); cite(LX3_ALL);
+  rx_tick(0U,true,false); assert(lx3_auth.allowed==0U && lx3_auth.lateral_armed);
+  state(0U,0U,0U,false,lx3_auth.longitudinal_revision);
+  rx_tick(0U,false,false); rx_tick(1U,false,false); rx_tick(0U,false,false); cite(LX3_ALL);
+  assert(lx3_auth.allowed==LX3_ALL); // Same real RES restores the armed lateral axis.
+  reset(); state_config=4U; state(0U,0U,0U,false,0U); lfa(); cite(LX3_LAT);
+  rx_tick(0U,true,false);
+  assert(lx3_auth.allowed==0U && !lx3_auth.lateral_armed && !lx3_auth.longitudinal_armed);
+  puts("PASS AlwaysLateral off: brake-RES restores both armed axes; LFA-only brake disarms");
+}
+
+static void initial_angle_history(void) {
+  reset(); lfa(); cite(LX3_LAT);
+  // Real CRC-accepted MDPS samples, wheel returning at 90 degrees/second.
+  for (int i=0;i<6;i++) {
+    timer.CNT += 10000U;
+    CANPacket_t p=packet(0xEA,0U,24U); p.data[2]=++counters[3];
+    const int angle=140-i*9; p.data[16]=(unsigned)angle; p.data[17]=(unsigned)angle >> 8U;
+    hyundai_canfd_update_checksum(&p); assert(safety_rx_hook(&p));
+  }
+  // Host measurement two samples old (113), then actual host +2 degree step.
+  CANPacket_t active=cb(2U,25U,133);
+  assert(send(&active,lx3_auth.lateral_generation));
+  lx3_queue_stamp_t stamp=lx3_current_tx_stamp;
+  assert(lx3_native_final_tx(&active,&stamp));
+  // A jump outside every fresh measurement and existing first-step allowance fails.
+  CANPacket_t off=cb(1U,0U,95); assert(send(&off,lx3_auth.lateral_generation));
+  active=cb(2U,25U,200); assert(!send(&active,lx3_auth.lateral_generation));
+  puts("PASS real MDPS history aligns lagged first command without widening steady-state rate");
+}
+
 int main(void) {
+  brake_res_and_lateral_only(); initial_angle_history();
   physical_grant_and_final_revoke(); separate_pending_and_main_tail(); input_and_transport_failures();
   pedal_revision_and_epoch(); emergency_and_corrupt_original(); stale_head_and_limit_recovery();
   return 0;

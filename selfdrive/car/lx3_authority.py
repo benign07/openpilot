@@ -21,14 +21,40 @@ def monitor_lateral(a):
   return verified(a) and bool(a.allowed & LAT)
 
 
-def populate_car_state(CS, sm, cruise, params, now_ns):
+def copy_status(CS, sm, now_ns):
   healthy = CS.lx3Authority.buttonHealthy
   states = sm['pandaStates']
   if (len(states) == 1 and sm.valid['pandaStates'] and sm.alive['pandaStates'] and
       0 <= now_ns - sm.logMonoTime['pandaStates'] <= STATUS_MAX_NS):
     CS.lx3Authority = states[0].lx3Authority
+    CS.lx3Authority.statusMonoTime = sm.logMonoTime['pandaStates']
+  else:
+    CS.lx3Authority = {}
+  CS.lx3Authority.buttonHealthy = healthy
+
+
+def reconcile_lateral(cruise, CS, always_lateral, now_ns):
   a = CS.lx3Authority
-  a.buttonHealthy = healthy
+  valid_status = a.version == VERSION and a.profile == 1 and a.epoch != 0
+  blocked = (str(CS.gearShifter) not in ('drive', 'sport', 'manumatic', 'eco') or
+             CS.steerFaultTemporary or CS.steerFaultPermanent or
+             (not always_lateral and (CS.brakePressed or (CS.gasPressed and a.config & 2))))
+  live = cruise.lx3_lat_key and (0 <= now_ns - cruise.lx3_lat_time < DECISION_MAX_NS or
+                                 a.statusMonoTime <= cruise.lx3_lat_time + DECISION_MAX_NS)
+  revoked = valid_status and not (a.allowed & LAT or a.armed & LAT) and (
+    cruise.lx3_lat_was_allowed or not live)
+  if cruise._lat_enabled and (blocked or revoked):
+    cruise._lat_enabled = False
+    cruise.lx3_lat_key = cruise.lx3_lat_time = 0
+    cruise.lx3_lateral_refused = True
+    cruise._add_log('LFA request refused or permission revoked; press LFA after the condition clears')
+  if valid_status:
+    cruise.lx3_lat_was_allowed = bool(a.allowed & LAT)
+
+
+def populate_car_state(CS, sm, cruise, params, now_ns):
+  copy_status(CS, sm, now_ns)
+  a = CS.lx3Authority
   a.config = (int(params.get_bool('AlwaysLateral')) | (int(cruise.disengage_on_accelerator) << 1) |
               (int(cruise.autoCruiseControl > 0) << 2) | (min(max(cruise._lfa_button_mode, 0), 2) << 3) |
               (int(cruise._cancel_button_mode == 1) << 5))
@@ -36,37 +62,42 @@ def populate_car_state(CS, sm, cruise, params, now_ns):
   a.lateralDecisionKey, a.lateralDecisionTime = cruise.lx3_lat_key, cruise.lx3_lat_time
   a.longitudinalDecisionKey, a.longitudinalDecisionTime = cruise.lx3_long_key, cruise.lx3_long_time
   a.autoResume = cruise.lx3_auto_until > cruise.frame and not cruise._cruise_cancel_state
+  a.remoteRequest = cruise.lx3_remote_cycle
+  a.lateralRefused = cruise.lx3_lateral_refused
 
 
 def cited_decision(a, intent, now_ns):
   """Match each newly requested axis to one still-pending *physical* gesture."""
   additions = intent & ~a.allowed
-  if not additions or not a.pendingGeneration or a.pendingAgeMs >= 600:
+  if not additions:
     return 0, 0, intent
-  matching = 0
-  for axis, key, stamp in ((LAT, a.lateralDecisionKey, a.lateralDecisionTime),
-                           (LONG, a.longitudinalDecisionKey, a.longitudinalDecisionTime)):
-    if additions & axis and key == a.pendingKey and 0 <= now_ns - stamp < DECISION_MAX_NS:
-      matching |= axis
-  if not matching:
-    return 0, 0, intent
-  # Independent LFA and RES releases can be pending simultaneously. Cite one
-  # physical event per STATE; the next status advertises the other pending axis.
-  return a.pendingKey, a.pendingGeneration, (intent & a.allowed) | matching
+  for pending_key, generation, age, axes in ((a.pendingKey, a.pendingGeneration, a.pendingAgeMs, a.pendingAxes),
+                                            (a.longPendingKey, a.longPendingGeneration, a.longPendingAgeMs, a.longPendingAxes)):
+    if not generation or age >= 600:
+      continue
+    matching = 0
+    for axis, key, stamp in ((LAT, a.lateralDecisionKey, a.lateralDecisionTime),
+                             (LONG, a.longitudinalDecisionKey, a.longitudinalDecisionTime)):
+      if additions & axes & axis and key == pending_key and 0 <= now_ns - stamp < DECISION_MAX_NS:
+        matching |= axis
+    if matching:
+      return pending_key, generation, (intent & a.allowed) | matching
+  return 0, 0, intent
 
 
 def lateral_events_clear(events, always_lateral):
   # These events govern longitudinal availability. Other real faults, including
   # driver-monitoring disable events, still remove lateral intent.
   long_only = {'wrongCarMode', 'pcmDisable', 'buttonCancel', 'cruiseDisabled', 'resumeBlocked',
-               'belowEngageSpeed', 'preEnableStandstill', 'wrongCruiseMode'}
+               'belowEngageSpeed', 'preEnableStandstill', 'wrongCruiseMode', 'accFaulted', 'radarFault', 'radarTempUnavailable'}
   if always_lateral:
     long_only.add('pedalPressed')
-  return not any(str(e.name) not in long_only and
-                 (e.noEntry or e.immediateDisable or e.softDisable or e.userDisable) for e in events)
+  return not any(str(e.name) in ('driverDistracted3', 'driverUnresponsive3', 'tooDistracted') or
+                 (str(e.name) not in long_only and
+                  (e.noEntry or e.immediateDisable or e.softDisable or e.userDisable)) for e in events)
 
 
-def configure_control(CC, CS, events, enabled, always_lateral, driving, fresh, now_ns):
+def configure_control(CC, CS, events, enabled, always_lateral, driving, fresh, now_ns, long_request=False, refuse_long=False):
   CC.lx3Authority = CS.lx3Authority
   a = CC.lx3Authority
   ready = fresh and a.buttonHealthy and verified(a)
@@ -74,7 +105,10 @@ def configure_control(CC, CS, events, enabled, always_lateral, driving, fresh, n
   lat = lat and not CS.steerFaultTemporary and not CS.steerFaultPermanent
   if not always_lateral and (CS.brakePressed or (CS.gasPressed and a.config & 2)):
     lat = False
-  long = ready and enabled and not CS.brakePressed and not (CS.gasPressed and a.config & 2)
+  request_clear = not any(e.noEntry or e.immediateDisable or e.softDisable or e.userDisable for e in events)
+  long = ready and (enabled or (long_request and request_clear)) and not CS.brakePressed and not (CS.gasPressed and a.config & 2)
+  long = long and not refuse_long
+  a.refuseLong = refuse_long
   a.intent = (LAT if lat else 0) | (LONG if long else 0)
   a.decisionKey, a.pendingGeneration, a.intent = cited_decision(a, a.intent, now_ns)
   a.observedLongRevision = a.longitudinalRevision

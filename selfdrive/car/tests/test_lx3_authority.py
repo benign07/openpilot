@@ -94,6 +94,30 @@ class TestLx3Authority(unittest.TestCase):
     self.assertEqual(self.decoder.events, [])
     self.assertTrue(any(e.button == 4 and e.pressed for e in self.feed(4)))
 
+  def test_batched_duration_and_counter_wrap(self):
+    packets=[]
+    for key in [128] * 140 + [0]:
+      self.counter=(self.counter+2)&255
+      d=bytearray(16); d[2]=self.counter; d[10]=key
+      d[:2]=(binascii.crc_hqx(d[2:]+b'\x0b\x01',0)^0x041D).to_bytes(2,'little')
+      packets.append((0x10B,bytes(d),0))
+    events=self.decoder.update([(self.now+40_000_000,packets)])
+    release=[e for e in events if e.button==128 and not e.pressed]
+    self.assertEqual(len(release),1)
+    self.assertEqual(release[0].held_ns,5_600_000_000)
+
+  def test_pending_axis_masks_and_unrelated_lfa_off(self):
+    CS=self.state(); a=CS.lx3Authority
+    a.pendingKey,a.pendingGeneration,a.pendingAxes=0x800A,8,1
+    a.longPendingKey,a.longPendingGeneration,a.longPendingAxes=0x010C,9,2
+    a.lateralDecisionKey=a.longitudinalDecisionKey=0x010C
+    a.lateralDecisionTime=a.longitudinalDecisionTime=self.now
+    CC,_=self.control(CS,enabled=True)
+    self.assertEqual((CC.lx3Authority.intent,CC.lx3Authority.pendingGeneration),(2,9))
+    fault=self.log.OnroadEvent.new_message(name='driverDistracted3',warning=True)
+    CS=self.state(1)
+    self.assertEqual(self.control(CS,events=[fault])[0].lx3Authority.intent,0)
+
   def test_main_tail_and_separate_res(self):
     self.feed(8)
     self.feed(0); first_neutral = self.counter
@@ -117,12 +141,14 @@ class TestLx3Authority(unittest.TestCase):
     CS = self.state()
     a = CS.lx3Authority
     a.pendingKey, a.pendingGeneration = 0x800A, 8
+    a.pendingAxes = 1
     a.lateralDecisionKey, a.lateralDecisionTime = 0x800A, self.now
     a.longitudinalDecisionKey, a.longitudinalDecisionTime = 0x020C, self.now
     CC, _ = self.control(CS, enabled=True)
     self.assertEqual((CC.lx3Authority.intent, CC.lx3Authority.decisionKey), (1, 0x800A))
     a.allowed, a.lateralGeneration = 1, 8
     a.pendingKey, a.pendingGeneration = 0x020C, 9
+    a.pendingAxes = 2
     CC, _ = self.control(CS, enabled=True)
     self.assertEqual((CC.lx3Authority.intent, CC.lx3Authority.decisionKey), (3, 0x020C))
     a.longitudinalDecisionTime = self.now - 600_000_001

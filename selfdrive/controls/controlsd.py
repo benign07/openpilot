@@ -133,7 +133,8 @@ class Controls:
       fresh = self.sm.all_checks(['carState', 'selfdriveState', 'onroadEvents', 'driverMonitoringState']) and all(
         0 <= now - self.sm.logMonoTime[s] < 100_000_000 for s in ('carState', 'selfdriveState'))
       lat_allowed, long_allowed = configure_control(CC, CS, self.sm['onroadEvents'], CC.enabled,
-        self.params.get_bool('AlwaysLateral'), driving_gear, fresh, now)
+        self.params.get_bool('AlwaysLateral'), driving_gear, fresh, now,
+        long_request=self.sm['selfdriveState'].lx3LongRequest, refuse_long=self.sm['selfdriveState'].lx3LongRefused)
       # Permission persists across low-speed/driver-coexistence intervals;
       # actual actuator output still follows stock speed and suspension rules.
       CC.latActive = self.carrot_controls.lat_suspend_control(CS, lat_allowed and not standstill)

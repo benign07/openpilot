@@ -145,7 +145,7 @@ static inline void lx3_authority_button(lx3_authority_t *s, const lx3_button_eve
     lx3_authority_revoke(s, older, LX3_REASON_CANCEL, true);
     axes = LX3_ALL;
   } else if ((e->button == 1U) || (e->button == 2U)) {
-    axes = LX3_LONG;
+    axes = LX3_LONG | (s->lateral_armed ? LX3_LAT : 0U);
   }
   if (axes != 0U) {
     const uint16_t generation = lx3_authority_next(s);
@@ -164,6 +164,8 @@ static inline void lx3_authority_button(lx3_authority_t *s, const lx3_button_eve
 
 static inline void lx3_authority_pedal(lx3_authority_t *s, bool brake_edge, bool gas_edge) {
   if (brake_edge || (gas_edge && s->config.disengage_on_gas)) {
+    // Lateral-only has no longitudinal session to resume after pedal release.
+    if (!s->config.always_lateral && !s->longitudinal_armed) s->lateral_armed = false;
     lx3_authority_revoke(s, s->config.always_lateral ? LX3_LONG : LX3_ALL, LX3_REASON_PEDAL, false);
     s->resume_needs_off = true;
   }
@@ -192,6 +194,8 @@ static inline bool lx3_authority_heartbeat(lx3_authority_t *s, uint32_t now, uin
   if ((removed & LX3_LONG) != 0U) { s->allowed &= (uint8_t)~LX3_LONG; s->longitudinal_generation = 0U; s->longitudinal_key = 0U; }
   if (removed != 0U) s->reason = LX3_REASON_HOST_OFF;
   if ((removed & LX3_LAT) != 0U) s->lateral_armed = false;
+  for (unsigned i = 0U; i < 2U; i++) if ((removed & (1U << i)) != 0U) s->pending_axis_generation[i] = 0U;
+  lx3_authority_pending_refresh(s);
   if (((intent & LX3_LONG) == 0U) && (observed_long_revision == s->longitudinal_revision)) s->resume_needs_off = false;
   const uint8_t additions = intent & (uint8_t)~s->allowed;
   bool granted = additions == 0U;
@@ -200,8 +204,10 @@ static inline bool lx3_authority_heartbeat(lx3_authority_t *s, uint32_t now, uin
     if ((additions & (1U << i)) != 0U) cited = cited && generation == s->pending_axis_generation[i] &&
       key == s->pending_axis_key[i] && (now - s->pending_axis_us[i]) < LX3_EVENT_TIMEOUT_US;
   }
+  const bool pedals_clear = !brake_down && (!gas_down || !s->config.disengage_on_gas);
   if ((additions != 0U) && cited &&
-      (((additions & LX3_LONG) == 0U) || (!brake_down && (!gas_down || !s->config.disengage_on_gas)))) {
+      (((additions & LX3_LONG) == 0U) || pedals_clear) &&
+      (((additions & LX3_LAT) == 0U) || s->config.always_lateral || pedals_clear)) {
     if ((additions & LX3_LAT) != 0U) { s->lateral_generation = generation; s->lateral_key = key; s->lateral_armed = true; }
     if ((additions & LX3_LONG) != 0U) {
       s->longitudinal_generation = generation;

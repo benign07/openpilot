@@ -82,6 +82,7 @@ bool Panda::seal_lx3_epoch() {
 std::optional<lx3_status_t> Panda::get_lx3_status() {
   lx3_status_t status{};
   const int n = handle->control_read(LX3_STATUS_REQUEST, 0, 0, reinterpret_cast<unsigned char*>(&status), sizeof(status));
+  if (n >= 0 && n != static_cast<int>(sizeof(status))) LOGE("LX3 status size mismatch: received %d, expected %zu", n, sizeof(status));
   return lx3_status_valid(&status, n) ? std::make_optional(status) : std::nullopt;
 }
 
@@ -91,7 +92,8 @@ void Panda::send_lx3_state(cereal::Lx3Authority::Reader a, bool fresh) {
   const uint16_t key = fresh ? a.getDecisionKey() : 0U;
   const uint8_t button = key >> 8U;
   const uint8_t kind = button == 128U ? 1U : button == 8U ? 2U : button == 1U ? 3U : button == 2U ? 4U : 0U;
-  const uint16_t value = fresh ? ((key & 255U) << 8U) | (kind << 4U) | (a.getAutoResume() ? 4U : 0U) | a.getIntent() : 0x80U;
+  const uint16_t value = fresh ? ((key & 255U) << 8U) | (kind << 4U) | (a.getAutoResume() ? 4U : 0U) |
+                                (a.getRefuseLong() ? 8U : 0U) | a.getIntent() : 0x80U;
   const uint16_t generation = fresh ? a.getPendingGeneration() : 0U;
   const uint16_t config = fresh ? a.getConfig() : 0U;
   const uint16_t long_ms = fresh ? a.getLongPressMs() : 700U;

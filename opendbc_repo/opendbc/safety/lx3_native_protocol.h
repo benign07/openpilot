@@ -35,7 +35,8 @@ static inline lx3_status_t lx3_native_status(void) {
   lx3_native_maintain();
   s.profile = lx3_profile_supported ? 1U : 2U;
   s.allowed = lx3_auth.allowed;
-  s.armed = lx3_auth.longitudinal_armed;
+  s.armed = (lx3_auth.lateral_armed ? LX3_LAT : 0U) | (lx3_auth.longitudinal_armed ? LX3_LONG : 0U) |
+            (lx3_auth.resume_needs_off ? 4U : 0U);
   s.reason = lx3_auth.reason;
   s.pending_key = lx3_auth.pending_key;
   s.pending_generation = lx3_auth.pending_axes != 0U ? lx3_auth.pending_generation : 0U;
@@ -53,6 +54,15 @@ static inline lx3_status_t lx3_native_status(void) {
   s.lateral_revision = lx3_auth.lateral_revision;
   s.longitudinal_revision = lx3_auth.longitudinal_revision;
   s.oem_emergency = lx3_oem_emergency;
+  s.long_pending_key = lx3_auth.pending_axis_key[1];
+  s.long_pending_generation = lx3_auth.pending_axis_generation[1];
+  s.long_pending_age_ms = MIN((microsecond_timer_get() - lx3_auth.pending_axis_us[1]) / 1000U, (uint32_t)UINT16_MAX);
+  for (unsigned i = 0U; i < 2U; i++) {
+    if (s.pending_generation != 0U && lx3_auth.pending_axis_generation[i] == s.pending_generation &&
+        lx3_auth.pending_axis_key[i] == s.pending_key) s.pending_axes |= 1U << i;
+    if (s.long_pending_generation != 0U && lx3_auth.pending_axis_generation[i] == s.long_pending_generation &&
+        lx3_auth.pending_axis_key[i] == s.long_pending_key) s.long_pending_axes |= 1U << i;
+  }
   return s;
 }
 
@@ -97,7 +107,7 @@ static inline void lx3_native_control(uint8_t request, uint16_t value, uint16_t 
     }
     const bool valid = (lx3_long_ms_staged >= 100U) &&
       (lx3_long_ms_staged <= 10000U) && ((lx3_config_staged & 0xFFC0U) == 0U) &&
-      ((value & 0x0008U) == 0U) &&
+      (((value & 8U) == 0U) || ((value & LX3_LONG) == 0U)) &&
       (lx3_binding_staged == lx3_state_binding(lx3_auth.epoch, lx3_sequence_staged, value, index,
                                               lx3_config_staged, lx3_long_ms_staged, lx3_revision_staged));
     lx3_stage_parts = 0U;
@@ -128,6 +138,11 @@ static inline void lx3_native_control(uint8_t request, uint16_t value, uint16_t 
     const uint8_t button = kind == 1U ? 128U : kind == 2U ? 8U : kind == 3U ? 1U : kind == 4U ? 2U : 0U;
     const uint16_t key = ((uint16_t)button << 8U) | (value >> 8U);
     const uint8_t previous = lx3_auth.allowed;
+    if ((value & 8U) != 0U) {
+      // The host refused a pending engagement. Do not leave an unaccepted
+      // longitudinal session armed for a later automatic resume.
+      lx3_authority_revoke(&lx3_auth, LX3_LONG, LX3_REASON_HOST_OFF, true);
+    }
     (void)lx3_authority_heartbeat(&lx3_auth, now, lx3_auth.epoch, value & 3U, index, key,
       (value & 4U) != 0U, lx3_native_healthy(), brake_pressed, gas_pressed, lx3_revision_staged);
     if (previous != lx3_auth.allowed) lx3_native_purge(previous & (uint8_t)~lx3_auth.allowed);

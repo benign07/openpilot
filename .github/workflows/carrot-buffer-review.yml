@@ -67,6 +67,8 @@ jobs:
     timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -86,6 +88,10 @@ jobs:
           selfdrive/pandad/tests/test_pandad_canprotocol
       - name: Production host decisions and schema round trip
         run: uv run --no-sync python selfdrive/car/tests/test_lx3_authority.py -v
+      - name: Real Carrot and state machine paired with actual native policy
+        run: |
+          set -o pipefail
+          uv run --no-sync python selfdrive/car/tests/test_lx3_authority_runtime.py -v 2>&1 | tee lx3-runtime-integration.log
       - name: Import real paired control processes
         run: |
           uv run --no-sync python - <<'PY'
@@ -100,4 +106,6 @@ jobs:
         if: always()
         with:
           name: lx3-authority-runtime-review-not-release
-          path: lx3-runtime-build.log
+          path: |
+            lx3-runtime-build.log
+            lx3-runtime-integration.log

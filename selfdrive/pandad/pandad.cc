@@ -231,6 +231,10 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
       a.setOemLateralPassthrough(s.oem_lateral_passthrough);
       a.setOemLongitudinalPassthrough(s.oem_longitudinal_passthrough);
       a.setOemEmergency(s.oem_emergency != 0);
+      a.setArmed(s.armed);
+      a.setLongPendingKey(s.long_pending_key); a.setLongPendingGeneration(s.long_pending_generation);
+      a.setLongPendingAgeMs(s.long_pending_age_ms);
+      a.setPendingAxes(s.pending_axes); a.setLongPendingAxes(s.long_pending_axes);
       ps.setControlsAllowed((s.allowed & 2U) != 0U);
       ps.setControlsAllowedRESERVED1((s.allowed & 1U) != 0U);
       ps.setControlsAllowedRESERVED2((s.allowed & 2U) != 0U);

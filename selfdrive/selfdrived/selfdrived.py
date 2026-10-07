@@ -23,6 +23,7 @@ from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroa
 from openpilot.selfdrive.controls.lib.latcontrol import MIN_LATERAL_CONTROL_SPEED
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 from openpilot.selfdrive.car.lx3_authority import monitor_lateral
+from openpilot.selfdrive.car.lx3_engagement import Lx3Engagement
 
 from openpilot.system.hardware import HARDWARE
 from openpilot.system.version import get_build_metadata
@@ -132,6 +133,7 @@ class SelfdriveD:
     self.dm_lockout_set = False
     self.dm_uncertain_alerted = False
     self.state_machine = StateMachine()
+    self.lx3_engagement = Lx3Engagement()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
     self.atc_type_last = ""
@@ -198,6 +200,13 @@ class SelfdriveD:
     resume_pressed = any(be.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for be in CS.buttonEvents)
     if not self.CP.pcmCruise and CS.vCruise > 250 and resume_pressed:
       self.events.add(EventName.resumeBlocked)
+
+    if uses_lx3_authority(self.CP):
+      if self.params.get_int('DisableDM') != 0 or not (self.sm.alive['driverMonitoringState'] and
+          self.sm.valid['driverMonitoringState'] and self.sm.freq_ok['driverMonitoringState']):
+        self.events.add(EventName.lx3MonitoringRequired)
+      if CS.lx3Authority.lateralRefused:
+        self.events.add(EventName.lx3AuthorityDenied)
 
     # Handle DM
     if not self.CP.notCar and self.params.get_int("DisableDM") == 0:
@@ -545,6 +554,8 @@ class SelfdriveD:
     ss.alertHudVisual = self.AM.current_alert.visual_alert
 
     ss.distanceTraveled = float(self.distance_traveled)
+    ss.lx3LongRequest = uses_lx3_authority(self.CP) and self.lx3_engagement.request
+    ss.lx3LongRefused = uses_lx3_authority(self.CP) and self.lx3_engagement.refusing
 
     self.pm.send('selfdriveState', ss_msg)
 
@@ -560,6 +571,8 @@ class SelfdriveD:
     CS = self.data_sample()
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
+      if uses_lx3_authority(self.CP):
+        self.lx3_engagement.update(self.events, CS, self.enabled, time.monotonic_ns())
       self.enabled, self.active = self.state_machine.update(self.events)
     self.update_alerts(CS)
 

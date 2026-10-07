@@ -6,6 +6,8 @@ from openpilot.common.constants import CV
 
 from opendbc.car import structs
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+from openpilot.selfdrive.car.lx3_authority import reconcile_lateral
+import time
 GearShifter = structs.CarState.GearShifter
 
 
@@ -155,6 +157,8 @@ class VCruiseCarrot:
     self.lx3_lat_time = self.lx3_long_time = 0
     self.lx3_auto_until = 0
     self.lx3_remote_cycle = False
+    self.lx3_lat_was_allowed = False
+    self.lx3_lateral_refused = False
     self.frame = 0
     self.params_memory = Params("/dev/shm/params")
     self.params = Params()
@@ -294,6 +298,9 @@ class VCruiseCarrot:
 
   def update_v_cruise(self, CS, sm, is_metric):
     self.lx3_remote_cycle = False
+    self.lx3_lateral_refused = False
+    if self.lx3_authority:
+      reconcile_lateral(self, CS, self.params.get_bool('AlwaysLateral'), time.monotonic_ns())
     self._add_log("")
     self.update_params(is_metric)
     self.frame += 1
@@ -344,7 +351,7 @@ class VCruiseCarrot:
       self._cruise_ready = True if self._activate_cruise == -2 else False
 
     if CS.cruiseState.available:
-      if not self.cruise_state_available_last:
+      if not self.cruise_state_available_last and not self.lx3_authority:
         self._lat_enabled = True
         v_cruise_kph = self.v_ego_kph_set
       if not self.CP.pcmCruise:
@@ -380,8 +387,11 @@ class VCruiseCarrot:
             self.lx3_auto_until = 0
         elif b.type in (ButtonType.accelCruise, ButtonType.decelCruise):
           self.lx3_long_key, self.lx3_long_time = b.physicalKey, b.observedMonoTime
+          if self._lat_enabled and CS.lx3Authority.armed & 1:
+            self.lx3_lat_key, self.lx3_lat_time = b.physicalKey, b.observedMonoTime
       if self._cruise_cancel_state:
         self.lx3_auto_until = 0
+      reconcile_lateral(self, CS, self.params.get_bool('AlwaysLateral'), time.monotonic_ns())
 
   def initialize_v_cruise(self, CS, experimental_mode: bool) -> None:
     return

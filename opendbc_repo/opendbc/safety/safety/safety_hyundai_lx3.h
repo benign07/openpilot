@@ -11,6 +11,9 @@ static uint32_t lx3_rx_good_us[6];
 static bool lx3_rx_good[6];
 static bool lx3_mdps_fault;
 static int lx3_angle_measured;
+#define LX3_ANGLE_HISTORY_SIZE 16U
+static struct { int angle; uint32_t us; bool valid; } lx3_angle_history[LX3_ANGLE_HISTORY_SIZE];
+static unsigned lx3_angle_history_next;
 static uint32_t lx3_oem_lat_count;
 static uint32_t lx3_oem_long_count;
 static bool lx3_oem_emergency;
@@ -102,6 +105,8 @@ static void lx3_native_init(uint16_t param) {
   for (unsigned i = 0U; i < 6U; i++) { lx3_rx_good[i] = false; lx3_rx_good_us[i] = 0U; }
   lx3_mdps_fault = false;
   lx3_angle_measured = 0;
+  lx3_angle_history_next = 0U;
+  for (unsigned i = 0U; i < LX3_ANGLE_HISTORY_SIZE; i++) lx3_angle_history[i].valid = false;
   lx3_oem_lat_count = 0U;
   lx3_oem_long_count = 0U;
   lx3_oem_emergency = false;
@@ -131,6 +136,10 @@ static bool lx3_native_observe(const CANPacket_t *p, bool accepted) {
       if (GET_ADDR(p) == 0xEA) {
         const unsigned raw = GET_BYTE(p, 16) | (GET_BYTE(p, 17) << 8U);
         lx3_angle_measured = raw >= 32768U ? (int)raw - 65536 : (int)raw;
+        lx3_angle_history[lx3_angle_history_next].angle = lx3_angle_measured;
+        lx3_angle_history[lx3_angle_history_next].us = now;
+        lx3_angle_history[lx3_angle_history_next].valid = true;
+        lx3_angle_history_next = (lx3_angle_history_next + 1U) % LX3_ANGLE_HISTORY_SIZE;
         lx3_mdps_fault = GET_BIT(p, 54U) || GET_BIT(p, 149U);
       } else if (GET_ADDR(p) == 0x10B) {
         lx3_buttons_feed(&lx3_switches, now, GET_BYTE(p, 2), GET_BYTE(p, 10));
@@ -163,7 +172,7 @@ static void lx3_native_pedals(void) {
   lx3_native_maintain();
 }
 
-static bool lx3_angle_envelope(const CANPacket_t *p, lx3_envelope_t *s, bool commit) {
+static bool lx3_angle_envelope(const CANPacket_t *p, lx3_envelope_t *s, bool commit, uint32_t anchor_us) {
   const int raw = GET_BYTE(p, 4) | ((GET_BYTE(p, 5) & 63U) << 8U);
   const int angle = raw >= 8192 ? raw - 16384 : raw;
   const int torque = GET_BYTE(p, 6);
@@ -171,7 +180,22 @@ static bool lx3_angle_envelope(const CANPacket_t *p, lx3_envelope_t *s, bool com
   if ((ABS(angle) > 1750) || (torque > 250)) return false;
   lx3_envelope_t next = *s;
   if (!next.active) {
-    next.angle = lx3_angle_measured;
+    // Match the first command to recent *measured* angles, like other angle
+    // policies. card's sample can be 1-3 ticks behind the current MCU sample.
+    // No host inactive target, stale sample or larger command rate is trusted.
+    int lo = 0, hi = 0;
+    bool found = false;
+    // At final TX use the measurement window at admission, not a shifted
+    // window after the command waited in a software queue (at most 100 ms).
+    for (unsigned i = 0U; i < LX3_ANGLE_HISTORY_SIZE; i++) {
+      if (lx3_angle_history[i].valid && (anchor_us - lx3_angle_history[i].us <= 50000U)) {
+        const int measured = lx3_angle_history[i].angle;
+        lo = found ? MIN(lo, measured) : measured; hi = found ? MAX(hi, measured) : measured;
+        found = true;
+      }
+    }
+    if (!found) return false;
+    next.angle = MIN(MAX(angle, lo), hi);
     next.torque = 0;
     next.angle_credit = 21000U;
     // Stock host clamps the first active command to ANGLE_MIN_TORQUE = 25.
@@ -246,7 +270,7 @@ static bool lx3_native_packet(const CANPacket_t *p, const lx3_queue_stamp_t *sta
   const bool permitted = tagged && lx3_native_healthy() && ((lx3_auth.allowed & axis) != 0U);
   if (!tagged || !lx3_packet_shape(p, permitted)) return false;
   if ((GET_ADDR(p) == 0xCB) && lx3_packet_active(p)) {
-    const bool ok = lx3_angle_envelope(p, final ? &lx3_final_envelope : &lx3_admit_envelope, commit);
+    const bool ok = lx3_angle_envelope(p, final ? &lx3_final_envelope : &lx3_admit_envelope, commit, stamp->admitted_us);
     if (commit || !ok) {
       const unsigned at = final ? 1U : 0U;
       lx3_limit_rejections[at] = ok ? 0U : lx3_limit_rejections[at] + 1U;

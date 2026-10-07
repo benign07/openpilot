@@ -11,6 +11,7 @@ LX3_AUTHORITY_FLAG = 2048
 BUTTON_TIMEOUT_NS = 200_000_000
 HOST_CONTINUITY_NS = 1_000_000_000
 MAIN_RELEASE_NS = 300_000_000
+WIRE_PERIOD_NS = 40_000_000  # observed 25 Hz / +2 counter; accumulate through wrap
 LFA = 128
 MAIN = 8
 CANCEL = 4
@@ -45,6 +46,7 @@ class PhysicalButtons:
     self.main_release_counter = 0
     self.main_neutral = False
     self.events: list[PhysicalButton] = []
+    self.sample = self.press_sample = self.main_press_sample = self.main_last_sample = 0
 
   def invalidate(self):
     self.ready = False
@@ -78,6 +80,7 @@ class PhysicalButtons:
     if not continuous or not valid_key:
       self.invalidate()
     self.last_ns, self.counter = now_ns, data[2]
+    self.sample += 1
     if not valid_key:
       return
     if key == CANCEL:
@@ -97,16 +100,18 @@ class PhysicalButtons:
       if not self.main_held:
         self.main_held = True
         self.main_press_ns = now_ns
+        self.main_press_sample = self.sample
         self.events.append(PhysicalButton(MAIN, True, self.counter, now_ns))
       self.main_last_ns = now_ns
+      self.main_last_sample = self.sample
       self.main_neutral = False
     elif self.main_held:
       if not self.main_neutral:
         self.main_release_counter = self.counter
         self.main_neutral = True
-      if now_ns - self.main_last_ns >= MAIN_RELEASE_NS:
+      if self.sample - self.main_last_sample >= 8:
         self.events.append(PhysicalButton(MAIN, False, self.main_release_counter, now_ns,
-                                         self.main_last_ns - self.main_press_ns))
+                                         (self.main_last_sample - self.main_press_sample) * WIRE_PERIOD_NS))
         self.main_held = False
 
     other = 0 if key == MAIN else key
@@ -116,11 +121,13 @@ class PhysicalButtons:
         self.invalidate()
         return
       if self.held and other == 0:
-        self.events.append(PhysicalButton(self.held, False, self.counter, now_ns, now_ns - self.press_ns))
+        self.events.append(PhysicalButton(self.held, False, self.counter, now_ns,
+                                         (self.sample - self.press_sample) * WIRE_PERIOD_NS))
       if other and self.held == 0:
         if other != CANCEL:
           self.events.append(PhysicalButton(other, True, self.counter, now_ns))
         self.press_ns = now_ns
+        self.press_sample = self.sample
       self.held = other
 
   def update(self, can_packets):

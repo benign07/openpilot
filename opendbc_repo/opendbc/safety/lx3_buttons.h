@@ -7,6 +7,7 @@
 // minimum ISR spacing: several legitimate FIFO frames can be drained together.
 #define LX3_BUTTON_TIMEOUT_US 200000U
 #define LX3_MAIN_RELEASE_US 300000U
+#define LX3_BUTTON_WIRE_PERIOD_US 40000U
 #define LX3_BUTTON_LFA 128U
 #define LX3_BUTTON_MAIN 8U
 #define LX3_BUTTON_CANCEL 4U
@@ -27,6 +28,10 @@ typedef struct {
   uint8_t raw_key;
   uint32_t last_us;
   uint32_t press_us;
+  uint32_t sample;
+  uint32_t press_sample;
+  uint32_t main_press_sample;
+  uint32_t main_last_sample;
   bool main_held;
   bool main_neutral;
   uint32_t main_last_us;
@@ -67,6 +72,7 @@ static inline void lx3_buttons_feed(lx3_buttons_t *s, uint32_t now, uint8_t coun
   s->seen = true;
   s->last_us = now;
   s->counter = counter;
+  s->sample++;
   if (!valid) return;
   if (key == LX3_BUTTON_CANCEL) lx3_buttons_event(s, key, true, counter, 0U);
   if (!s->ready) {
@@ -87,17 +93,20 @@ static inline void lx3_buttons_feed(lx3_buttons_t *s, uint32_t now, uint8_t coun
     if (!s->main_held) {
       s->main_held = true;
       s->main_press_us = now;
+      s->main_press_sample = s->sample;
       lx3_buttons_event(s, key, true, counter, 0U);
     }
     s->main_last_us = now;
+    s->main_last_sample = s->sample;
     s->main_neutral = false;
   } else if (s->main_held) {
     if (!s->main_neutral) {
       s->main_release_counter = counter;
       s->main_neutral = true;
     }
-    if ((now - s->main_last_us) >= LX3_MAIN_RELEASE_US) {
-      lx3_buttons_event(s, LX3_BUTTON_MAIN, false, s->main_release_counter, s->main_last_us - s->main_press_us);
+    if ((s->sample - s->main_last_sample) >= 8U) {
+      lx3_buttons_event(s, LX3_BUTTON_MAIN, false, s->main_release_counter,
+                        (s->main_last_sample - s->main_press_sample) * LX3_BUTTON_WIRE_PERIOD_US);
       s->main_held = false;
     }
   }
@@ -109,11 +118,12 @@ static inline void lx3_buttons_feed(lx3_buttons_t *s, uint32_t now, uint8_t coun
       return;
     }
     if ((s->held != 0U) && (other == 0U)) {
-      lx3_buttons_event(s, s->held, false, counter, now - s->press_us);
+      lx3_buttons_event(s, s->held, false, counter, (s->sample - s->press_sample) * LX3_BUTTON_WIRE_PERIOD_US);
     }
     if ((other != 0U) && (s->held == 0U)) {
       if (other != LX3_BUTTON_CANCEL) lx3_buttons_event(s, other, true, counter, 0U);
       s->press_us = now;
+      s->press_sample = s->sample;
     }
     s->held = other;
   }

@@ -19,7 +19,7 @@ from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
-from openpilot.selfdrive.car.lx3_authority import populate_car_state
+from openpilot.selfdrive.car.lx3_authority import copy_status, populate_car_state
 from openpilot.selfdrive.car.cruise import VCruiseCarrot
 from openpilot.selfdrive.car.car_specific import MockCarState
 
@@ -196,6 +196,8 @@ class Car:
     #self.t2 = time.monotonic()
 
     #self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric)
+    if uses_lx3_authority(self.CP):
+      copy_status(CS, self.sm, time.monotonic_ns())
     self.v_cruise_helper.update_v_cruise(CS, self.sm, self.is_metric)
     #self.t3 = time.monotonic()
     if self.sm['carControl'].enabled and not self.CC_prev.enabled:

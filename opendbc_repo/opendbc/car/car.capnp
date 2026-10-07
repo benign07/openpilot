@@ -854,6 +854,16 @@ struct Lx3Authority {
   pendingAgeMs @26 :UInt16;
   heartbeatAgeMs @27 :UInt16;
   oemEmergency @28 :Bool;
+  armed @29 :UInt8;  # lateral, longitudinal, post-pedal OFF required
+  longPendingKey @30 :UInt16;
+  longPendingGeneration @31 :UInt16;
+  longPendingAgeMs @32 :UInt16;
+  statusMonoTime @33 :UInt64;
+  remoteRequest @34 :Bool;
+  lateralRefused @35 :Bool;
+  pendingAxes @36 :UInt8;
+  longPendingAxes @37 :UInt8;
+  refuseLong @38 :Bool;
 }
 
 struct Lx3TxIdentity {

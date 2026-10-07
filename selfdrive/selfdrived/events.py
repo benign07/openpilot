@@ -1076,6 +1076,16 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   EventName.audioRefuse: {
      ET.WARNING: EngagementAlert(AudibleAlert.refuse),
   },
+  EventName.lx3AuthorityDenied: {
+    ET.PERMANENT: Alert("제어 요청이 승인되지 않았습니다", "상태 확인 후 핸들 버튼으로 다시 요청하세요",
+                        AlertStatus.normal, AlertSize.small, Priority.LOW,
+                        VisualAlert.none, AudibleAlert.refuse, 2.),
+  },
+  EventName.lx3MonitoringRequired: {
+    ET.NO_ENTRY: NoEntryAlert("LX3 제어에는 운전자 모니터링이 필요합니다"),
+    ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("운전자 모니터링을 확인하세요"),
+    ET.PERMANENT: NormalPermanentAlert("LX3 운전자 모니터링 필요", "모니터링 설정과 카메라 상태를 확인하세요"),
+  },
   EventName.stopStop: {
      ET.WARNING: EngagementAlert(AudibleAlert.stopStop),
   },

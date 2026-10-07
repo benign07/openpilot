@@ -159,6 +159,8 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     torqueNNLoad @118;
 
     soundsUnavailableDEPRECATED @47;
+    lx3AuthorityDenied @123;
+    lx3MonitoringRequired @124;
   }
 }
 
@@ -812,6 +814,8 @@ struct SelfdriveState {
   experimentalMode @10 :Bool;
   personality @11 :LongitudinalPersonality;
   distanceTraveled @13 :Float32;
+  lx3LongRequest @14 :Bool;  # pending physical/armed request, not enabled or permission
+  lx3LongRefused @15 :Bool;  # drop an unaccepted pending session, acknowledged by Panda
 
   enum OpenpilotState @0xdbe58b96d2d1ac61 {
     disabled @0;

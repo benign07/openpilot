@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 #define LX3_PROTOCOL_VERSION 3U
-#define LX3_STATUS_SIZE 50U
+#define LX3_STATUS_SIZE 58U
 #define LX3_STATUS_REQUEST 0xC7U
 #define LX3_EPOCH_HIGH_REQUEST 0xC8U
 #define LX3_EPOCH_LOW_REQUEST 0xC9U
@@ -19,7 +19,7 @@ typedef struct __attribute__((packed)) {
   uint8_t version;
   uint8_t profile;  // 0 capability only, 1 supported LX3, 2 rejected combination
   uint8_t allowed;
-  uint8_t armed;
+  uint8_t armed;  // bit0 lateral, bit1 longitudinal, bit2 requires post-pedal OFF
   uint16_t reason;
   uint16_t pending_key;
   uint16_t pending_generation;
@@ -37,11 +37,17 @@ typedef struct __attribute__((packed)) {
   uint16_t lateral_revision;
   uint16_t longitudinal_revision;
   uint16_t oem_emergency;
+  uint16_t long_pending_key;
+  uint16_t long_pending_generation;
+  uint16_t long_pending_age_ms;
+  uint8_t pending_axes;
+  uint8_t long_pending_axes;
 } lx3_status_t;
 
 static inline bool lx3_status_valid(const lx3_status_t *s, int bytes) {
   return (s != 0) && (bytes == (int)sizeof(*s)) && (s->version == LX3_PROTOCOL_VERSION) &&
-    (s->profile <= 2U) && (s->allowed <= 3U) && (s->armed <= 1U) && (s->input_ready <= 1U) && (s->oem_emergency <= 1U) &&
+    (s->profile <= 2U) && (s->allowed <= 3U) && (s->armed <= 7U) && (s->input_ready <= 1U) && (s->oem_emergency <= 1U) &&
+    (s->pending_axes <= 3U) && (s->long_pending_axes <= 3U) &&
     (((s->allowed & 1U) == 0U) == (s->lateral_generation == 0U)) &&
     (((s->allowed & 2U) == 0U) == (s->longitudinal_generation == 0U));
 }
