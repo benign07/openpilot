@@ -158,10 +158,10 @@ class TestLx3Runtime(unittest.TestCase):
       self.enabled,_ = self.machine.update(events)
       CC = car.CarControl.new_message(enabled=self.enabled)
       CC.latActive, CC.longActive = configure_control(CC,CS,events.to_msg(),self.enabled,
-        self.params.get_bool('AlwaysLateral'),True,host_fresh,self.now,self.handshake.request,self.handshake.refusing)
+        self.params.get_bool('AlwaysLateral'),True,host_fresh,self.now,self.handshake.request,self.handshake.refusing,self.handshake.refusal_sequence)
       if self.frame % 10 == 0:
         a = CC.lx3Authority
-        self.native.fixture_state(a.intent,a.decisionKey,a.pendingGeneration,int(a.autoResume),a.observedLongRevision,a.config,int(a.refuseLong))
+        self.native.fixture_state(a.intent,a.decisionKey,a.pendingGeneration,int(a.autoResume),a.observedLongRevision,a.config,int(a.refuseLong),a.refuseAfterSequence)
         ps = log.PandaState.new_message(); ps.lx3Authority=self.status().message()
         self.sm['pandaStates']=[ps]; self.sm.alive['pandaStates']=self.sm.valid['pandaStates']=True
         self.sm.logMonoTime['pandaStates']=self.now

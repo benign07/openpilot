@@ -98,15 +98,17 @@ void Panda::send_lx3_state(cereal::Lx3Authority::Reader a, bool fresh) {
   const uint16_t config = fresh ? a.getConfig() : 0U;
   const uint16_t long_ms = fresh ? a.getLongPressMs() : 700U;
   const uint16_t revision = fresh ? a.getObservedLongRevision() : 0U;
+  const uint32_t refuse_after = fresh && a.getRefuseLong() ? a.getRefuseAfterSequence() : 0U;
   if (lx3_sequence_ == UINT32_MAX) {
     set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
     return;
   }
   const uint32_t sequence = ++lx3_sequence_;
-  const uint64_t binding = lx3_state_binding(lx3_epoch_, sequence, value, generation, config, long_ms, revision);
+  const uint64_t binding = lx3_state_binding(lx3_epoch_, sequence, value, generation, config, long_ms, revision, refuse_after);
   handle->control_write(LX3_CONFIG_REQUEST, config, long_ms);
   handle->control_write(LX3_SEQUENCE_REQUEST, sequence >> 16U, sequence);
   handle->control_write(LX3_REVOKE_ACK_REQUEST, revision, 0U);
+  handle->control_write(LX3_REFUSAL_REQUEST, refuse_after >> 16U, refuse_after);
   handle->control_write(LX3_BINDING_HIGH_REQUEST, binding >> 48U, binding >> 32U);
   handle->control_write(LX3_BINDING_LOW_REQUEST, binding >> 16U, binding);
   lx3_status_t status{};

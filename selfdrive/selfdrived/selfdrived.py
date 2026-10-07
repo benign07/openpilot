@@ -558,6 +558,7 @@ class SelfdriveD:
     ss.distanceTraveled = float(self.distance_traveled)
     ss.lx3LongRequest = uses_lx3_authority(self.CP) and self.lx3_engagement.request
     ss.lx3LongRefused = uses_lx3_authority(self.CP) and self.lx3_engagement.refusing
+    ss.lx3RefuseAfterSequence = self.lx3_engagement.refusal_sequence if ss.lx3LongRefused else 0
 
     self.pm.send('selfdriveState', ss_msg)
 

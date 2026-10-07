@@ -817,6 +817,7 @@ struct SelfdriveState {
   distanceTraveled @13 :Float32;
   lx3LongRequest @14 :Bool;  # pending physical/armed request, not enabled or permission
   lx3LongRefused @15 :Bool;  # drop an unaccepted pending session, acknowledged by Panda
+  lx3RefuseAfterSequence @16 :UInt32;
 
   enum OpenpilotState @0xdbe58b96d2d1ac61 {
     disabled @0;

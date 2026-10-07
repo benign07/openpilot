@@ -28,6 +28,8 @@ Scope:
   An explicit refusal acknowledgement applies only to its LONG episode and
   cannot erase independent LFA gestures or later physical retries. A held
   brake at standstill cannot turn expired RES into a session-disarming fault.
+  Refusals carry a stable episode identity so two attempts between 10 Hz
+  samples, or a stale-host interval, cannot leave LONG permanently locked.
 - Carrot commits automatic hold only after accepted engagement. A real MAIN,
   RES or SET supersedes a pending auto request and cannot inherit its hold.
 - LX3 angle startup waits visibly when the measured angle is outside the

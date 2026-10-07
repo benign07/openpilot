@@ -12,6 +12,7 @@
 #define LX3_SEQUENCE_REQUEST 0xCCU
 #define LX3_CONFIG_REQUEST 0xCDU
 #define LX3_REVOKE_ACK_REQUEST 0xCEU
+#define LX3_REFUSAL_REQUEST 0xCFU
 #define LX3_STATE_REQUEST 0xF4U
 
 // Additive USB/SPI companion. Universal health v16 and CAN packet v4 stay intact.
@@ -56,10 +57,10 @@ static inline bool lx3_status_valid(const lx3_status_t *s, int bytes) {
 // Detect accidental cross-session/partial-transfer mix-ups, not authentication
 // against a malicious host. A monotonically increasing sequence rejects replay.
 static inline uint64_t lx3_state_binding(uint64_t epoch, uint32_t sequence, uint16_t value, uint16_t generation,
-                                         uint16_t config, uint16_t long_ms, uint16_t revision) {
+                                         uint16_t config, uint16_t long_ms, uint16_t revision, uint32_t refuse_after) {
   uint64_t mix = epoch ^ ((uint64_t)value << 48U) ^ ((uint64_t)generation << 32U) ^ sequence;
   mix = (mix << 17U) | (mix >> 47U);
-  return mix ^ ((uint64_t)config << 32U) ^ ((uint64_t)long_ms << 16U) ^ revision;
+  return mix ^ ((uint64_t)config << 32U) ^ ((uint64_t)long_ms << 16U) ^ revision ^ ((uint64_t)refuse_after << 9U);
 }
 
 #define LX3_TX_PREFIX_ADDR 0x1FFFFFFFU

@@ -13,8 +13,10 @@ static uint16_t lx3_long_ms_accepted;
 static uint16_t lx3_revision_staged;
 static uint8_t lx3_stage_parts;
 static uint32_t lx3_stage_us;
-static bool lx3_refuse_active;
+static bool lx3_refuse_seen;
 static uint32_t lx3_refused_sequence;
+static uint32_t lx3_refuse_after_staged;
+static uint32_t lx3_refuse_after_accepted;
 
 static inline void lx3_protocol_reset(void) {
   lx3_epoch_staged = 0U;
@@ -29,8 +31,9 @@ static inline void lx3_protocol_reset(void) {
   lx3_revision_staged = 0U;
   lx3_stage_parts = 0U;
   lx3_stage_us = 0U;
-  lx3_refuse_active = false;
+  lx3_refuse_seen = false;
   lx3_refused_sequence = 0U;
+  lx3_refuse_after_staged = lx3_refuse_after_accepted = 0U;
 }
 
 static inline lx3_status_t lx3_native_status(void) {
@@ -104,8 +107,11 @@ static inline void lx3_native_control(uint8_t request, uint16_t value, uint16_t 
   } else if (request == LX3_BINDING_LOW_REQUEST) {
     lx3_binding_staged |= ((uint32_t)value << 16U) | index;
     lx3_stage_parts |= 16U;
+  } else if (request == LX3_REFUSAL_REQUEST) {
+    lx3_refuse_after_staged = ((uint32_t)value << 16U) | index;
+    lx3_stage_parts |= 32U;
   } else if (request == LX3_STATE_REQUEST) {
-    if ((lx3_stage_parts != 31U) || ((now - lx3_stage_us) >= 100000U) || (lx3_sequence_staged <= lx3_sequence_accepted)) {
+    if ((lx3_stage_parts != 63U) || ((now - lx3_stage_us) >= 100000U) || (lx3_sequence_staged <= lx3_sequence_accepted)) {
       lx3_stage_parts = 0U;
       lx3_native_maintain(); // Missing/replayed stages cannot refresh the lease.
       return;
@@ -113,8 +119,11 @@ static inline void lx3_native_control(uint8_t request, uint16_t value, uint16_t 
     const bool valid = (lx3_long_ms_staged >= 100U) &&
       (lx3_long_ms_staged <= 10000U) && ((lx3_config_staged & 0xFFC0U) == 0U) &&
       (((value & 8U) == 0U) || ((value & LX3_LONG) == 0U)) &&
+      (((value & 8U) == 0U) ? lx3_refuse_after_staged == 0U :
+        (lx3_refuse_after_staged < lx3_sequence_staged &&
+         (!lx3_refuse_seen || lx3_refuse_after_staged >= lx3_refuse_after_accepted))) &&
       (lx3_binding_staged == lx3_state_binding(lx3_auth.epoch, lx3_sequence_staged, value, index,
-                                              lx3_config_staged, lx3_long_ms_staged, lx3_revision_staged));
+                                              lx3_config_staged, lx3_long_ms_staged, lx3_revision_staged, lx3_refuse_after_staged));
     lx3_stage_parts = 0U;
     if (!valid) {
       lx3_authority_revoke(&lx3_auth, LX3_ALL, LX3_REASON_IDENTITY, true);
@@ -144,7 +153,7 @@ static inline void lx3_native_control(uint8_t request, uint16_t value, uint16_t 
     const uint16_t key = ((uint16_t)button << 8U) | (value >> 8U);
     const uint8_t previous = lx3_auth.allowed;
     const bool refuse = (value & 8U) != 0U;
-    if (refuse && !lx3_refuse_active) {
+    if (refuse && (!lx3_refuse_seen || lx3_refuse_after_staged != lx3_refuse_after_accepted)) {
       // The host refused a pending engagement. Do not leave an unaccepted
       // longitudinal session armed for a later automatic resume.
       // Apply once per refusal episode. Independent LAT gestures and physical
@@ -152,8 +161,9 @@ static inline void lx3_native_control(uint8_t request, uint16_t value, uint16_t 
       // repetitions of the same host refusal while IPC catches up.
       lx3_authority_revoke_scoped(&lx3_auth, LX3_LONG, LX3_REASON_HOST_OFF, true, LX3_LONG);
       lx3_refused_sequence = lx3_sequence_accepted;
+      lx3_refuse_after_accepted = lx3_refuse_after_staged;
+      lx3_refuse_seen = true;
     }
-    lx3_refuse_active = refuse;
     (void)lx3_authority_heartbeat(&lx3_auth, now, lx3_auth.epoch, value & 3U, index, key,
       (value & 4U) != 0U, lx3_native_healthy(), brake_pressed, gas_pressed, lx3_revision_staged);
     if (previous != lx3_auth.allowed) lx3_native_purge(previous & (uint8_t)~lx3_auth.allowed);

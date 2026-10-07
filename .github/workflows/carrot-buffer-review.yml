@@ -106,6 +106,15 @@ jobs:
             importlib.import_module(name)
             print('IMPORTED', name)
           PY
+      - name: Exercise linked lateral MPC and longitudinal solver initialization
+        run: |
+          uv run --no-sync python -m pytest selfdrive/controls/tests/test_lateral_mpc.py -q
+          uv run --no-sync python - <<'PY'
+          from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc
+          mpc = LongitudinalMpc()
+          mpc.reset()
+          print('PASS actual longitudinal MPC construction and reset')
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:

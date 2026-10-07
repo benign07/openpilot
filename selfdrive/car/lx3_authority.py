@@ -99,7 +99,8 @@ def lateral_events_clear(events, always_lateral):
                   (e.noEntry or e.immediateDisable or e.softDisable or e.userDisable)) for e in events)
 
 
-def configure_control(CC, CS, events, enabled, always_lateral, driving, fresh, now_ns, long_request=False, refuse_long=False):
+def configure_control(CC, CS, events, enabled, always_lateral, driving, fresh, now_ns,
+                      long_request=False, refuse_long=False, refuse_after=0):
   CC.lx3Authority = CS.lx3Authority
   a = CC.lx3Authority
   ready = fresh and a.buttonHealthy and verified(a)
@@ -111,6 +112,7 @@ def configure_control(CC, CS, events, enabled, always_lateral, driving, fresh, n
   long = ready and (enabled or (long_request and request_clear)) and not CS.brakePressed and not (CS.gasPressed and a.config & 2)
   long = long and not refuse_long
   a.refuseLong = refuse_long
+  a.refuseAfterSequence = refuse_after if refuse_long else 0
   a.intent = (LAT if lat else 0) | (LONG if long else 0)
   a.decisionKey, a.pendingGeneration, a.intent = cited_decision(a, a.intent, now_ns)
   a.observedLongRevision = a.longitudinalRevision

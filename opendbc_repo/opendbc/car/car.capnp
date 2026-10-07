@@ -867,6 +867,7 @@ struct Lx3Authority {
   longPendingAxes @37 :UInt8;
   refuseLong @38 :Bool;
   refusedSequence @39 :UInt32;
+  refuseAfterSequence @40 :UInt32;  # Stable episode identity, even when a false flag is not sampled.
 }
 
 struct Lx3TxIdentity {

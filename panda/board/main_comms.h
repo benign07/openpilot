@@ -93,6 +93,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
     case LX3_SEQUENCE_REQUEST:
     case LX3_CONFIG_REQUEST:
     case LX3_REVOKE_ACK_REQUEST:
+    case LX3_REFUSAL_REQUEST:
       ENTER_CRITICAL();
       lx3_native_control(req->request, req->param1, req->param2);
       EXIT_CRITICAL();

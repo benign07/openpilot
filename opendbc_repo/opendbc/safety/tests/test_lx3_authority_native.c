@@ -22,6 +22,8 @@ static uint8_t counters[6];
 static uint32_t sequence;
 static uint16_t state_config = 5U;
 static bool state_refuse;
+static bool state_stale;
+static uint32_t state_refuse_after;
 static const uint64_t epoch = 0x3141592653589793ULL;
 
 static CANPacket_t packet(int address, unsigned bus, unsigned length) {
@@ -46,12 +48,14 @@ static void rx_tick(uint8_t key, bool brake, bool gas) {
 static void state(uint8_t intent, uint16_t key, uint16_t generation, bool automatic, uint16_t revision) {
   uint8_t button = key >> 8U;
   uint8_t kind = button == 128U ? 1U : button == 8U ? 2U : button == 1U ? 3U : button == 2U ? 4U : 0U;
-  const uint16_t value = (uint16_t)((key & 255U) << 8U) | (kind << 4U) | intent | (automatic ? 4U : 0U) | (state_refuse ? 8U : 0U);
+  const uint16_t value = state_stale ? 0x80U : (uint16_t)((key & 255U) << 8U) | (kind << 4U) | intent | (automatic ? 4U : 0U) | (state_refuse ? 8U : 0U);
   const uint16_t config = state_config;
-  const uint64_t binding = lx3_state_binding(epoch, ++sequence, value, generation, config, 700U, revision);
+  const uint32_t refuse_after = state_refuse && !state_stale ? state_refuse_after : 0U;
+  const uint64_t binding = lx3_state_binding(epoch, ++sequence, value, generation, config, 700U, revision, refuse_after);
   lx3_native_control(LX3_CONFIG_REQUEST, config, 700U);
   lx3_native_control(LX3_SEQUENCE_REQUEST, sequence >> 16U, sequence);
   lx3_native_control(LX3_REVOKE_ACK_REQUEST, revision, 0U);
+  lx3_native_control(LX3_REFUSAL_REQUEST, refuse_after >> 16U, refuse_after);
   lx3_native_control(LX3_BINDING_HIGH_REQUEST, binding >> 48U, binding >> 32U);
   lx3_native_control(LX3_BINDING_LOW_REQUEST, binding >> 16U, binding);
   lx3_native_control(LX3_STATE_REQUEST, value, generation);
@@ -65,7 +69,7 @@ static void cite(uint8_t intent) {
 }
 
 static void reset(void) {
-  timer.CNT = 2000000U; sequence = 0U; state_config = 5U; state_refuse=false; memset(counters, 0, sizeof(counters));
+  timer.CNT = 2000000U; sequence = 0U; state_config = 5U; state_refuse=false; state_stale=false; state_refuse_after=0U; memset(counters, 0, sizeof(counters));
   assert(set_safety_hooks(SAFETY_HYUNDAI_CANFD, LX3_AUTHORITY_PROFILE) == 0);
   lx3_native_control(LX3_EPOCH_HIGH_REQUEST, (uint16_t)(epoch >> 48U), (uint16_t)(epoch >> 32U));
   lx3_native_control(LX3_EPOCH_LOW_REQUEST, (uint16_t)(epoch >> 16U), (uint16_t)epoch);
@@ -253,14 +257,29 @@ static void refusal_preserves_unrelated_gestures(void) {
   // same refusal while the host waits for the explicit acknowledgement.
   rx_tick(1U,false,false); rx_tick(0U,false,false);
   const uint16_t long_key=lx3_auth.pending_axis_key[1], long_gen=lx3_auth.pending_axis_generation[1];
+  const uint16_t physical_sequence=lx3_auth.sequence;
   state(LX3_LAT,lat_key,lat_gen,false,lx3_auth.longitudinal_revision);
   assert(lx3_native_status().refused_sequence==first_refusal);
   assert(lx3_auth.allowed==LX3_LAT && lx3_auth.pending_axis_generation[1]==long_gen);
+  assert(lx3_auth.sequence==physical_sequence);  // No repeated revision burn.
   state_refuse=false; state(LX3_ALL,long_key,long_gen,false,lx3_auth.longitudinal_revision);
   assert(lx3_auth.allowed==LX3_ALL);
-  state_refuse=true; state(LX3_LAT,0U,0U,false,lx3_auth.longitudinal_revision);
+  state_refuse=true; state_refuse_after=sequence; state(LX3_LAT,0U,0U,false,lx3_auth.longitudinal_revision);
   assert(lx3_auth.allowed==LX3_LAT && !lx3_auth.longitudinal_armed);
   assert(lx3_native_status().refused_sequence>first_refusal);
+  // A host false->true interval can fit between two 10 Hz STATE samples.
+  // A distinct episode still clears its earlier pending and produces an ACK.
+  const uint32_t second_refusal=sequence;
+  rx_tick(2U,false,false); rx_tick(0U,false,false);
+  assert(lx3_auth.pending_axis_generation[1]!=0U);
+  state_refuse_after=sequence; state(LX3_LAT,0U,0U,false,lx3_auth.longitudinal_revision);
+  assert(lx3_auth.pending_axis_generation[1]==0U);
+  assert(lx3_native_status().refused_sequence>second_refusal);
+  state_stale=true; state(0U,0U,0U,false,0U); state_stale=false;
+  assert(lx3_auth.allowed==0U && lx3_auth.reason==LX3_REASON_HEARTBEAT);
+  const uint32_t stale_sequence=sequence;
+  state_refuse_after=sequence; state(0U,0U,0U,false,lx3_auth.longitudinal_revision);
+  assert(lx3_native_status().refused_sequence>stale_sequence);
   puts("PASS longitudinal refusal preserves independent LFA and post-refusal physical retry");
 }
 

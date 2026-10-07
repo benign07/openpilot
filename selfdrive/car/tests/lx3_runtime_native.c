@@ -16,8 +16,9 @@ int fixture_rx(unsigned address, const uint8_t *data, unsigned length) {
   return safety_rx_hook(&p);
 }
 void fixture_status(lx3_status_t *s) { *s=lx3_native_status(); }
-void fixture_state(unsigned intent, unsigned key, unsigned generation, unsigned automatic, unsigned revision, unsigned config, unsigned refuse) {
-  state_config=config; state_refuse=refuse != 0U; state(intent,key,generation,automatic != 0U,revision);
+void fixture_state(unsigned intent, unsigned key, unsigned generation, unsigned automatic, unsigned revision, unsigned config, unsigned refuse, unsigned refuse_after) {
+  state_config=config; state_refuse=refuse != 0U; state_refuse_after=refuse_after;
+  state(intent,key,generation,automatic != 0U,revision);
 }
 int fixture_tx(unsigned address, const uint8_t *data, unsigned length, unsigned generation) {
   CANPacket_t p=packet(address,0U,length); memcpy(p.data,data,length);
