@@ -168,6 +168,7 @@ class TestLx3Runtime(unittest.TestCase):
         'activate':CS.activateCruise,'blocked':self.cruise.lx3_auto_blocked,'carrotLog':self.cruise.log,
         'gear':str(CS.gearShifter),'events':list(events.names),'mode':self.cruise._lfa_button_mode})
       self.CC=CC; self.CS=CS; self.prev=CS.as_reader(); self.sm['carControl']=CC
+      self.CI.CS.softHoldActive = CS.softHoldActive  # same bridge as card
     return self.CS
 
   def main(self):
@@ -255,12 +256,25 @@ class TestLx3Runtime(unittest.TestCase):
     self.lfa()
     self.assertEqual(self.status().allowed,1)
 
+  def test_rejected_soft_hold_does_not_turn_next_set_into_cancel(self):
+    self.main()
+    self.step(brake=True,speed=0,ticks=300)
+    self.assertEqual(self.CS.softHoldActive,1)
+    self.step(speed=0,ticks=1)
+    self.assertTrue(self.handshake.request or self.handshake.deadline)
+    self.step(speed=0,ticks=2,extra=(EventName.seatbeltNotLatched,))
+    self.step(speed=0,ticks=70)
+    self.assertFalse(self.enabled)
+    self.assertEqual(self.CS.softHoldActive,0)
+    self.step(2,speed=0,ticks=8); self.step(speed=0,ticks=40)
+    self.assertTrue(self.enabled)
+
   def test_actual_controller_commands_are_admitted(self):
     self.main(); self.assertTrue(self.enabled)
     counts=defaultdict(int)
     for _ in range(25):
       self.step()
-      _,msgs=self.CI.apply(self.CC,self.now,None)
+      _,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
       for addr,data,bus in msgs:
         if bus==0 and addr in (0xCB,0x12A,0x1A0):
           gen=self.CC.lx3Authority.longitudinalGeneration if addr==0x1A0 else self.CC.lx3Authority.lateralGeneration
@@ -272,7 +286,7 @@ class TestLx3Runtime(unittest.TestCase):
     self.main()
     for angle in (200,200,40,20,20):
       self.step(angle=angle)
-      out,msgs=self.CI.apply(self.CC,self.now,None)
+      out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
       self.assertEqual(out.lx3AngleLimited, angle >= 200)
       for addr,data,bus in msgs:
         if bus == 0 and addr == 0xCB:
