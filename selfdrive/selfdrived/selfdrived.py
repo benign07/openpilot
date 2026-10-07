@@ -24,7 +24,6 @@ from openpilot.selfdrive.controls.lib.latcontrol import MIN_LATERAL_CONTROL_SPEE
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 from openpilot.selfdrive.car.lx3_authority import monitor_lateral
 from openpilot.selfdrive.car.lx3_engagement import Lx3Engagement
-from openpilot.selfdrive.monitoring.lx3_monitoring import monitoring_enabled, uses_wheel_monitoring
 
 from openpilot.system.hardware import HARDWARE
 from openpilot.system.version import get_build_metadata
@@ -78,7 +77,6 @@ class SelfdriveD:
     self.camera_packets = ["roadCameraState", "driverCameraState", "wideRoadCameraState"]
 
     self.disable_dm = self.params.get_int("DisableDM")
-    self.dm_mode_changed = False
 
     # TODO: de-couple selfdrived with card/conflate on carState without introducing controls mismatches
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
@@ -88,8 +86,7 @@ class SelfdriveD:
       ignore += ['driverCameraState', 'managerState']
     elif self.disable_dm > 0:
       self.camera_packets.remove("driverCameraState")
-    if not uses_lx3_authority(self.CP):
-      ignore += ['driverMonitoringState']
+    ignore += ['driverMonitoringState']
 
     if REPLAY:
       # no vipc in replay will make them ignored anyways
@@ -205,21 +202,13 @@ class SelfdriveD:
       self.events.add(EventName.resumeBlocked)
 
     if uses_lx3_authority(self.CP):
-      dm_mode = self.params.get_int('DisableDM')
-      self.dm_mode_changed |= dm_mode != self.disable_dm
-      wheel_policy_ok = (not uses_wheel_monitoring(self.CP, dm_mode) or
-                         self.sm['driverMonitoringState'].activePolicy == MonitoringPolicy.wheeltouch)
-      if (not monitoring_enabled(self.CP, dm_mode) or self.dm_mode_changed or not wheel_policy_ok or
-          (not uses_wheel_monitoring(self.CP, dm_mode) and not self.sm.freq_ok['driverMonitoringState']) or
-          not (self.sm.alive['driverMonitoringState'] and self.sm.valid['driverMonitoringState'])):
-        self.events.add(EventName.lx3MonitoringRequired)
       if CS.lx3Authority.lateralRefused:
         self.events.add(EventName.lx3AuthorityDenied)
       if CS.lx3SteeringLimited:
         self.events.add(EventName.lx3SteeringLimited)
 
     # Handle DM
-    if not self.CP.notCar and monitoring_enabled(self.CP, self.params.get_int("DisableDM")):
+    if not self.CP.notCar and self.params.get_int("DisableDM") == 0:
       # Block engaging until ignition cycle after max number or time of distractions
       if self.sm['driverMonitoringState'].lockout and not self.dm_lockout_set:
         self.params.put_bool("DriverTooDistracted", True)

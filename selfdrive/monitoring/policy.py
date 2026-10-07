@@ -9,7 +9,6 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.common.stat_live import RunningStatFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
-from openpilot.selfdrive.car.lx3_authority import monitor_lateral
 
 AlertLevel = log.DriverMonitoringState.AlertLevel
 MonitoringPolicy = log.DriverMonitoringState.MonitoringPolicy
@@ -403,7 +402,7 @@ class DriverMonitoring:
       rpyCalib = [0., 0., 0.]
     else:
       car_speed = sm['carState'].vEgo
-      enabled = sm['selfdriveState'].enabled or monitor_lateral(sm['carState'].lx3Authority)
+      enabled = sm['selfdriveState'].enabled
       wrong_gear = sm['carState'].gearShifter not in (car.CarState.GearShifter.drive, car.CarState.GearShifter.low)
       standstill = sm['carState'].standstill
       driver_engaged = sm['carState'].steeringPressed or sm['carState'].gasPressed

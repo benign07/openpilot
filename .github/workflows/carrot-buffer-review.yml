@@ -92,10 +92,10 @@ jobs:
         run: |
           uv run --no-sync scons -j2 selfdrive/pandad/tests/test_pandad_canprotocol
           selfdrive/pandad/tests/test_pandad_canprotocol
-      - name: Stock monitoring and camera-less LX3 runtime regression
+      - name: Stock Carrot monitoring and DisableDM compatibility
         run: |
           set -o pipefail
-          uv run --no-sync python -m pytest selfdrive/monitoring/test_monitoring.py selfdrive/monitoring/test_wheel_monitoring.py -v 2>&1 | tee lx3-monitoring-runtime.log
+          uv run --no-sync python -m pytest selfdrive/monitoring/test_monitoring.py selfdrive/monitoring/test_lx3_stock_dm.py -v 2>&1 | tee lx3-stock-dm.log
       - name: Production host decisions and schema round trip
         run: uv run --no-sync python selfdrive/car/tests/test_lx3_authority.py -v
       - name: Passive diagnostics and HUD recording contract
@@ -106,7 +106,7 @@ jobs:
           import importlib
           for name in ('openpilot.selfdrive.car.card', 'openpilot.selfdrive.selfdrived.selfdrived',
                        'openpilot.selfdrive.controls.controlsd', 'openpilot.selfdrive.controls.plannerd',
-                       'openpilot.selfdrive.monitoring.dmonitoringd', 'openpilot.selfdrive.monitoring.wheel_monitord'):
+                       'openpilot.selfdrive.monitoring.dmonitoringd'):
             importlib.import_module(name)
             print('IMPORTED', name)
           PY
@@ -126,4 +126,4 @@ jobs:
           path: |
             lx3-runtime-build.log
             lx3-runtime-integration.log
-            lx3-monitoring-runtime.log
+            lx3-stock-dm.log
