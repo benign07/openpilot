@@ -10,6 +10,7 @@ Scope:
   Native pending per axis survives separate LFA/SET gestures; MAIN debounce does
   not revoke a later RES grant. Boot AutoEngage alone is not physical permission.
 - Versioned paired STATE/epoch transport; universal health v16/CAN v4 retained.
+  The v3 companion is 58 bytes; expected/actual size is logged on mismatch.
   controlsAllowed means longitudinal; lateral permission is explicitly reported.
 - Admission, OEM-triggered buffered replacement and pre-TXBAR software queue
   checks reject active commands with stale epoch, generation or age.
@@ -20,6 +21,20 @@ Scope:
 - Lateral-only monitoring/warnings, scoped event eligibility, and soft-hold
   payload generation are connected to the paired permission rather than a
   command-generates-permission loop.
+- selfdrived requests longitudinal authority before its normal enabled state;
+  an acknowledged, current-generation grant completes the regular state change.
+  Refusal stays asserted until a newer native acknowledgement. A pedal or
+  Carrot's internal pause preserves resume eligibility; faults do not.
+- Carrot commits automatic hold only after accepted engagement. A real MAIN,
+  RES or SET supersedes a pending auto request and cannot inherit its hold.
+- LX3 angle startup waits visibly when the measured angle is outside the
+  speed-dependent envelope. Once active, a shrinking acceleration envelope is
+  approached at the existing jerk/rate limit rather than an instantaneous
+  angle jump. This convergence can temporarily remain outside the tighter
+  acceleration envelope; the native hard angle and torque limits stay intact.
+- Automatic diagnostics record physical event identity, host requests, native
+  independent-axis grants/reasons/generations and angle waiting. Heartbeat
+  counters do not create full-rate recording edges; existing quotas remain.
 
 Compatibility/behaviour boundaries:
 - Other car profiles retain existing control hooks, buffer capacity and two

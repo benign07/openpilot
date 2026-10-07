@@ -35,12 +35,14 @@ class Lx3Engagement:
     blocked = any(events.contains(t) for t in (ET.NO_ENTRY, ET.USER_DISABLE, ET.IMMEDIATE_DISABLE, ET.SOFT_DISABLE))
     if blocked:
       # Preserve stock no-entry alerts and all disabling events.
-      if self.deadline and events.contains(ET.NO_ENTRY) and not enabling:
+      if self.deadline and not self.automatic and events.contains(ET.NO_ENTRY) and not enabling:
         events.add(EventName.buttonEnable)
       # Pedals suspend a physically armed session; they do not cancel its
       # resume eligibility. A second brake while awaiting OFF acknowledgement
       # must have the same semantics as the first brake on the MCU.
-      non_pedal_block = any(e != EventName.pedalPressed and any(
+      internal_pause = CS.activateCruise < 0 and not a.remoteRequest and not any(
+        b.physical and str(b.type) == 'cancel' for b in CS.buttonEvents)
+      non_pedal_block = any(e != EventName.pedalPressed and not (e == EventName.buttonCancel and internal_pause) and any(
         t in EVENTS.get(e, {}) for t in (ET.NO_ENTRY, ET.USER_DISABLE, ET.IMMEDIATE_DISABLE, ET.SOFT_DISABLE))
         for e in events.events)
       if self.deadline and non_pedal_block:
@@ -52,7 +54,7 @@ class Lx3Engagement:
       physical = (CS.buttonEnable and a.longitudinalDecisionKey >> 8 in (1, 2, 8) and
                   0 <= now_ns - a.longitudinalDecisionTime < DECISION_MAX_NS and not a.remoteRequest)
       automatic = CS.activateCruise > 0 and a.autoResume and bool(a.armed & LONG) and not a.remoteRequest
-      if fresh and not self.refusing and (physical or automatic):
+      if fresh and not self.refusing and (physical or (automatic and not self.deadline)):
         # Carrot's armed auto request already lives for 100 control ticks. A
         # short brake tap needs an extra OFF-ack round trip at 10 Hz.
         self.deadline = a.longitudinalDecisionTime + DECISION_MAX_NS if physical else now_ns + 1_000_000_000

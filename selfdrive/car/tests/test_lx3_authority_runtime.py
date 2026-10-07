@@ -269,6 +269,30 @@ class TestLx3Runtime(unittest.TestCase):
     self.step(2,speed=0,ticks=8); self.step(speed=0,ticks=40)
     self.assertTrue(self.enabled)
 
+  def physical_during_pending_hold(self, button):
+    self.main(); self.step(brake=True,speed=0,ticks=300)
+    self.step(speed=0,ticks=1)
+    self.assertTrue(self.handshake.deadline)
+    self.step(button,speed=0,ticks=8); self.step(speed=0,ticks=40)
+    self.assertTrue(self.enabled)
+    self.assertEqual(self.CS.softHoldActive,0)
+    self.assertIsNone(self.cruise.lx3_auto_pending)
+
+  def test_physical_set_supersedes_pending_hold(self):
+    self.physical_during_pending_hold(2)
+
+  def test_physical_res_supersedes_pending_hold(self):
+    self.physical_during_pending_hold(1)
+
+  def test_internal_gas_pause_does_not_disarm_pending_auto_session(self):
+    self.main(); self.step(brake=True,speed=0,ticks=300)
+    self.step(speed=0,ticks=1)
+    self.step(gas=0.25,speed=0,ticks=8); self.step(speed=0,ticks=20)
+    self.assertFalse(self.handshake.refusing)
+    self.assertTrue(self.status().armed & 2)
+    self.step(brake=True,speed=0,ticks=100); self.step(speed=0,ticks=70)
+    self.assertTrue(self.enabled)
+
   def test_actual_controller_commands_are_admitted(self):
     self.main(); self.assertTrue(self.enabled)
     counts=defaultdict(int)

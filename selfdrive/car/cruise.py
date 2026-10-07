@@ -6,7 +6,7 @@ from openpilot.common.constants import CV
 
 from opendbc.car import structs
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
-from openpilot.selfdrive.car.lx3_authority import reconcile_lateral
+from openpilot.selfdrive.car.lx3_authority import reconcile_lateral, verified, STATUS_MAX_NS
 import time
 GearShifter = structs.CarState.GearShifter
 
@@ -313,6 +313,13 @@ class VCruiseCarrot:
 
     CC = sm['carControl']
     if self.lx3_authority:
+      physical_enable = any(b.physical and not b.pressed and b.type in
+        (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.mainCruise) for b in CS.buttonEvents)
+      if physical_enable:
+        self.lx3_auto_pending = None
+        self.lx3_auto_until = 0
+        if not CC.enabled:
+          self._soft_hold_active = 0
       if CC.lx3Authority.lateralRefused and self._lat_enabled:
         self._lat_enabled = False
         self.lx3_lat_key = self.lx3_lat_time = 0
@@ -325,7 +332,7 @@ class VCruiseCarrot:
         self.lx3_auto_blocked = False
       elif CS.brakePressed or CS.gasPressed:
         self.lx3_auto_pending = None
-      elif CC.lx3Authority.refuseLong or (pending and self.frame >= pending[0]):
+      elif CC.lx3Authority.refuseLong:
         if pending:
           self._cruise_ready = pending[1]
         # A refused hold is not a held vehicle. In particular it must not
@@ -335,6 +342,8 @@ class VCruiseCarrot:
         self.lx3_auto_until = 0
         self.lx3_auto_blocked = True
       self.lx3_long_armed = bool(CS.lx3Authority.armed & 2)
+      self.lx3_arm_status_valid = (verified(CS.lx3Authority) and
+        0 <= time.monotonic_ns() - CS.lx3Authority.statusMonoTime <= STATUS_MAX_NS)
     if sm.alive['carrotMan']:
       carrot_man = sm['carrotMan']
       self.nRoadLimitSpeed = carrot_man.nRoadLimitSpeed
@@ -575,7 +584,7 @@ class VCruiseCarrot:
         if self.CP.carFingerprint != "HYUNDAI_PALISADE_LX3_HEV":
           self._lat_enabled = True
         self._pause_auto_speed_up = False
-        if self._soft_hold_active > 0:
+        if self._soft_hold_active > 0 and (not self.lx3_authority or CC.enabled):
           self._soft_hold_active = 0
         elif self._cruise_ready or not CC.enabled or CS.cruiseState.standstill or self.carrot_cruise_active:
           if False: #self._cruise_button_mode in [2, 3]:
@@ -598,7 +607,7 @@ class VCruiseCarrot:
         self._pause_auto_speed_up = True
         #self.carrot_cruise_active = False
 
-        if self._soft_hold_active > 0:
+        if self._soft_hold_active > 0 and (not self.lx3_authority or CC.enabled):
           self._cruise_control(-1, -1, "Cruise off,softhold mode (decelCruise)")
         elif self._cruise_ready:
           self._paddle_decel_active = True
@@ -744,6 +753,8 @@ class VCruiseCarrot:
 
   def _cruise_control(self, enable, cancel_timer, reason):
     if self.lx3_authority and enable > 0 and not self.lx3_remote_cycle:
+      if not getattr(self, 'lx3_arm_status_valid', False):
+        return
       if self.lx3_auto_blocked or not getattr(self, 'lx3_long_armed', False):
         if not self.lx3_auto_blocked:
           self._add_log(reason + ' > physical cruise arming required')
@@ -767,9 +778,12 @@ class VCruiseCarrot:
       self._activate_cruise = enable
       if self.lx3_authority:
         if enable > 0 and not self.lx3_remote_cycle:
-          self.lx3_auto_until = self.frame + 100
+          # selfdrived owns the one-second handshake timeout. Keep this input
+          # eligible across its IPC round trips; only its explicit denial can
+          # fail the pending Carrot transaction.
+          self.lx3_auto_until = self.frame + 150
           if self.lx3_auto_pending is None:
-            self.lx3_auto_pending = (self.frame + 100, self._cruise_ready, self._soft_hold_active > 0)
+            self.lx3_auto_pending = (self.frame, self._cruise_ready, self._soft_hold_active > 0)
         elif enable < 0:
           self.lx3_auto_until = 0
       self._cancel_timer = int(cancel_timer / 0.01)   # DT_CTRL: 0.01
