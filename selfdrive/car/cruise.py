@@ -403,6 +403,9 @@ class VCruiseCarrot:
           self._lat_enabled = CS.cruiseState.available
           self._cruise_cancel_state = not CS.cruiseState.available
           if CS.cruiseState.available:
+            # A physical MAIN enable has the same explicit resumption intent
+            # as RES/SET; clear Carrot's post-park automatic-resume timer.
+            self.autoCruiseControl_cancel_timer = 0
             self.lx3_lat_key = self.lx3_long_key = b.physicalKey
             self.lx3_lat_time = self.lx3_long_time = b.observedMonoTime
           else:

@@ -248,6 +248,7 @@ class CarController(CarControllerBase):
       margin = 0.5 if getattr(self, 'lx3_angle_waiting', False) else 0.0
       self.lx3_angle_limited = abs(CS.out.steeringAngleDeg) > max(0.0, bound - margin)
       lat_active = not self.lx3_angle_limited
+      self.apply_angle_last = CS.out.steeringAngleDeg
     self.lx3_angle_waiting = self.lx3_angle_limited
 
     # steering torque
@@ -481,7 +482,6 @@ class CarController(CarControllerBase):
             can_sends.extend(hyundaicanfd.create_fca_warning_light(self.CP, self.packer, self.CAN, self.frame))
         if self.frame % 2 == 0:
           if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
-            from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
             longitudinal_enabled = CC.enabled
             if uses_lx3_authority(self.CP):
               longitudinal_enabled = longitudinal_enabled and bool(CC.lx3Authority.allowed & CC.lx3Authority.intent & 2)

@@ -18,6 +18,7 @@ from cereal import car, log, custom
 from opendbc.can.packer import CANPacker
 from opendbc.car import Bus
 from opendbc.car.hyundai.interface import CarInterface
+from opendbc.car.hyundai.carcontroller import apply_steer_angle_limits_physics
 from opendbc.car.hyundai.values import CAR, DBC
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
@@ -123,12 +124,12 @@ class TestLx3Runtime(unittest.TestCase):
   def status(self):
     s = Status(); self.native.fixture_status(ct.byref(s)); return s
 
-  def step(self, key=0, ticks=1, brake=False, gas=0, extra=()):
+  def step(self, key=0, ticks=1, brake=False, gas=0, extra=(), angle=0, speed=80):
     for _ in range(ticks):
       self.frame += 1; self.now += 10_000_000; self.native.fixture_time(self.now // 1000)
       frames = [self.msg('ACCELERATOR_ALT', {'ACCELERATOR_PEDAL': gas}), self.msg('TCS', {'DriverBraking': int(brake)}),
-                self.msg('WHEEL_SPEEDS', {f'WHEEL_SPEED_{i}':80 for i in range(1,5)}),
-                self.msg('MDPS', {'STEERING_COL_TORQUE':0, 'STEERING_OUT_TORQUE':0}),
+                self.msg('WHEEL_SPEEDS', {f'WHEEL_SPEED_{i}':speed for i in range(1,5)}),
+                self.msg('MDPS', {'STEERING_COL_TORQUE':0, 'STEERING_OUT_TORQUE':0, 'STEERING_ANGLE_2':-angle}),
                 self.msg('CRUISE_BUTTONS_ALT', {}), self.msg('GEAR', {'GEAR':self.gear}),
                 self.msg('LFA_ALT', {}, 2), self.msg('LFA', {}, 2), self.msg('SCC_CONTROL', {}, 2),
                 self.msg('ADRV_0x161', {}, 2)]
@@ -170,10 +171,10 @@ class TestLx3Runtime(unittest.TestCase):
     return self.CS
 
   def main(self):
-    self.step(8,ticks=8); self.step(0,ticks=45)
+    self.step(8,ticks=8); self.step(0,ticks=70)
 
   def lfa(self):
-    self.step(128,ticks=8); self.step(0,ticks=20)
+    self.step(128,ticks=8); self.step(0,ticks=40)
 
   def test_main_and_lfa_only(self):
     self.lfa(); self.assertEqual(self.status().allowed,1); self.assertFalse(self.enabled); self.assertTrue(self.CC.latActive)
@@ -245,6 +246,33 @@ class TestLx3Runtime(unittest.TestCase):
           self.assertTrue(self.native.fixture_tx(addr,data,len(data),gen),f'rejected {addr:x}, native={self.status().message()}')
           counts[addr]+=1
     self.assertTrue(counts[0xCB] and counts[0x1A0],counts)
+
+  def test_initial_large_angle_waits_then_real_controller_recovers(self):
+    self.main()
+    for angle in (200,200,40,20,20):
+      self.step(angle=angle)
+      out,msgs=self.CI.apply(self.CC,self.now,None)
+      self.assertEqual(out.lx3AngleLimited, angle >= 200)
+      for addr,data,bus in msgs:
+        if bus == 0 and addr == 0xCB:
+          self.assertTrue(self.native.fixture_tx(addr,data,len(data),self.CC.lx3Authority.lateralGeneration))
+          self.assertEqual(data[6] == 0, angle >= 200)
+      self.assertEqual(self.status().allowed,3)
+
+  def test_shrinking_angle_bound_converges_at_existing_rate(self):
+    args=(100,100,30,100,True,2.97,16.4,175)
+    legacy=apply_steer_angle_limits_physics(*args)
+    corrected=apply_steer_angle_limits_physics(*args,limit_target_first=True)
+    self.assertGreater(abs(legacy-100),2)
+    self.assertLess(abs(corrected-100),2)
+    self.assertLess(corrected,100)
+    last=corrected
+    for _ in range(2000):
+      nxt=apply_steer_angle_limits_physics(100,last,30,last,True,2.97,16.4,175,limit_target_first=True)
+      self.assertLessEqual(abs(nxt-last),2)
+      self.assertLessEqual(nxt,last)
+      last=nxt
+    self.assertAlmostEqual(last,legacy,places=6)
 
 
 if __name__=='__main__': unittest.main()
