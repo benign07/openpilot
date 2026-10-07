@@ -152,12 +152,19 @@ class TestLx3Runtime(unittest.TestCase):
         self.sm.logMonoTime['pandaStates']=self.now
       CS = self.CI.update([(self.now,frames)])
       copy_status(CS,self.sm,self.now)
+      before_dispatch_key=self.cruise.lx3_lat_key
+      before_dispatch_pending=CS.lx3Authority.pendingKey
+      current_releases=[b.physicalKey for b in CS.buttonEvents if b.physical and not b.pressed]
       with patch('openpilot.selfdrive.car.cruise.time.monotonic_ns', return_value=self.now):
         self.cruise.update_v_cruise(CS,self.sm,True)
       CS.latEnabled = self.cruise._lat_enabled; CS.activateCruise = self.cruise._activate_cruise
       CS.vCruise = float(self.cruise.v_cruise_kph); CS.softHoldActive = self.cruise._soft_hold_active
       populate_car_state(CS,self.sm,self.cruise,self.params,self.now)
       events = self.car_events.update(CS,self.prev,self.CC)
+      # Same authority alert bridge as selfdrived.update_events. This event is
+      # permanent-only; it reports a refusal but does not itself deny a grant.
+      if CS.lx3Authority.lateralRefused:
+        events.add(EventName.lx3AuthorityDenied)
       # Same edge/standstill rule as selfdrived, including held brake in P/S&G.
       if ((CS.gasPressed and not self.prev.gasPressed and self.params.get_bool('DisengageOnAccelerator')) or
           (CS.brakePressed and (not self.prev.brakePressed or not CS.standstill)) or
@@ -203,6 +210,9 @@ class TestLx3Runtime(unittest.TestCase):
         'request':self.handshake.request,'refuse':self.handshake.refusing,'auto':CS.lx3Authority.autoResume,
         'activate':CS.activateCruise,'blocked':self.cruise.lx3_auto_blocked,'carrotLog':self.cruise.log,
         'gear':str(CS.gearShifter),'events':list(events.names),'mode':self.cruise._lfa_button_mode})
+      if self.status_before_host:
+        self.details[-1].update(lateralRefused=self.cruise.lx3_lateral_refused,
+          beforeDispatchKey=before_dispatch_key,beforeDispatchPending=before_dispatch_pending,currentReleases=current_releases)
       if self.input_sm is not None:
         self.details[-1].update(inputFresh=host_fresh,eventFreqOK=self.input_sm.freq_ok['onroadEvents'])
       self.CC=CC; self.CS=CS; self.prev=CS.as_reader(); self.sm['carControl']=CC
@@ -293,7 +303,10 @@ class TestLx3Runtime(unittest.TestCase):
     self.main()
     self.assertTrue(self.enabled)
     self.assertEqual(self.status().allowed,3)
-    self.assertFalse(any(EventName.lx3AuthorityDenied in d['events'] for d in self.details[start:]))
+    attempt=self.details[start:]
+    self.assertTrue(any(d['beforeDispatchPending'] and d['beforeDispatchPending']!=d['beforeDispatchKey'] and
+                        d['beforeDispatchPending'] in d['currentReleases'] for d in attempt))
+    self.assertFalse(any(d['lateralRefused'] or EventName.lx3AuthorityDenied in d['events'] for d in attempt))
 
   def test_event_gate_keeps_real_stale_invalid_and_frequency_rejection(self):
     self.start_input_checks()
