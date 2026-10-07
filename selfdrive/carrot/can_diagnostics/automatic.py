@@ -422,10 +422,10 @@ class AutoRecorder:
       return
     current = states[0]
     fields = ('controls_allowed', 'rx_checks_invalid', 'rx_overflow', 'tx_overflow',
-              'tx_blocked', 'safety_model', 'safety_param')
+              'tx_blocked', 'safety_model', 'safety_param', 'lx3_authority_state')
     # Cumulative counters remain visible in periodic samples. Their sustained
     # growth must not turn ordinary recording into full-rate health logging.
-    edge_fields = ('controls_allowed', 'rx_checks_invalid', 'safety_model', 'safety_param')
+    edge_fields = ('controls_allowed', 'rx_checks_invalid', 'safety_model', 'safety_param', 'lx3_authority_state')
     changed = self.last_panda_state is not None and any(
       self.last_panda_state.get(field) != current.get(field) for field in edge_fields)
     # Keep ordinary sampling bounded, but preserve received LX3 authority or

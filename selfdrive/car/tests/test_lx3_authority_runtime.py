@@ -234,6 +234,27 @@ class TestLx3Runtime(unittest.TestCase):
     self.step(ticks=70); self.lfa(); self.assertEqual(self.status().allowed,1)
     self.step(ticks=20,extra=(EventName.tooDistracted,)); self.assertEqual(self.status().allowed,0)
 
+  def test_no_entry_between_request_and_grant_cancels_pending_session(self):
+    self.step(8,ticks=8); self.step(ticks=32)
+    self.assertTrue(self.handshake.request)
+    self.step(ticks=1,extra=(EventName.seatbeltNotLatched,))
+    self.assertTrue(self.handshake.refusing)
+    self.step(ticks=50)
+    self.assertFalse(self.enabled)
+    self.assertEqual(self.status().allowed,0)
+    self.assertFalse(self.status().armed & 2)
+    self.step(2,ticks=8); self.step(ticks=40)
+    self.assertTrue(self.enabled)
+
+  def test_pending_lfa_does_not_revive_after_short_dm_fault(self):
+    self.step(128,ticks=8); self.step(ticks=4)
+    self.step(ticks=2,extra=(EventName.driverDistracted3,))
+    self.step(ticks=40)
+    self.assertFalse(self.CS.latEnabled)
+    self.assertEqual(self.status().allowed,0)
+    self.lfa()
+    self.assertEqual(self.status().allowed,1)
+
   def test_actual_controller_commands_are_admitted(self):
     self.main(); self.assertTrue(self.enabled)
     counts=defaultdict(int)

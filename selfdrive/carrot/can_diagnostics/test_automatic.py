@@ -177,6 +177,19 @@ class RecorderTests(unittest.TestCase):
     self.assertEqual([(row['before'], row['after']) for row in edges], [(False, True), (True, False)])
     self.assertEqual([row['mono_ns'] for row in edges], [100_100_000_000, 100_200_000_000])
 
+  def test_independent_lateral_authority_edges_are_not_lost_to_sampling(self):
+    self.recorder.update(services(),100)
+    for now,allowed,sequence in ((100,0,1),(100.1,1,2),(100.15,1,3),(100.2,0,4)):
+      state={'controls_allowed':False,'safety_param':2238,
+             'lx3_authority':{'allowed':allowed,'sequence':sequence},
+             'lx3_authority_state':{'allowed':allowed}}
+      self.recorder.panda_snapshot([state],int(now*1e9),now)
+    rows=self.rows()
+    snapshots=[r for r in rows if r['kind']=='panda_snapshot']
+    self.assertEqual([r['states'][0]['lx3_authority']['allowed'] for r in snapshots],[0,1,0])
+    edges=[r for r in rows if r.get('name')=='panda_state_edge']
+    self.assertEqual([r['field'] for r in edges],['lx3_authority_state']*2)
+
   def test_trace_reports_frames_lost_at_chunk_limit(self):
     self.recorder.update(services(), 100)
     self.recorder.can_frame(0, 0x10B, bytes(16), 100_010_000_000, 100.01)

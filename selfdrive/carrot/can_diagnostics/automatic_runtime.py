@@ -12,9 +12,9 @@ FIELDS = {
   'carState': ('vEgo', 'aEgo', 'standstill', 'gearShifter', 'canValid', 'canTimeout', 'brakePressed',
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'latEnabled',
-               'steerFaultTemporary', 'steerFaultPermanent', 'buttonEvents'),
-  'carControl': ('enabled', 'latActive', 'longActive', 'actuators'),
-  'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType'),
+               'steerFaultTemporary', 'steerFaultPermanent', 'buttonEvents', 'lx3Authority', 'lx3SteeringLimited'),
+  'carControl': ('enabled', 'latActive', 'longActive', 'actuators', 'lx3Authority'),
+  'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType', 'lx3LongRequest', 'lx3LongRefused'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
   'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels'),
 }
@@ -40,7 +40,9 @@ def selected_fields(reader, fields):
     elif key == 'errors' and value is not None:
       value = [str(error) for error in value]
     elif key == 'buttonEvents' and value is not None:
-      value = [{'type': str(button.type), 'pressed': bool(button.pressed)} for button in value]
+      value = [{'type': str(button.type), 'pressed': bool(button.pressed),
+                **({k:getattr(button,k) for k in ('physical','physicalKey','durationMs','observedMonoTime')}
+                   if getattr(button,'physical',False) else {})} for button in value]
     elif hasattr(value, 'to_dict'):
       value = value.to_dict()
     result[key] = value
@@ -49,7 +51,7 @@ def selected_fields(reader, fields):
 
 def panda_summary(panda):
   buses = (panda.canState0, panda.canState1, panda.canState2)
-  return {
+  result = {
     'safety_model': str(panda.safetyModel), 'safety_param': int(panda.safetyParam),
     'controls_allowed': bool(panda.controlsAllowed),
     'tx_blocked': int(panda.safetyTxBlocked),
@@ -60,6 +62,14 @@ def panda_summary(panda):
     'buses': [{'rx': int(bus.totalRxCnt), 'rx_lost': int(bus.totalRxLostCnt),
               'errors': int(bus.totalErrorCnt), 'bus_off': bool(bus.busOff)} for bus in buses],
   }
+  a = getattr(panda, 'lx3Authority', None)
+  if a is not None and a.version:
+    result['lx3_authority'] = a.to_dict()
+    # Do not promote heartbeat age/sequence and cumulative counters into edges.
+    result['lx3_authority_state'] = selected_fields(a, ('version','profile','epoch','allowed','armed','reason',
+      'inputReady','config','lateralGeneration','longitudinalGeneration','lateralRevision','longitudinalRevision',
+      'pendingGeneration','longPendingGeneration','oemEmergency'))
+  return result
 
 
 class AutomaticController:

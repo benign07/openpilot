@@ -94,6 +94,8 @@ jobs:
           selfdrive/pandad/tests/test_pandad_canprotocol
       - name: Production host decisions and schema round trip
         run: uv run --no-sync python selfdrive/car/tests/test_lx3_authority.py -v
+      - name: Passive diagnostics and HUD recording contract
+        run: uv run --no-sync python -m unittest selfdrive.carrot.can_diagnostics.test_automatic -v
       - name: Import real paired control processes
         run: |
           uv run --no-sync python - <<'PY'

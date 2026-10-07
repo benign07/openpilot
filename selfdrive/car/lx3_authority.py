@@ -115,4 +115,9 @@ def configure_control(CC, CS, events, enabled, always_lateral, driving, fresh, n
   a.decisionKey, a.pendingGeneration, a.intent = cited_decision(a, a.intent, now_ns)
   a.observedLongRevision = a.longitudinalRevision
   a.autoResume = a.autoResume and long
+  pedal_suspend = (not always_lateral and (CS.brakePressed or (CS.gasPressed and a.config & 2)) and
+                   bool(a.armed & LONG) and lateral_events_clear(events, True))
+  # Do not resurrect a rejected pending LFA request when a short fault clears
+  # before its citation expires. Keep full-session pedal resume as a suspend.
+  a.lateralRefused = bool(CS.latEnabled and not lat and not pedal_suspend)
   return bool(lat and a.allowed & LAT and not a.oemEmergency), bool(long and a.allowed & LONG)

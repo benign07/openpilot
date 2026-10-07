@@ -19,13 +19,14 @@ class Lx3Engagement:
     self.automatic = False
     self.request = False
     self.refusing = False
+    self.refusal_sequence = 0
     self.key = self.generation = self.start_sequence = self.start_generation = 0
 
   def update(self, events, CS, enabled, now_ns):
     self.request = False
     a = CS.lx3Authority
     fresh = verified(a) and a.buttonHealthy and 0 <= now_ns - a.statusMonoTime <= STATUS_MAX_NS
-    if fresh and not ((a.allowed | a.armed) & LONG):
+    if fresh and a.sequence > self.refusal_sequence and not ((a.allowed | a.armed) & LONG):
       self.refusing = False
     if enabled:
       self.deadline = 0
@@ -42,7 +43,9 @@ class Lx3Engagement:
       non_pedal_block = any(e != EventName.pedalPressed and any(
         t in EVENTS.get(e, {}) for t in (ET.NO_ENTRY, ET.USER_DISABLE, ET.IMMEDIATE_DISABLE, ET.SOFT_DISABLE))
         for e in events.events)
-      self.refusing |= bool(self.deadline and non_pedal_block)
+      if self.deadline and non_pedal_block:
+        self.refusing = True
+        self.refusal_sequence = a.sequence
       self.deadline = 0
       return
     if enabling:
@@ -68,6 +71,7 @@ class Lx3Engagement:
         (self.automatic and (a.longitudinalRevision != self.revision or not a.armed & LONG))):
       self.deadline = 0
       self.refusing = True
+      self.refusal_sequence = a.sequence
       events.add(EventName.lx3AuthorityDenied)
       return
     if not self.automatic and a.longPendingGeneration and a.longPendingKey == self.key:

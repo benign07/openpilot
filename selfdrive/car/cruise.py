@@ -313,6 +313,10 @@ class VCruiseCarrot:
 
     CC = sm['carControl']
     if self.lx3_authority:
+      if CC.lx3Authority.lateralRefused and self._lat_enabled:
+        self._lat_enabled = False
+        self.lx3_lat_key = self.lx3_lat_time = 0
+        self.lx3_lateral_refused = True
       pending = self.lx3_auto_pending
       if CC.enabled:
         if pending and pending[2] and not (CS.brakePressed or CS.gasPressed):
