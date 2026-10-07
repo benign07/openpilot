@@ -15,6 +15,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Actual policy buffer tests with undefined-behavior checks
         run: python3 tools/check_hyundai_canfd_buffer.py --compiler ${{ matrix.compiler }} --sanitize --output buffer-evidence
+      - name: Physical authority core and production native integration
+        run: |
+          set -o pipefail
+          for suite in core native; do
+            ${{ matrix.compiler }} -std=gnu11 -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=undefined -fno-sanitize-recover=undefined -g \
+              -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety \
+              opendbc_repo/opendbc/safety/tests/test_lx3_authority_${suite}.c -lm -o /tmp/lx3-${suite}
+            /tmp/lx3-${suite} | tee buffer-evidence/authority-${suite}.log
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -49,4 +58,43 @@ jobs:
             panda/board/obj/version
       - name: Record scope
         if: always()
-        run: echo 'Development build only. Authority/angle enforcement and OEM warnings remain unresolved. No release, OTA, vehicle installation or road qualification.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'Development build only. Software authority regression does not establish OEM or closed-loop vehicle qualification. No release, OTA or vehicle installation.' >> "$GITHUB_STEP_SUMMARY"
+  full-runtime-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+      - name: Install locked dependencies
+        run: uv sync --frozen --no-dev
+      - name: Complete runtime dependency graph
+        run: |
+          set -o pipefail
+          uv run --no-sync scons --minimal -j2 2>&1 | tee lx3-runtime-build.log
+      - name: Actual pandad serializer C++ regression
+        run: |
+          uv run --no-sync scons -j2 selfdrive/pandad/tests/test_pandad_canprotocol
+          selfdrive/pandad/tests/test_pandad_canprotocol
+      - name: Production host decisions and schema round trip
+        run: uv run --no-sync python selfdrive/car/tests/test_lx3_authority.py -v
+      - name: Import real paired control processes
+        run: |
+          uv run --no-sync python - <<'PY'
+          import importlib
+          for name in ('openpilot.selfdrive.car.card', 'openpilot.selfdrive.selfdrived.selfdrived',
+                       'openpilot.selfdrive.controls.controlsd', 'openpilot.selfdrive.controls.plannerd',
+                       'openpilot.selfdrive.monitoring.dmonitoringd'):
+            importlib.import_module(name)
+            print('IMPORTED', name)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-authority-runtime-review-not-release
+          path: lx3-runtime-build.log

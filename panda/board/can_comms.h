@@ -12,6 +12,42 @@
     which is sent by the host on each start of a connection.
 */
 
+#ifdef CANFD
+#include "lx3_protocol.h"
+static uint8_t lx3_tx_prefix[8];
+static uint8_t lx3_tx_epoch[8];
+static uint8_t lx3_tx_stage;
+
+static void comms_can_dispatch(CANPacket_t *pkt) {
+  const bool prefix = (pkt->bus == LX3_TX_MARKER_BUS) && (pkt->addr == LX3_TX_PREFIX_ADDR);
+  const bool epoch = (pkt->bus == LX3_TX_MARKER_BUS) && (pkt->addr == LX3_TX_EPOCH_ADDR);
+  if (prefix || epoch) {
+    const bool valid = (GET_LEN(pkt) == 8U) && pkt->extended && !pkt->returned && !pkt->rejected && can_check_checksum(pkt);
+    if (prefix) {
+      lx3_tx_stage = valid ? 1U : 0U;
+      if (valid) (void)memcpy(lx3_tx_prefix, pkt->data, 8U);
+    } else if (valid && (lx3_tx_stage == 1U)) {
+      (void)memcpy(lx3_tx_epoch, pkt->data, 8U);
+      lx3_tx_stage = 2U;
+    } else {
+      lx3_tx_stage = 0U;
+    }
+    return;  // Private framing is consumed here; never sent on vehicle CAN.
+  }
+  const uint16_t expected = (uint16_t)lx3_tx_prefix[6] | ((uint16_t)lx3_tx_prefix[7] << 8U);
+  const bool paired = (lx3_tx_stage == 2U) && can_check_checksum(pkt) &&
+    (expected == lx3_tx_binding(lx3_tx_prefix, lx3_tx_epoch, (const uint8_t *)pkt, CANPACKET_HEAD_SIZE + GET_LEN(pkt)));
+  lx3_tx_stage = 0U;
+  ENTER_CRITICAL();
+  lx3_incoming_identity = paired ? lx3_tx_decode(lx3_tx_prefix, lx3_tx_epoch) : (lx3_tx_identity_t){0};
+  can_send(pkt, pkt->bus, false);
+  lx3_incoming_identity = (lx3_tx_identity_t){0};
+  EXIT_CRITICAL();
+}
+#else
+static void comms_can_dispatch(CANPacket_t *pkt) { can_send(pkt, pkt->bus, false); }
+#endif
+
 typedef struct {
   uint32_t ptr;
   uint32_t tail_size;
@@ -70,7 +106,7 @@ void comms_can_write(const uint8_t *data, uint32_t len) {
 
       // send out
       (void)memcpy((uint8_t*)&to_push, can_write_buffer.data, can_write_buffer.ptr);
-      can_send(&to_push, to_push.bus, false);
+      comms_can_dispatch(&to_push);
 
       // reset overflow buffer
       can_write_buffer.ptr = 0U;
@@ -91,7 +127,7 @@ void comms_can_write(const uint8_t *data, uint32_t len) {
     if ((pos + pckt_len) <= len) {
       CANPacket_t to_push = {0};
       (void)memcpy((uint8_t*)&to_push, &data[pos], pckt_len);
-      can_send(&to_push, to_push.bus, false);
+      comms_can_dispatch(&to_push);
       pos += pckt_len;
     } else {
       (void)memcpy(can_write_buffer.data, &data[pos], len - pos);
@@ -105,6 +141,17 @@ void comms_can_write(const uint8_t *data, uint32_t len) {
 }
 
 void comms_can_reset(void) {
+#ifdef CANFD
+  lx3_tx_stage = 0U;
+  ENTER_CRITICAL();
+  if (lx3_native_active()) {
+    lx3_authority_revoke(&lx3_auth, LX3_ALL, LX3_REASON_IDENTITY, true);
+    lx3_auth.epoch = 0U;
+    lx3_native_purge(LX3_ALL);
+    lx3_protocol_reset();
+  }
+  EXIT_CRITICAL();
+#endif
   can_write_buffer.ptr = 0U;
   can_write_buffer.tail_size = 0U;
   can_read_buffer.ptr = 0U;

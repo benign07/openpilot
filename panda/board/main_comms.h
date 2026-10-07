@@ -74,6 +74,30 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
 #endif
 
   switch (req->request) {
+#ifdef CANFD
+    case LX3_STATUS_REQUEST:
+    case LX3_STATE_REQUEST: {
+      COMPILE_TIME_ASSERT(sizeof(lx3_status_t) == 48U);
+      ENTER_CRITICAL();
+      if (req->request == LX3_STATE_REQUEST) lx3_native_control(req->request, req->param1, req->param2);
+      const lx3_status_t status = lx3_native_status();
+      EXIT_CRITICAL();
+      (void)memcpy(resp, &status, sizeof(status));
+      resp_len = sizeof(status);
+      break;
+    }
+    case LX3_EPOCH_HIGH_REQUEST:
+    case LX3_EPOCH_LOW_REQUEST:
+    case LX3_BINDING_HIGH_REQUEST:
+    case LX3_BINDING_LOW_REQUEST:
+    case LX3_SEQUENCE_REQUEST:
+    case LX3_CONFIG_REQUEST:
+    case LX3_REVOKE_ACK_REQUEST:
+      ENTER_CRITICAL();
+      lx3_native_control(req->request, req->param1, req->param2);
+      EXIT_CRITICAL();
+      break;
+#endif
     // **** 0xa8: get microsecond timer
     case 0xa8:
       time = microsecond_timer_get();

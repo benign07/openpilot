@@ -2,6 +2,10 @@
 
 #include "safety_declarations.h"
 #include "safety_hyundai_common.h"
+#include "lx3_protocol.h"
+
+static lx3_queue_stamp_t lx3_current_tx_stamp;
+static lx3_queue_stamp_t lx3_forward_stamp;
 
 const TorqueSteeringLimits HYUNDAI_CANFD_STEERING_LIMITS = {
   .max_steer = 512, //270,
@@ -351,6 +355,8 @@ typedef struct {
   CANPacket_t last_pkt;
 
   CANPacket_t q[CANFD_BFWD_MAX_QUEUE];
+  lx3_queue_stamp_t stamps[CANFD_BFWD_MAX_QUEUE];
+  lx3_queue_stamp_t last_stamp;
 } CanfdBufferedFwd;
 
 CanfdBufferedFwd canfd_bfwd[] = {
@@ -392,6 +398,7 @@ static void canfd_bfwd_reset(CanfdBufferedFwd* st) {
   st->count = 0U;
   st->reuse_left = 0U;
   st->has_last_pkt = false;
+  st->last_stamp = (lx3_queue_stamp_t){0};
   (void)memset(&st->last_pkt, 0, sizeof(st->last_pkt));
 }
 static void canfd_bfwd_push(CanfdBufferedFwd* st, const CANPacket_t* pkt) {
@@ -406,6 +413,7 @@ static void canfd_bfwd_push(CanfdBufferedFwd* st, const CANPacket_t* pkt) {
   }
 
   canfd_copy_packet(&st->q[st->tail], pkt);
+  st->stamps[st->tail] = lx3_current_tx_stamp;
   st->tail = (st->tail + 1U) % CANFD_BFWD_MAX_QUEUE;
   st->count++;
   st->started = true;
@@ -421,6 +429,8 @@ static bool canfd_bfwd_pop(CanfdBufferedFwd* st, CANPacket_t* pkt) {
   }
 
   canfd_copy_packet(pkt, &st->q[st->head]);
+  st->last_stamp = st->stamps[st->head];
+  lx3_forward_stamp = st->last_stamp;
   st->head = (st->head + 1U) % CANFD_BFWD_MAX_QUEUE;
   st->count--;
 
@@ -445,6 +455,7 @@ static bool canfd_bfwd_reuse_last(CanfdBufferedFwd* st, CANPacket_t* pkt) {
   }
 
   canfd_copy_packet(pkt, &st->last_pkt);
+  lx3_forward_stamp = st->last_stamp;
   st->reuse_left--;
 
   return true;
@@ -452,6 +463,8 @@ static bool canfd_bfwd_reuse_last(CanfdBufferedFwd* st, CANPacket_t* pkt) {
 
 
 
+
+#include "safety_hyundai_lx3.h"
 
 static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
   int bus = GET_BUS(to_push);
@@ -472,7 +485,7 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
 
     // cruise buttons
     const int button_addr = hyundai_canfd_alt_buttons ? 0x1aa : 0x1cf;
-    if (addr == button_addr) {
+    if ((addr == button_addr) && !lx3_native_active()) {
       bool main_button = false;
       int cruise_button = 0;
       if (addr == 0x1cf) {
@@ -532,7 +545,13 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *to_push) {
     const int stock_scc_bus = hyundai_canfd_hda2 ? 1 : 0;
     stock_ecu_detected = stock_ecu_detected || ((addr == 0x1a0) && (bus == stock_scc_bus));
   }
-  generic_rx_checks(stock_ecu_detected);
+  if (lx3_native_active()) {
+    // Shared helpers intentionally retain stock behaviour for other profiles.
+    // This camera-SCC profile observes stock ECU frames as forwarding sources.
+    lx3_native_pedals();
+  } else {
+    generic_rx_checks(stock_ecu_detected);
+  }
 
 }
 
@@ -560,6 +579,22 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
   bool tx = true;
   int addr = GET_ADDR(to_send);
   bool violation = false;
+  lx3_current_tx_stamp = (lx3_queue_stamp_t){0};
+  if (lx3_native_active()) {
+    lx3_native_maintain();
+    if (!lx3_profile_supported) return false;
+    // These are alternative actuator paths, not used by the LX3 angle sender.
+    if ((addr == 0x50) || (addr == 0x110)) return false;
+    if (lx3_tx_guarded_address(addr)) {
+      if (!lx3_native_admit(to_send)) return false;
+      CanfdBufferedFwd *slot = canfd_bfwd_find(addr, GET_BUS(to_send));
+      if (slot == NULL) return false;
+      canfd_bfwd_push(slot, to_send);
+      extern bool safety_tx_buffered_for_fwd;
+      safety_tx_buffered_for_fwd = true;
+      return true;
+    }
+  }
 
   // steering
   const int steer_addr = (hyundai_canfd_hda2 && !hyundai_longitudinal) ? hyundai_canfd_hda2_get_lkas_addr() : 0x12a;
@@ -645,6 +680,11 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *to_send_const) {
 static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
   const int bus_num = GET_BUS(to_send);
   const int addr = GET_ADDR(to_send);
+  lx3_forward_stamp = (lx3_queue_stamp_t){0};
+  if (lx3_native_active()) {
+    lx3_native_emergency_observe(to_send);
+    lx3_native_maintain();
+  }
 
   int bus_fwd = -1;
   uint32_t now = microsecond_timer_get();
@@ -659,6 +699,11 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
   }
 
   if (hyundai_canfd_buffered_fwd) {
+    if (lx3_native_active() && lx3_tx_guarded_address(addr) && !lx3_native_oem_source(to_send)) {
+      // Do not convert a corrupt/incorrect-length source into a valid host
+      // replacement by borrowing its counter. Original forwarding is unchanged.
+      return bus_fwd;
+    }
     CanfdBufferedFwd* bfwd = canfd_bfwd_find(addr, bus_fwd);
     if (bfwd != NULL) {
       CANPacket_t buffered_pkt;
@@ -673,6 +718,13 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
       }
 
       if (use_buffered) {
+        if (lx3_native_active() && lx3_tx_guarded_address(addr) &&
+            !lx3_native_packet(&buffered_pkt, &lx3_forward_stamp, true, false)) {
+          canfd_bfwd_reset(bfwd);
+          lx3_forward_stamp = (lx3_queue_stamp_t){0};
+          lx3_native_oem(to_send);
+          return bus_fwd;
+        }
         uint8_t counter = hyundai_canfd_get_counter(to_send);
 
         canfd_copy_packet(to_send, &buffered_pkt);
@@ -682,6 +734,8 @@ static int hyundai_canfd_fwd_hook(CANPacket_t* to_send) {
       }
     }
   }
+
+  if (lx3_native_active()) lx3_native_oem(to_send);
 
   if (bus_num == 0) {
     if (canfd_should_block_fwd(2, addr, now)) {
@@ -715,6 +769,13 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   hyundai_canfd_alt_buttons = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ALT_BUTTONS);
   hyundai_canfd_hda2_alt_steering = GET_FLAG(param, HYUNDAI_PARAM_CANFD_HDA2_ALT_STEERING);
   hyundai_canfd_buffered_fwd = hyundai_camera_scc;
+  lx3_current_tx_stamp = (lx3_queue_stamp_t){0};
+  lx3_forward_stamp = (lx3_queue_stamp_t){0};
+  lx3_native_init(param);
+  if ((param & LX3_AUTHORITY_PARAM) != 0U) {
+    if (param != LX3_AUTHORITY_PROFILE) return (safety_config){NULL, 0, NULL, 0};
+    return BUILD_SAFETY_CFG(lx3_rx_checks, HYUNDAI_CANFD_HDA2_LONG_TX_MSGS);
+  }
 
   // no long for radar-SCC HDA1 yet
   //if (!hyundai_canfd_hda2 && !hyundai_camera_scc) {

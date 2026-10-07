@@ -95,8 +95,11 @@ void process_can(uint8_t can_number) {
 
     if ((FDCANx->TXFQS & FDCAN_TXFQS_TFQF) == 0U) {
       CANPacket_t to_send;
-      if (can_pop(can_queues[bus_number], &to_send)) {
-        if (can_check_checksum(&to_send)) {
+      lx3_queue_stamp_t stamp = {0};
+      while (can_pop_stamped(can_queues[bus_number], &to_send, &stamp)) {
+        const bool checksum_valid = can_check_checksum(&to_send);
+        const bool permission_valid = checksum_valid && lx3_native_final_tx(&to_send, &stamp);
+        if (permission_valid) {
           can_health[can_number].total_tx_cnt += 1U;
 
           uint32_t TxFIFOSA = FDCAN_START_ADDRESS + (can_number * FDCAN_OFFSET) + (FDCAN_RX_FIFO_0_EL_CNT * FDCAN_RX_FIFO_0_EL_SIZE);
@@ -137,11 +140,16 @@ void process_can(uint8_t can_number) {
           can_set_checksum(&to_push);
 
           rx_buffer_overflow += can_push(&can_rx_q, &to_push) ? 0U : 1U;
-        } else {
+        } else if (!checksum_valid) {
           can_health[can_number].total_tx_checksum_error_cnt += 1U;
+        } else {
+          safety_tx_blocked += 1U;
         }
 
         refresh_can_tx_slots_available();
+        // Drop stale entries until a current packet is submitted. A dropped
+        // head creates no TX interrupt to wake the remaining software queue.
+        if (permission_valid) break;
       }
     }
     EXIT_CRITICAL();
@@ -212,6 +220,7 @@ void can_rx(uint8_t can_number) {
     (void)memcpy(to_send.data, to_push.data, dlc_to_len[to_push.data_len_code]);
     can_set_checksum(&to_send);
 
+    ENTER_CRITICAL();
     bus_fwd_num = safety_fwd_hook(&to_send);
     if (bus_fwd_num < 0) {
       bus_fwd_num = bus_config[can_number].forwarding_bus;
@@ -220,6 +229,7 @@ void can_rx(uint8_t can_number) {
       can_send(&to_send, bus_fwd_num, true);
       can_health[can_number].total_fwd_cnt += 1U;
     }
+    EXIT_CRITICAL();
 
     safety_rx_invalid += safety_rx_hook(&to_push) ? 0U : 1U;
     ignition_can_hook(&to_push);

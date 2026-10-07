@@ -216,6 +216,9 @@ bool safety_rx_hook(const CANPacket_t *to_push) {
   bool controls_allowed_prev = controls_allowed;
 
   bool valid = rx_msg_safety_check(to_push, &current_safety_config, current_hooks);
+#ifdef CANFD
+  if (lx3_native_active()) valid = lx3_native_observe(to_push, valid);
+#endif
   if (valid) {
     current_hooks->rx(to_push);
   }
@@ -361,6 +364,9 @@ void safety_tick(const safety_config *cfg) {
   }
 
   safety_rx_checks_invalid = rx_checks_invalid;
+#ifdef CANFD
+  if (lx3_native_active()) lx3_native_maintain();
+#endif
 }
 
 static void relay_malfunction_set(void) {

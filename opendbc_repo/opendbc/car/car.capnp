@@ -260,6 +260,7 @@ struct CarState {
   leftRearLatDist @79 :Float32; # rear-left corner radar lateral distance
   rightRearLatDist @80 :Float32; # rear-right corner radar lateral distance
   trailerConnected @81 :Bool; # trailer connection state after disconnect debounce
+  lx3Authority @82 :Lx3Authority;
 
   struct Tpms {
     fl @0 :Float32;
@@ -303,6 +304,10 @@ struct CarState {
   struct ButtonEvent {
     pressed @0 :Bool;
     type @1 :Type;
+    physicalKey @2 :UInt16;
+    physical @3 :Bool;
+    durationMs @4 :UInt32;
+    observedMonoTime @5 :UInt64;
 
     enum Type {
       unknown @0;
@@ -397,6 +402,7 @@ struct CarControl {
   orientationNED @13 :List(Float32);
   angularVelocity @14 :List(Float32);
   currentCurvature @17 :Float32;  # From vehicle model
+  lx3Authority @18 :Lx3Authority;
 
   cruiseControl @4 :CruiseControl;
   hudControl @5 :HUDControl;
@@ -814,4 +820,45 @@ struct CarParams {
   longitudinalActuatorDelayLowerBoundDEPRECATED @61 :Float32;
   stoppingControlDEPRECATED @31 :Bool; # Does the car allow full control even at lows speeds when stopping
   radarTimeStep @45: Float32;  # time delta between radar updates, 20Hz is very standard
+}
+
+# Optional LX3 host/MCU companion. Missing fields mean unknown/no permission.
+# Existing CAN, HUD and universal Panda health fields keep their meanings.
+struct Lx3Authority {
+  version @0 :UInt8;
+  profile @1 :UInt8;
+  intent @2 :UInt8;
+  allowed @3 :UInt8;
+  inputReady @4 :Bool;
+  pendingKey @5 :UInt16;
+  pendingGeneration @6 :UInt16;
+  lateralGeneration @7 :UInt16;
+  longitudinalGeneration @8 :UInt16;
+  epoch @9 :UInt64;
+  sequence @10 :UInt32;
+  config @11 :UInt16;
+  longPressMs @12 :UInt16;
+  observedLongRevision @13 :UInt16;
+  lateralRevision @14 :UInt16;
+  longitudinalRevision @15 :UInt16;
+  reason @16 :UInt16;
+  oemLateralPassthrough @17 :UInt32;
+  oemLongitudinalPassthrough @18 :UInt32;
+  autoResume @19 :Bool;
+  decisionKey @20 :UInt16;
+  buttonHealthy @21 :Bool;
+  lateralDecisionKey @22 :UInt16;
+  longitudinalDecisionKey @23 :UInt16;
+  lateralDecisionTime @24 :UInt64;
+  longitudinalDecisionTime @25 :UInt64;
+  pendingAgeMs @26 :UInt16;
+  heartbeatAgeMs @27 :UInt16;
+  oemEmergency @28 :Bool;
+}
+
+struct Lx3TxIdentity {
+  epoch @0 :UInt64;
+  generation @1 :UInt16;
+  axis @2 :UInt8;
+  valid @3 :Bool;
 }

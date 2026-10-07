@@ -14,6 +14,7 @@
 #include "panda/board/health.h"
 #include "panda/board/can.h"
 #include "selfdrive/pandad/panda_comms.h"
+#include "opendbc_repo/opendbc/safety/lx3_protocol.h"
 
 #define USB_TX_SOFT_LIMIT   (0x100U)
 #define USBPACKET_MAX_SIZE  (0x40)
@@ -46,6 +47,9 @@ struct can_frame {
 class Panda {
 private:
   std::unique_ptr<PandaSpiHandle> handle;
+  bool lx3_guard_ = false;
+  uint64_t lx3_epoch_ = 0;
+  uint32_t lx3_sequence_ = 0;
 
 public:
   Panda(std::string serial);
@@ -77,6 +81,9 @@ public:
   void set_power_saving(bool power_saving);
   void enable_deepsleep();
   void send_heartbeat(bool engaged);
+  bool lx3_guarded() const { return lx3_guard_; }
+  std::optional<lx3_status_t> get_lx3_status();
+  void send_lx3_state(cereal::Lx3Authority::Reader authority, bool fresh);
   void set_can_speed_kbps(uint16_t bus, uint16_t speed);
   void set_can_fd_auto(uint16_t bus, bool enabled);
   void set_data_speed_kbps(uint16_t bus, uint16_t speed);

@@ -10,6 +10,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, CAMERA_SCC_CAR, HyundaiExtFlags
 from opendbc.car.interfaces import CarStateBase
+from opendbc.car.hyundai.lx3_buttons import PhysicalButtons, uses_lx3_authority, MAIN, LFA
 
 from openpilot.common.params import Params
 
@@ -53,6 +54,8 @@ class CarState(CarStateBase):
     self.cruise_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
     self.main_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
     self._lx3_main_btn_debounce = 0  # v29.1: LX3_HEV main button (0x10B byte10 raw=8) 60/40 flicker debounce
+    self.lx3_buttons = PhysicalButtons() if uses_lx3_authority(CP) else None
+    self.lx3_now_ns = 0
 
     self.gear_msg_canfd = "GEAR" if CP.extFlags & HyundaiExtFlags.CANFD_GEARS_69 else \
                           "ACCELERATOR" if CP.flags & HyundaiFlags.EV else \
@@ -124,6 +127,8 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
 
     self.main_enabled = True if Params().get_int("AutoEngage") == 2 else False
+    if self.lx3_buttons is not None:
+      self.main_enabled = False
     self.gear_shifter = GearShifter.drive # Gear_init for Nexo ?? unknown 21.02.23.LSW
 
     self.totalDistance = 0.0
@@ -625,7 +630,7 @@ class CarState(CarStateBase):
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       ret.cruiseState.enabled = cp.vl["TCS"]["ACC_REQ"] == 1
       ret.cruiseState.standstill = False
-      if self.MainMode_ACC or self.main_enabled:
+      if self.lx3_buttons is None and (self.MainMode_ACC or self.main_enabled):
         self.main_enabled = True
     else:
       cp_cruise_info = cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp
@@ -717,7 +722,9 @@ class CarState(CarStateBase):
     #self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
     #carrot {{
 
-    if self.cruise_buttons_alt2 is not None:
+    if self.lx3_buttons is not None:
+      cruise_button = [Buttons.LFA_BUTTON if self.lx3_buttons.held == LFA else self.lx3_buttons.held]
+    elif self.cruise_buttons_alt2 is not None:
       if int(self.cruise_buttons_alt2.get("LFA_BTN", 0)) == 1:
         cruise_button = [Buttons.LFA_BUTTON]
       else:
@@ -744,7 +751,9 @@ class CarState(CarStateBase):
      """
     prev_main_buttons = self.main_buttons[-1]
     #self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
-    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" and self.cruise_buttons_alt2 is not None:
+    if self.lx3_buttons is not None:
+      self.main_buttons.extend([int(self.lx3_buttons.main_held)])
+    elif self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV" and self.cruise_buttons_alt2 is not None:
       # v29.1: raw=8 flickers 60/40 during a single press → latch 30 frames (300ms) on each raw=8
       # to avoid multiple falling-edge toggles. Real release = 30 consecutive frames of raw!=8.
       raw = 1 if int(self.cruise_buttons_alt2.get("CRUISE_BUTTONS", 0)) == 8 else 0
@@ -761,7 +770,7 @@ class CarState(CarStateBase):
       self.main_buttons.extend([1 if int(self.cruise_buttons_alt2.get("CRUISE_BUTTONS", 0)) == 8 else 0])
     else:
       self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
-    if self.main_buttons[-1] != prev_main_buttons and not self.main_buttons[-1]: # and self.CP.openpilotLongitudinalControl: #carrot
+    if self.lx3_buttons is None and self.main_buttons[-1] != prev_main_buttons and not self.main_buttons[-1]: # and self.CP.openpilotLongitudinalControl: #carrot
       self.main_enabled = not self.main_enabled
       print("main_enabled = {}".format(self.main_enabled))
     self.buttons_counter = cp.vl[self.cruise_btns_msg_canfd]["COUNTER"]
@@ -787,6 +796,26 @@ class CarState(CarStateBase):
 
     self.paddle_button_prev = paddle_button
 
+    if self.lx3_buttons is not None:
+      # One physical decoder owns both the semantic buttons and their native
+      # citation. Cached 0x1AA/10B values and OEM MainMode cannot create edges.
+      physical_events = []
+      types = {1: ButtonType.accelCruise, 2: ButtonType.decelCruise, 3: ButtonType.gapAdjustCruise,
+               4: ButtonType.cancel, MAIN: ButtonType.mainCruise, LFA: ButtonType.lfaButton}
+      for e in self.lx3_buttons.events:
+        b = structs.CarState.ButtonEvent()
+        b.type, b.pressed = types[e.button], e.pressed
+        b.physical, b.physicalKey = True, (e.button << 8) | e.counter
+        b.durationMs, b.observedMonoTime = e.held_ns // 1_000_000, e.mono_ns
+        physical_events.append(b)
+        if e.button == MAIN and not e.pressed:
+          self.main_enabled = not self.main_enabled
+      paddles = [b for b in ret.buttonEvents if b.type in (ButtonType.paddleLeft, ButtonType.paddleRight)]
+      ret.buttonEvents = physical_events + paddles
+      healthy = self.lx3_buttons.stream_healthy(self.lx3_now_ns)
+      ret.lx3Authority.buttonHealthy = healthy
+      ret.cruiseState.available = self.main_enabled and self.controls_ready_count >= READY_COUNT_OK and healthy
+
     return ret
 
   def get_can_parsers_canfd(self, CP):
@@ -802,6 +831,14 @@ class CarState(CarStateBase):
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
       Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).ACAN),
     }
+
+  def update_button_enable(self, buttonEvents):
+    if self.lx3_buttons is not None and not self.CP.pcmCruise:
+      if not self.lx3_buttons.healthy(self.lx3_now_ns):
+        return False
+      if self.main_enabled and any(b.type == ButtonType.mainCruise and not b.pressed and b.physical for b in buttonEvents):
+        return True
+    return super().update_button_enable(buttonEvents)
 
   def get_can_parsers(self, CP):
     if CP.flags & HyundaiFlags.CANFD:

@@ -458,7 +458,11 @@ class CarController(CarControllerBase):
             can_sends.extend(hyundaicanfd.create_fca_warning_light(self.CP, self.packer, self.CAN, self.frame))
         if self.frame % 2 == 0:
           if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
-            scc2_msg = hyundaicanfd.create_acc_control_scc2(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
+            from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+            longitudinal_enabled = CC.enabled
+            if uses_lx3_authority(self.CP):
+              longitudinal_enabled = longitudinal_enabled and bool(CC.lx3Authority.allowed & CC.lx3Authority.intent & 2)
+            scc2_msg = hyundaicanfd.create_acc_control_scc2(self.packer, self.CAN, longitudinal_enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
                                                              set_speed_in_units, hud_control, self.hyundai_jerk, CS)
             if scc2_msg is not None:  # scc_control may be None at startup/intermittently
               can_sends.append(scc2_msg)
@@ -759,4 +763,3 @@ class HyundaiJerk:
         self.jerk_l = min(max(1.0, -self.jerk * 2.0), jerk_max_l)
         self.cb_upper = np.clip(0.9 + accel * 0.2, 0, 1.2)
         self.cb_lower = np.clip(0.8 + accel * 0.2, 0, 1.2)
-

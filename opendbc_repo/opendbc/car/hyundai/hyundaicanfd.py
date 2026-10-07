@@ -87,6 +87,7 @@ class CanBus(CanBusBase):
 
 
 def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, apply_steer, CS, apply_angle, max_torque, angle_control):
+  from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 
   emergency_steering = False
   if CS.adrv_0x161 is not None:
@@ -122,6 +123,11 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
         values["CHECKSUM_"] = hyundai_crc8(dat[1:8])
 
       ret.append(packer.make_can_msg("STEER_TOUCH_2AF", CAN.CAM, values))
+
+  if emergency_steering and uses_lx3_authority(CP):
+    # The guarded MCU flushes lateral replacement queues on the real OEM
+    # emergency indication. Preserve the actual OEM source, not a host copy.
+    return ret
 
   if angle_control:
     if CS.lfa_alt is not None:
@@ -330,10 +336,12 @@ def create_lfa_icon_non_camera_scc(packer, CS, CAN, CC):
   return ret
 
 def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, gas_override, set_speed, hud_control, hyundai_jerk, CS):
+  from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 
   if CS.scc_control is None:
     return None
-  enabled = (enabled or CS.softHoldActive > 0) and CS.paddle_button_prev == 0
+  guarded = uses_lx3_authority(CS.CP)
+  enabled = (enabled or (CS.softHoldActive > 0 and not guarded)) and CS.paddle_button_prev == 0
 
   acc_mode = 0 if not enabled else (2 if gas_override else 1)
 
@@ -360,6 +368,8 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, g
   values["ACCMode"] = acc_mode
   values["MainMode_ACC"] = 1
   values["StopReq"] = 1 if stopping or CS.softHoldActive > 0 else 0  # 1: Stop control is required, 2: Not used, 3: Error Indicator
+  if guarded and (not enabled or gas_override or acc_mode != 1):
+    values["StopReq"] = 0
   values["aReqValue"] = a_val
   values["aReqRaw"] = a_raw
   values["VSetDis"] = set_speed

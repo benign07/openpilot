@@ -1,0 +1,41 @@
+LX3 paired authority v3 - development candidate, NOT a vehicle release
+
+Starting point: review/lx3-stock-authority-20261007 at b2d53c1c.
+Installed September 27 restored0627/diagnostic seq4 is unchanged.
+
+Scope:
+- Actual CRC-qualified bus0 0x10B physical inputs, independent lateral and
+  longitudinal authority, exact LX3 profile 190|2048 only.
+- Carrot button/configuration decisions cite observed physical release identity.
+  Native pending per axis survives separate LFA/SET gestures; MAIN debounce does
+  not revoke a later RES grant. Boot AutoEngage alone is not physical permission.
+- Versioned paired STATE/epoch transport; universal health v16/CAN v4 retained.
+  controlsAllowed means longitudinal; lateral permission is explicitly reported.
+- Admission, OEM-triggered buffered replacement and pre-TXBAR software queue
+  checks reject active commands with stale epoch, generation or age.
+  An already submitted hardware frame cannot be retroactively cancelled.
+- Stock MDPS payload handling and driver-steering coexistence are preserved.
+  Real OEM emergency indications flush lateral replacements; OEM traffic is
+  counted separately and is never labelled Panda-authorized OP steering.
+- Lateral-only monitoring/warnings, scoped event eligibility, and soft-hold
+  payload generation are connected to the paired permission rather than a
+  command-generates-permission loop.
+
+Compatibility/behaviour boundaries:
+- Other car profiles retain existing control hooks, buffer capacity and two
+  reuses. New fields are additive; HUD 1.0.27 APIs are not modified.
+- Unknown/mismatched firmware is not silently accepted as legacy parameter190.
+- Physical first enable is mandatory; automatic resume requires prior physical
+  arming, enabled settings and a post-pedal OFF acknowledgement.
+- Soft hold does not independently regain longitudinal permission after revoke.
+- OEM fallback is inherited forwarding behaviour; it does NOT guarantee all
+  vehicle steering is off. Native active-replacement permission is separate.
+- Current angle/torque envelope mirrors host limits; it is not independent
+  vehicle dynamics qualification. Actual MDPS/OEM warning causality remains open.
+
+Tests in progress:
+Actual production C core/RX/STATE/TX/forward/final policy, Python switch/decision
+and real schema/serializer round trips, Linux pandad serializer, full runtime,
+and H7 firmware. CI results must be read for the exact final commit.
+Local component passes are not a completed whole-stack or road validation.
+No source OTA, installation, synthetic CAN or vehicle command occurs here.

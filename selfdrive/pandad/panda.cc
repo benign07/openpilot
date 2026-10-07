@@ -5,6 +5,7 @@
 #include <cassert>
 #include <stdexcept>
 #include <vector>
+#include <random>
 
 #include "cereal/messaging/messaging.h"
 #include "common/swaglog.h"
@@ -37,7 +38,75 @@ std::vector<std::string> Panda::list() {
 }
 
 void Panda::set_safety_model(cereal::CarParams::SafetyModel safety_model, uint16_t safety_param) {
+  lx3_guard_ = false;
+  lx3_epoch_ = 0;
+  lx3_sequence_ = 0;
+  const bool guarded = safety_model == cereal::CarParams::SafetyModel::HYUNDAI_CANFD && (safety_param & 2048U) != 0U;
+  if (guarded && !get_lx3_status()) {
+    // Old firmware ignores unknown safety bits. Never send it 190|2048 and
+    // accidentally activate the legacy unrestricted policy.
+    LOGE("LX3 authority v3 firmware capability missing");
+    handle->control_write(0xdc, (uint16_t)cereal::CarParams::SafetyModel::NO_OUTPUT, 0);
+    return;
+  }
   handle->control_write(0xdc, (uint16_t)safety_model, safety_param);
+  if (guarded) {
+    const auto initial = get_lx3_status();
+    if (!initial || initial->profile != 1U) {
+      LOGE("LX3 authority profile rejected");
+      handle->control_write(0xdc, (uint16_t)cereal::CarParams::SafetyModel::NO_OUTPUT, 0);
+      return;
+    }
+    std::random_device random;
+    uint64_t epoch = 0;
+    do { epoch = (uint64_t(random()) << 32U) | uint64_t(random()); } while (epoch == 0U);
+    handle->control_write(LX3_EPOCH_HIGH_REQUEST, epoch >> 48U, epoch >> 32U);
+    handle->control_write(LX3_EPOCH_LOW_REQUEST, epoch >> 16U, epoch);
+    const auto sealed = get_lx3_status();
+    if (!sealed || sealed->epoch != epoch) {
+      LOGE("LX3 authority transport incarnation failed");
+      handle->control_write(0xdc, (uint16_t)cereal::CarParams::SafetyModel::NO_OUTPUT, 0);
+      return;
+    }
+    lx3_guard_ = true;
+    lx3_epoch_ = epoch;
+  }
+}
+
+std::optional<lx3_status_t> Panda::get_lx3_status() {
+  lx3_status_t status{};
+  const int n = handle->control_read(LX3_STATUS_REQUEST, 0, 0, reinterpret_cast<unsigned char*>(&status), sizeof(status));
+  return lx3_status_valid(&status, n) ? std::make_optional(status) : std::nullopt;
+}
+
+void Panda::send_lx3_state(cereal::Lx3Authority::Reader a, bool fresh) {
+  if (!lx3_guard_) return;
+  fresh = fresh && a.getVersion() == LX3_PROTOCOL_VERSION && a.getEpoch() == lx3_epoch_;
+  const uint16_t key = fresh ? a.getDecisionKey() : 0U;
+  const uint8_t button = key >> 8U;
+  const uint8_t kind = button == 128U ? 1U : button == 8U ? 2U : button == 1U ? 3U : button == 2U ? 4U : 0U;
+  const uint16_t value = fresh ? ((key & 255U) << 8U) | (kind << 4U) | (a.getAutoResume() ? 4U : 0U) | a.getIntent() : 0x80U;
+  const uint16_t generation = fresh ? a.getPendingGeneration() : 0U;
+  const uint16_t config = fresh ? a.getConfig() : 0U;
+  const uint16_t long_ms = fresh ? a.getLongPressMs() : 700U;
+  const uint16_t revision = fresh ? a.getObservedLongRevision() : 0U;
+  if (lx3_sequence_ == UINT32_MAX) {
+    set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
+    return;
+  }
+  const uint32_t sequence = ++lx3_sequence_;
+  const uint64_t binding = lx3_state_binding(lx3_epoch_, sequence, value, generation, config, long_ms, revision);
+  handle->control_write(LX3_CONFIG_REQUEST, config, long_ms);
+  handle->control_write(LX3_SEQUENCE_REQUEST, sequence >> 16U, sequence);
+  handle->control_write(LX3_REVOKE_ACK_REQUEST, revision, 0U);
+  handle->control_write(LX3_BINDING_HIGH_REQUEST, binding >> 48U, binding >> 32U);
+  handle->control_write(LX3_BINDING_LOW_REQUEST, binding >> 16U, binding);
+  lx3_status_t status{};
+  const int n = handle->control_read(LX3_STATE_REQUEST, value, generation,
+    reinterpret_cast<unsigned char*>(&status), sizeof(status));
+  if (!lx3_status_valid(&status, n) || status.epoch != lx3_epoch_ || status.sequence != sequence) {
+    LOGE("LX3 STATE not acknowledged");
+  }
 }
 
 void Panda::set_alternative_experience(uint16_t alternative_experience) {
@@ -194,6 +263,27 @@ void Panda::pack_can_buffer(const capnp::List<cereal::CanData>::Reader &can_data
 
     // set checksum
     ((can_header *) &send_buf[pos])->checksum = calculate_checksum(&send_buf[pos], msg_size);
+
+    const auto ci = cmsg.getLx3Identity();
+    if (lx3_tx_guarded_address(cmsg.getAddress()) && ci.getValid()) {
+      const lx3_tx_identity_t identity{ci.getEpoch(), ci.getGeneration(), ci.getAxis(), true};
+      uint8_t prefix[8], epoch[8];
+      lx3_tx_encode(&identity, &send_buf[pos], msg_size, prefix, epoch);
+      constexpr size_t marker_size = sizeof(can_header) + 8U;
+      memmove(&send_buf[pos + 2U * marker_size], &send_buf[pos], msg_size);
+      for (unsigned i = 0U; i < 2U; i++) {
+        can_header marker{};
+        marker.bus = LX3_TX_MARKER_BUS;
+        marker.addr = i == 0U ? LX3_TX_PREFIX_ADDR : LX3_TX_EPOCH_ADDR;
+        marker.extended = 1U;
+        marker.data_len_code = 8U;
+        uint8_t *start = &send_buf[pos + i * marker_size];
+        memcpy(start, &marker, sizeof(marker));
+        memcpy(start + sizeof(marker), i == 0U ? prefix : epoch, 8U);
+        reinterpret_cast<can_header*>(start)->checksum = calculate_checksum(start, marker_size);
+      }
+      pos += 2U * marker_size;
+    }
 
     pos += msg_size;
 

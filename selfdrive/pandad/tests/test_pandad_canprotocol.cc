@@ -2,6 +2,7 @@
 #define CATCH_CONFIG_ENABLE_BENCHMARKING
 
 #include <climits>
+#include <array>
 
 #include "catch2/catch.hpp"
 #include "cereal/messaging/messaging.h"
@@ -9,6 +10,8 @@
 #include "selfdrive/pandad/panda.h"
 
 struct PandaTest : public Panda {
+  using Panda::pack_can_buffer;
+  using Panda::calculate_checksum;
   PandaTest(int can_list_size, cereal::PandaState::PandaType hw_type);
   void test_can_send();
   void test_can_recv(uint32_t chunk_size = 0);
@@ -132,4 +135,54 @@ TEST_CASE("send/recv CAN FD packets") {
   SECTION("chunked_can_receive") {
     test.test_can_recv(0x40);
   }
+}
+
+TEST_CASE("LX3 identities bind one payload without changing CAN packet v4") {
+  PandaTest panda(0, cereal::PandaState::PandaType::RED_PANDA);
+  MessageBuilder message;
+  auto frames = message.initEvent().initSendcan(4);
+  const std::array<unsigned, 4> addresses{0xCB, 0x12A, 0x1A0, 0xEA};
+  const std::array<unsigned, 4> lengths{24, 16, 32, 24};
+  for (unsigned i = 0; i < 4; i++) {
+    auto frame = frames[i];
+    frame.setAddress(addresses[i]); frame.setSrc(i == 3 ? 2 : 0);
+    std::vector<uint8_t> payload(lengths[i], i + 1);
+    frame.setDat(kj::ArrayPtr(payload.data(), payload.size()));
+    if (i < 3) {
+      auto identity = frame.initLx3Identity();
+      identity.setEpoch(0x3141592653589793ULL); identity.setGeneration(i + 10);
+      identity.setAxis(i == 2 ? 2 : 1); identity.setValid(true);
+    }
+  }
+  std::vector<uint8_t> bytes;
+  panda.pack_can_buffer(frames.asReader(), [&](uint8_t *p, size_t n) { bytes.insert(bytes.end(), p, p + n); });
+  unsigned pos = 0;
+  for (unsigned i = 0; i < 4; i++) {
+    std::array<uint8_t, 8> prefix{}, epoch_bytes{};
+    if (i < 3) {
+      for (unsigned marker = 0; marker < 2; marker++) {
+        can_header header{}; memcpy(&header, &bytes[pos], sizeof(header));
+        REQUIRE(header.bus == LX3_TX_MARKER_BUS);
+        REQUIRE(header.addr == (marker == 0 ? LX3_TX_PREFIX_ADDR : LX3_TX_EPOCH_ADDR));
+        REQUIRE(header.data_len_code == 8);
+        REQUIRE(panda.calculate_checksum(&bytes[pos], sizeof(header) + 8) == 0);
+        memcpy((marker == 0 ? prefix : epoch_bytes).data(), &bytes[pos + sizeof(header)], 8);
+        pos += sizeof(header) + 8;
+      }
+    }
+    can_header header{}; memcpy(&header, &bytes[pos], sizeof(header));
+    const unsigned size = sizeof(header) + lengths[i];
+    REQUIRE(header.addr == addresses[i]); REQUIRE(panda.calculate_checksum(&bytes[pos], size) == 0);
+    if (i < 3) {
+      const auto identity = lx3_tx_decode(prefix.data(), epoch_bytes.data());
+      REQUIRE(identity.valid); REQUIRE(identity.epoch == 0x3141592653589793ULL);
+      REQUIRE(identity.generation == i + 10);
+      const uint16_t binding = uint16_t(prefix[6]) | (uint16_t(prefix[7]) << 8U);
+      REQUIRE(binding == lx3_tx_binding(prefix.data(), epoch_bytes.data(), &bytes[pos], size));
+      bytes[pos + sizeof(header)] ^= 1U;
+      REQUIRE(binding != lx3_tx_binding(prefix.data(), epoch_bytes.data(), &bytes[pos], size));
+    }
+    pos += size;
+  }
+  REQUIRE(pos == bytes.size());
 }

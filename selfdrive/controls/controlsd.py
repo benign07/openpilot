@@ -30,6 +30,8 @@ from selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.selfdrive.carrot.carrot_controls import CarrotControls
+from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+from openpilot.selfdrive.car.lx3_authority import configure_control
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -123,8 +125,19 @@ class Controls:
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, MIN_LATERAL_CONTROL_SPEED) or CS.standstill
     CC.latActive = ((self.sm['selfdriveState'].active or lateral_enabled) and CS.latEnabled and
                     not CS.steerFaultTemporary and not CS.steerFaultPermanent and not standstill)
-    CC.latActive = self.carrot_controls.lat_suspend_control(CS, CC.latActive)
+    if not uses_lx3_authority(self.CP):
+      CC.latActive = self.carrot_controls.lat_suspend_control(CS, CC.latActive)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
+    if uses_lx3_authority(self.CP):
+      now = time.monotonic_ns()
+      fresh = self.sm.all_checks(['carState', 'selfdriveState', 'onroadEvents', 'driverMonitoringState']) and all(
+        0 <= now - self.sm.logMonoTime[s] < 100_000_000 for s in ('carState', 'selfdriveState'))
+      lat_allowed, long_allowed = configure_control(CC, CS, self.sm['onroadEvents'], CC.enabled,
+        self.params.get_bool('AlwaysLateral'), driving_gear, fresh, now)
+      # Permission persists across low-speed/driver-coexistence intervals;
+      # actual actuator output still follows stock speed and suspension rules.
+      CC.latActive = self.carrot_controls.lat_suspend_control(CS, lat_allowed and not standstill)
+      CC.longActive = CC.longActive and long_allowed
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state

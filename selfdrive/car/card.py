@@ -18,6 +18,8 @@ from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
+from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+from openpilot.selfdrive.car.lx3_authority import populate_car_state
 from openpilot.selfdrive.car.cruise import VCruiseCarrot
 from openpilot.selfdrive.car.car_specific import MockCarState
 
@@ -215,6 +217,8 @@ class Car:
     CS.latEnabled = self.v_cruise_helper._lat_enabled
     CS.useLaneLineSpeed = self.v_cruise_helper.useLaneLineSpeedApply
     CS.carrotCruise = 1 if self.v_cruise_helper.carrot_cruise_active else 0
+    if uses_lx3_authority(self.CP):
+      populate_car_state(CS, self.sm, self.v_cruise_helper, self.params, time.monotonic_ns())
 
     self.CI.CS.softHoldActive = CS.softHoldActive
     return CS, RD
@@ -264,7 +268,9 @@ class Car:
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       model_v2 = self.sm['modelV2'] if self.sm.valid['modelV2'] and self.sm.alive['modelV2'] else None
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, model_v2)
-      self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
+      authority = CC.lx3Authority if uses_lx3_authority(self.CP) else None
+      self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid,
+                                                 lx3_authority=authority))
 
       self.CC_prev = CC
 

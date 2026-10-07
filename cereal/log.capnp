@@ -428,6 +428,7 @@ struct CanData {
   address @0 :UInt32;
   dat     @2 :Data;
   src     @3 :UInt8;
+  lx3Identity @4 :Car.Lx3TxIdentity;
 
   deprecated :group {
     busTime @1 :UInt16;
@@ -587,6 +588,7 @@ struct PandaState @0xa7649e2575e4591e {
   # reserved for forks building alternate experiences.
   controlsAllowedRESERVED1 @38 :Bool;
   controlsAllowedRESERVED2 @39 :Bool;
+  lx3Authority @40 :Car.Lx3Authority;
 
   enum FaultStatus {
     none @0;
