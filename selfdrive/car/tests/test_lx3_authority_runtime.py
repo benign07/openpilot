@@ -102,6 +102,7 @@ class TestLx3Runtime(unittest.TestCase):
     self.input_sm = None
     self.input_gate = control_inputs_fresh
     self.input_events_prev = None
+    self.status_before_host = False
     self.gear = next(k for k,v in self.CI.CS.shifter_values.items() if v == 'D')
     self.step(0, ticks=220)
     self.assertFalse(self.enabled)
@@ -143,6 +144,12 @@ class TestLx3Runtime(unittest.TestCase):
         d[:2] = (binascii.crc_hqx(d[2:]+b'\x0b\x01',0)^0x041D).to_bytes(2,'little'); p[1]=bytes(d); frames.append(tuple(p))
       for addr,data,bus in frames:
         if bus == 0 and addr in (0x105,0x175,0xA0,0xEA,0x1AA,0x10B): self.native.fixture_rx(addr,data,len(data))
+      if self.status_before_host and self.frame%10==8:
+        # Panda health may be published before card processes the same MAIN
+        # release. Shift only the real status-delivery phase, never authority.
+        ps=log.PandaState.new_message();ps.lx3Authority=self.status().message()
+        self.sm['pandaStates']=[ps];self.sm.alive['pandaStates']=self.sm.valid['pandaStates']=True
+        self.sm.logMonoTime['pandaStates']=self.now
       CS = self.CI.update([(self.now,frames)])
       copy_status(CS,self.sm,self.now)
       with patch('openpilot.selfdrive.car.cruise.time.monotonic_ns', return_value=self.now):
@@ -184,9 +191,10 @@ class TestLx3Runtime(unittest.TestCase):
       if self.frame % 10 == 0:
         a = CC.lx3Authority
         self.native.fixture_state(a.intent,a.decisionKey,a.pendingGeneration,int(a.autoResume),a.observedLongRevision,a.config,int(a.refuseLong),a.refuseAfterSequence)
-        ps = log.PandaState.new_message(); ps.lx3Authority=self.status().message()
-        self.sm['pandaStates']=[ps]; self.sm.alive['pandaStates']=self.sm.valid['pandaStates']=True
-        self.sm.logMonoTime['pandaStates']=self.now
+        if not self.status_before_host:
+          ps = log.PandaState.new_message(); ps.lx3Authority=self.status().message()
+          self.sm['pandaStates']=[ps]; self.sm.alive['pandaStates']=self.sm.valid['pandaStates']=True
+          self.sm.logMonoTime['pandaStates']=self.now
       self.trace.append((self.frame,self.enabled,self.status().allowed,self.handshake.request,tuple(events.names)))
       s=self.status()
       self.details.append({'frame':self.frame,'enabled':self.enabled,'native':s.allowed,'armed':s.armed,'reason':s.reason,
@@ -275,6 +283,17 @@ class TestLx3Runtime(unittest.TestCase):
     self.assertEqual(self.CC.lx3Authority.intent,0)
     self.assertEqual(self.status().allowed,0)
     self.assertEqual(self.status().reason,4)  # HOST_OFF, not RX/heartbeat failure
+
+  def test_main_status_before_host_release_does_not_refuse_new_gesture(self):
+    self.start_input_checks()
+    self.status_before_host=True
+    self.lfa()
+    self.assertEqual(self.status().allowed,1)
+    start=len(self.details)
+    self.main()
+    self.assertTrue(self.enabled)
+    self.assertEqual(self.status().allowed,3)
+    self.assertFalse(any(EventName.lx3AuthorityDenied in d['events'] for d in self.details[start:]))
 
   def test_event_gate_keeps_real_stale_invalid_and_frequency_rejection(self):
     self.start_input_checks()

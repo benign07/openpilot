@@ -178,7 +178,7 @@ class TestLx3Authority(unittest.TestCase):
     self.assertFalse(authority.control_inputs_fresh(sm,self.now))
 
   def test_main_pending_replaces_old_lateral_grant_without_resurrection(self):
-    for fault in (None,'wrong_key','expired','no_pending','bad_input','steer_fault'):
+    for fault in (None,'late_release','wrong_key','expired','no_pending','bad_input','steer_fault'):
       with self.subTest(fault=fault):
         CS=self.state(); a=CS.lx3Authority
         key=0x0812
@@ -191,9 +191,14 @@ class TestLx3Authority(unittest.TestCase):
         elif fault=='no_pending': a.pendingGeneration=0; a.pendingAxes=0
         elif fault=='bad_input': a.inputReady=False
         elif fault=='steer_fault': CS.steerFaultTemporary=True
+        elif fault=='late_release':
+          cruise.lx3_lat_key=0x8024;cruise.lx3_lat_time=self.now-5_000_000_000
+          CS.buttonEvents=[{'type':'mainCruise','pressed':False,'physical':True,'physicalKey':key,
+                            'observedMonoTime':self.now}]
         authority.reconcile_lateral(cruise,CS,True,self.now)
-        self.assertEqual(cruise._lat_enabled,fault is None)
-        self.assertEqual(cruise.lx3_lateral_refused,fault is not None)
+        keep=fault in (None,'late_release')
+        self.assertEqual(cruise._lat_enabled,keep)
+        self.assertEqual(cruise.lx3_lateral_refused,not keep)
         self.assertEqual(a.allowed,0)  # A live pending never grants host permission.
 
   def test_stale_status_clears_existing_capnp_permission_fields(self):

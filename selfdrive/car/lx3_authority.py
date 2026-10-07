@@ -61,12 +61,17 @@ def reconcile_lateral(cruise, CS, always_lateral, now_ns):
   # MAIN replaces an existing grant after its native debounce. Its new,
   # physically cited pending LAT is a new request, not resurrection of the
   # preceding grant. Input faults/cancel/host-off discard native pending axes.
-  pending = verified(a) and 0 <= now_ns - cruise.lx3_lat_time < DECISION_MAX_NS and any(
-    key == cruise.lx3_lat_key and generation and age < 600 and axes & LAT
+  citations = [(cruise.lx3_lat_key, cruise.lx3_lat_time)] + [
+    (b.physicalKey,b.observedMonoTime) for b in CS.buttonEvents if b.physical and not b.pressed]
+  # The first reconciliation precedes Carrot's button dispatch. A new physical
+  # release in this very CS may already have a native pending citation while
+  # cruise still holds its older key. Preserve that request through dispatch.
+  pending = verified(a) and any(generation and age < 600 and axes & LAT and any(
+    key == citation and 0 <= now_ns - stamp < DECISION_MAX_NS for citation,stamp in citations)
     for key,generation,age,axes in ((a.pendingKey,a.pendingGeneration,a.pendingAgeMs,a.pendingAxes),
                                   (a.longPendingKey,a.longPendingGeneration,a.longPendingAgeMs,a.longPendingAxes)))
-  revoked = valid_status and not (a.allowed & LAT or a.armed & LAT) and (
-    (cruise.lx3_lat_was_allowed and not pending) or not live)
+  revoked = valid_status and not (a.allowed & LAT or a.armed & LAT) and not pending and (
+    cruise.lx3_lat_was_allowed or not live)
   if cruise._lat_enabled and (blocked or revoked):
     cruise._lat_enabled = False
     cruise.lx3_lat_key = cruise.lx3_lat_time = 0
