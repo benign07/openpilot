@@ -178,7 +178,8 @@ class TestLx3Runtime(unittest.TestCase):
         self.input_sm.update_msgs(self.now/1e9,msgs)
         host_fresh=self.input_gate(self.input_sm,self.now)
       CC = car.CarControl.new_message(enabled=self.enabled)
-      CC.latActive, CC.longActive = configure_control(CC,CS,events.to_msg(),self.enabled,
+      control_events=self.input_sm['onroadEvents'] if self.input_sm is not None else events.to_msg()
+      CC.latActive, CC.longActive = configure_control(CC,CS,control_events,self.enabled,
         self.params.get_bool('AlwaysLateral'),True,host_fresh,self.now,self.handshake.request,self.handshake.refusing,self.handshake.refusal_sequence)
       if self.frame % 10 == 0:
         a = CC.lx3Authority
@@ -218,16 +219,24 @@ class TestLx3Runtime(unittest.TestCase):
     self.step(ticks=1100)
     self.assertTrue(control_inputs_fresh(self.input_sm,self.now))
 
+  @staticmethod
+  def old_input_gate(sm,now):
+    return sm.all_checks(['carState','selfdriveState','onroadEvents']) and all(
+      0<=now-sm.logMonoTime[s]<100_000_000 for s in ('carState','selfdriveState'))
+
   def test_event_changes_keep_lfa_and_main_authority(self):
     self.start_input_checks()
     self.lfa()
     self.assertEqual(self.status().allowed,1)
     self.assertTrue(self.CC.latActive)
     self.assertFalse(self.enabled)
-    self.assertTrue(any(d.get('eventFreqOK') is False and d['native']==1 for d in self.details))
+    self.assertTrue(any(d['frame']%10==0 and d.get('eventFreqOK') is False and
+                        d['hostIntent']&1 and d['native']==1 for d in self.details))
     self.main()
     self.assertTrue(self.enabled)
     self.assertEqual(self.status().allowed,3)
+    self.assertTrue(any(d['frame']%10==0 and d.get('eventFreqOK') is False and
+                        d['hostIntent']&2 and d['native']&2 for d in self.details))
     # A grant/enable event changing to no event must not revoke permission.
     self.step(ticks=300)
     self.assertTrue(self.enabled)
@@ -238,13 +247,34 @@ class TestLx3Runtime(unittest.TestCase):
     self.start_input_checks()
     # Exact e1cb407c controlsd expression, retained solely as the negative
     # witness. Physical CAN, handshake and native policy remain unchanged.
-    self.input_gate=lambda sm,now: sm.all_checks(['carState','selfdriveState','onroadEvents']) and all(
-      0<=now-sm.logMonoTime[s]<100_000_000 for s in ('carState','selfdriveState'))
+    # Fix the phase: physical release is at frame1332, 32 ticks after the
+    # periodic frame1300. Do not claim every possible event phase refuses.
+    self.assertEqual(self.frame%100,20)
+    start=len(self.details)
+    self.input_gate=self.old_input_gate
     self.lfa()
     self.step(ticks=100)
     self.assertEqual(self.status().allowed,0)
     self.assertFalse(self.enabled)
     self.assertFalse(self.CS.latEnabled)
+    attempt=self.details[start:]
+    self.assertTrue(any(d['frame']%10==0 and d.get('eventFreqOK') is False and
+                        d['hostLat'] and d['generation'] and not d['hostIntent'] for d in attempt))
+    self.assertFalse(any(d['native']&1 for d in attempt))
+
+  def test_old_event_frequency_gate_revokes_a_real_main_grant(self):
+    self.start_input_checks()
+    self.main()
+    self.assertTrue(self.enabled)
+    self.assertEqual(self.status().allowed,3)
+    # Counterfactual old freshness expression after a real, physically cited
+    # grant. No native permission or generation is manually assigned.
+    self.assertFalse(self.input_sm.freq_ok['onroadEvents'])
+    self.input_gate=self.old_input_gate
+    self.step(ticks=10)
+    self.assertEqual(self.CC.lx3Authority.intent,0)
+    self.assertEqual(self.status().allowed,0)
+    self.assertEqual(self.status().reason,4)  # HOST_OFF, not RX/heartbeat failure
 
   def test_event_gate_keeps_real_stale_invalid_and_frequency_rejection(self):
     self.start_input_checks()

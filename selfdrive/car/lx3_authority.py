@@ -58,8 +58,15 @@ def reconcile_lateral(cruise, CS, always_lateral, now_ns):
              (pedal_block and (not a.armed & LONG or new_request)))
   live = cruise.lx3_lat_key and (0 <= now_ns - cruise.lx3_lat_time < DECISION_MAX_NS or
                                  a.statusMonoTime <= cruise.lx3_lat_time + DECISION_MAX_NS)
+  # MAIN replaces an existing grant after its native debounce. Its new,
+  # physically cited pending LAT is a new request, not resurrection of the
+  # preceding grant. Input faults/cancel/host-off discard native pending axes.
+  pending = verified(a) and 0 <= now_ns - cruise.lx3_lat_time < DECISION_MAX_NS and any(
+    key == cruise.lx3_lat_key and generation and age < 600 and axes & LAT
+    for key,generation,age,axes in ((a.pendingKey,a.pendingGeneration,a.pendingAgeMs,a.pendingAxes),
+                                  (a.longPendingKey,a.longPendingGeneration,a.longPendingAgeMs,a.longPendingAxes)))
   revoked = valid_status and not (a.allowed & LAT or a.armed & LAT) and (
-    cruise.lx3_lat_was_allowed or not live)
+    (cruise.lx3_lat_was_allowed and not pending) or not live)
   if cruise._lat_enabled and (blocked or revoked):
     cruise._lat_enabled = False
     cruise.lx3_lat_key = cruise.lx3_lat_time = 0
