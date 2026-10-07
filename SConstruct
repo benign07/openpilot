@@ -18,6 +18,9 @@ SetOption('num_jobs', max(1, int(os.cpu_count()/2)))
 
 AddOption('--ccflags', action='store', type='string', default='', help='pass arbitrary flags over the command line')
 AddOption('--verbose', action='store_true', default=False, help='show full build commands')
+for safety_option in ('mutation', 'ubsan', 'coverage'):
+  AddOption('--' + safety_option, action='store_true', default=False,
+            help='enable ' + safety_option + ' for the nested native safety test build')
 AddOption('--minimal',
           action='store_false',
           dest='extras',
