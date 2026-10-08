@@ -98,6 +98,10 @@ jobs:
           uv run --no-sync python -m pytest openpilot/selfdrive/monitoring/test_monitoring.py -v 2>&1 | tee lx3-stock-dm.log
       - name: Production host decisions and schema round trip
         run: uv run --no-sync python openpilot/selfdrive/car/tests/test_lx3_authority.py -v
+      - name: New AVH fields and signed-baseline recovery guard
+        run: |
+          uv run --no-sync python -m unittest opendbc.can.tests.test_lx3_modern_avh tools.tests.test_lx3_baseline_hud_state -v
+          uv run --no-sync python -m pytest openpilot/system/tests/test_startup_recovery.py -q
       - name: Passive diagnostics and HUD recording contract
         run: uv run --no-sync python -m unittest openpilot.selfdrive.carrot.can_diagnostics.test_automatic -v
       - name: HUD updater, rollback and live payload API

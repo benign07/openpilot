@@ -136,6 +136,9 @@ class RecoveryUpdate:
 
   def _run(self, automatic=False):
     try:
+      if automatic and Path('/data/community/hud_updates/config.json').is_file():
+        self._set('waiting', 'Signed HUD updates manage this baseline. Manual recovery remains available.')
+        return
       # No credential prompts or detached Git maintenance on an error screen.
       os.environ['GIT_TERMINAL_PROMPT'] = '0'
       with repo_lock():

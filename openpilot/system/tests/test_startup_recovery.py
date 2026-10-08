@@ -47,6 +47,20 @@ def test_update_current_branch_then_request_reboot(checkouts):
   assert git(device, 'branch', '--show-current') == 'main'
 
 
+def test_signed_hud_baseline_blocks_automatic_git_but_keeps_manual_recovery(checkouts, monkeypatch):
+  device, target = checkouts
+  before = git(device, 'rev-parse', 'HEAD')
+  original = Path.is_file
+  monkeypatch.setattr(Path, 'is_file', lambda path: True if str(path) == '/data/community/hud_updates/config.json' else original(path))
+  calls = []
+  update = startup_recovery.RecoveryUpdate(device, reboot=lambda: calls.append(True))
+  update._run(automatic=True)
+  assert update.state[0] == 'waiting' and not calls
+  assert git(device, 'rev-parse', 'HEAD') == before
+  update._run()
+  assert git(device, 'rev-parse', 'HEAD') == target and calls == [True]
+
+
 @pytest.mark.parametrize('reason', ['dirty', 'diverged', 'network', 'busy', 'reboot'])
 def test_failure_preserves_checkout_and_allows_retry(checkouts, monkeypatch, reason):
   device, _ = checkouts
