@@ -1,0 +1,46 @@
+name: Installed HUD app with rollback and modern backend
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev/lx3-topdown-20261008]
+    paths:
+      - .github/workflows/lx3-hud-dual-contract.yml
+      - tools/tests/export_hud_dual_fixtures.py
+      - tools/tests/HudDualBackendTest.kt
+      - openpilot/selfdrive/carrot/server/live_runtime/**
+permissions:
+  contents: read
+jobs:
+  unchanged-android-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch exact rollback source without changing candidate
+        run: git fetch --depth=1 origin 75b5d824bd13f1a5d4225f36edfd769d4b52677b
+      - name: Current installed Android source
+        run: |
+          git clone --no-checkout https://github.com/benign07/carrot-hud.git hud-contract-app
+          git -C hud-contract-app checkout --detach c70c3a24
+          python3 tools/tests/export_hud_dual_fixtures.py hud-contract-app/app/src/test/resources
+          cp tools/tests/HudDualBackendTest.kt hud-contract-app/app/src/test/java/com/carrot/hud/
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Real app JVM tests; no APK release or app installation
+        working-directory: hud-contract-app
+        run: gradle testDebugUnitTest --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unchanged-hud-dual-contract
+          path: |
+            hud-contract-app/app/build/test-results/testDebugUnitTest/*.xml
+            hud-contract-app/app/src/test/resources/hud_*.json
