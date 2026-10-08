@@ -429,6 +429,9 @@ class Updater:
 
 
 def main() -> None:
+  if Path('/data/community/hud_updates/config.json').is_file():
+    cloudlog.info("signed HUD updates manage this device")
+    return
   params = Params()
 
   if params.get_bool("DisableUpdates"):

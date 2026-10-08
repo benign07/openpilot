@@ -1,5 +1,6 @@
 import time
 from openpilot.cereal import log
+from openpilot.selfdrive.car.lx3_authority import VERSION as LX3_PROTOCOL_VERSION
 
 NO_TRAVERSAL_LIMIT = 2**64 - 1
 
@@ -26,7 +27,7 @@ def _get_writer_fields(schema):
   return _cached_writer_fields
 
 
-def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True):
+def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True, lx3_authority=None):
   """Convert list of CAN messages to Cap'n Proto serialized bytes.
 
   Args:
@@ -53,6 +54,11 @@ def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True):
       f._set_by_field(addr_f, msg[0])
       f._set_by_field(dat_f, msg[1])
       f._set_by_field(src_f, msg[2])
+      if msgtype == 'sendcan' and lx3_authority is not None and msg[0] in (0xCB, 0x12A, 0x1A0):
+        a = lx3_authority
+        axis = 2 if msg[0] == 0x1A0 else 1
+        f.lx3Identity = {'epoch': a.epoch, 'axis': axis, 'valid': a.version == LX3_PROTOCOL_VERSION and a.epoch != 0,
+                        'generation': a.longitudinalGeneration if axis == 2 else a.lateralGeneration}
 
   return dat.to_bytes()
 

@@ -30,6 +30,10 @@ from openpilot.selfdrive.controls.lib.cutin_alert import (
   CutinAlertTracker,
   promoted_cutin_candidates,
 )
+from openpilot.selfdrive.controls.lib.latcontrol import MIN_LATERAL_CONTROL_SPEED
+from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+from openpilot.selfdrive.car.lx3_authority import monitor_lateral
+from openpilot.selfdrive.car.lx3_engagement import Lx3Engagement
 
 from openpilot.system.hardware import HARDWARE
 from openpilot.system.version import get_build_metadata
@@ -151,6 +155,7 @@ class SelfdriveD:
     self.big_model_ready_t = 0.0
     self.model_startup_complete = False
     self.state_machine = StateMachine()
+    self.lx3_engagement = Lx3Engagement()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
     self.atc_type_last = ""
@@ -256,6 +261,12 @@ class SelfdriveD:
     resume_pressed = any(be.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for be in CS.buttonEvents)
     if not self.CP.pcmCruise and CS.vCruise > 250 and resume_pressed:
       self.events.add(EventName.resumeBlocked)
+
+    if uses_lx3_authority(self.CP):
+      if CS.lx3Authority.lateralRefused:
+        self.events.add(EventName.lx3AuthorityDenied)
+      if CS.lx3SteeringLimited:
+        self.events.add(EventName.lx3SteeringLimited)
 
     # Handle DM
     dm_disabled = self.sm['driverMonitoringState'].dm2Disabled
@@ -622,6 +633,8 @@ class SelfdriveD:
     if self.enabled and any(not ps.controlsAllowed for ps in self.sm['pandaStates']
            if ps.safetyModel not in IGNORED_SAFETY_MODES):
       self.mismatch_counter += 1
+    elif uses_lx3_authority(self.CP):
+      self.mismatch_counter = 0
 
     return CS
 
@@ -683,6 +696,9 @@ class SelfdriveD:
       cloudlog.warning("Impact dashcam countdown completed; openpilot disabled, reboot requested")
 
   def update_alerts(self, CS):
+    if uses_lx3_authority(self.CP) and monitor_lateral(CS.lx3Authority):
+      if ET.WARNING not in self.state_machine.current_alert_types:
+        self.state_machine.current_alert_types.append(ET.WARNING)
     clear_event_types = set()
     if ET.WARNING not in self.state_machine.current_alert_types:
       clear_event_types.add(ET.WARNING)
@@ -716,6 +732,9 @@ class SelfdriveD:
     ss.alertHudVisual = self.AM.current_alert.visual_alert
 
     ss.distanceTraveled = float(self.distance_traveled)
+    ss.lx3LongRequest = uses_lx3_authority(self.CP) and self.lx3_engagement.request
+    ss.lx3LongRefused = uses_lx3_authority(self.CP) and self.lx3_engagement.refusing
+    ss.lx3RefuseAfterSequence = self.lx3_engagement.refusal_sequence if ss.lx3LongRefused else 0
 
     self.pm.send('selfdriveState', ss_msg)
 
@@ -736,6 +755,8 @@ class SelfdriveD:
     if self.impact_dashcam.committed:
       self.events.add(EventName.impactDashcamReboot)
     if not self.CP.passive and self.initialized:
+      if uses_lx3_authority(self.CP):
+        self.lx3_engagement.update(self.events, CS, self.enabled, time.monotonic_ns())
       self.enabled, self.active = self.state_machine.update(self.events)
     self.update_alerts(CS)
 

@@ -1,4 +1,5 @@
 #pragma once
+#include "lx3_protocol.h"
 
 typedef struct {
   volatile uint32_t w_ptr;
@@ -63,6 +64,8 @@ extern can_ring *can_queues[CAN_QUEUES_ARRAY_SIZE];
 // ********************* interrupt safe queue *********************
 bool can_pop(can_ring *q, CANPacket_t *elem);
 bool can_push(can_ring *q, const CANPacket_t *elem);
+bool can_pop_stamped(can_ring *q, CANPacket_t *elem, lx3_queue_stamp_t *stamp);
+bool can_push_stamped(can_ring *q, const CANPacket_t *elem, const lx3_queue_stamp_t *stamp);
 uint32_t can_slots_empty(const can_ring *q);
 
 // assign CAN numbering

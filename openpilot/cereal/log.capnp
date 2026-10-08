@@ -166,7 +166,12 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     impactDashcamReboot @129;
 
     soundsUnavailableDEPRECATED @47;
-  }
+
+  # LX3 companion fields; stock ordinals above remain unchanged.
+  lx3AuthorityDenied @130;
+  lx3MonitoringRequired @131;
+  lx3SteeringLimited @132;
+}
 }
 
 enum LongitudinalPersonality {
@@ -442,6 +447,9 @@ struct CanData {
   deprecated :group {
     busTime @1 :UInt16;
   }
+
+  # LX3 companion fields; stock ordinals above remain unchanged.
+  lx3Identity @4 :Car.Lx3TxIdentity;
 }
 
 struct DeviceState @0xa4d8b5af2aa492eb {
@@ -705,6 +713,9 @@ struct PandaState @0xa7649e2575e4591e {
     safetyParam @20 :Int16;
     safetyParam2 @26 :UInt32;
   }
+
+  # LX3 companion fields; stock ordinals above remain unchanged.
+  lx3Authority @41 :Car.Lx3Authority;
 }
 
 struct PeripheralState {
@@ -845,6 +856,11 @@ struct SelfdriveState {
     mid @2;
     full @3;
   }
+
+  # LX3 companion fields; stock ordinals above remain unchanged.
+  lx3LongRequest @14 :Bool;  # pending physical/armed request, not enabled or permission
+  lx3LongRefused @15 :Bool;  # drop an unaccepted pending session, acknowledged by Panda
+  lx3RefuseAfterSequence @16 :UInt32;
 }
 
 struct ControlsState @0x97ff69c53601abf1 {

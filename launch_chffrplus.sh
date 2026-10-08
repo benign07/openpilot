@@ -443,6 +443,14 @@ function launch {
   export CARROT_STARTUP_RECOVERY=1
   cleanup_stale_git_lfs_hooks
 
+  # Apply/recover signed HUD transactions before importing runtime modules.
+  # Keep the stock repository lock and startup-recovery path around the apply.
+  if [ -f /data/community/hud_updates/config.json ]; then
+    if ! run_startup_command python3 "$DIR/openpilot/selfdrive/carrot/hud_update/boot_apply.py"; then
+      show_startup_failure "HUD update recovery failed; manager startup stopped."
+    fi
+  fi
+
   # Check to see if there's a valid overlay-based update available. Conditions
   # are as follows:
   #
@@ -452,7 +460,7 @@ function launch {
   # 2. The FINALIZED consistent file has to exist, indicating there's an update
   #    that completed successfully and synced to disk.
 
-  if [ -f "${DIR}/.overlay_init" ]; then
+  if [ ! -f /data/community/hud_updates/config.json ] && [ -f "${DIR}/.overlay_init" ]; then
     find ${DIR}/.git -newer ${DIR}/.overlay_init | grep -q '.' 2> /dev/null
     if [ $? -eq 0 ]; then
       echo "${DIR} has been modified, skipping overlay update installation"

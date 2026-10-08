@@ -217,6 +217,9 @@ bool safety_rx_hook(const CANPacket_t *to_push) {
   bool controls_allowed_prev = controls_allowed;
 
   bool valid = rx_msg_safety_check(to_push, &current_safety_config, current_hooks);
+#ifdef CANFD
+  if (lx3_native_active()) valid = lx3_native_observe(to_push, valid);
+#endif
   if (valid) {
     current_hooks->rx(to_push);
   }
@@ -262,7 +265,12 @@ bool safety_tx_hook(CANPacket_t *to_send) {
     allowed = true;
   }
 
-  const bool safety_allowed = current_hooks->tx(to_send);
+  // Hooks can enqueue deferred forwarding or change permission. A frame rejected
+  // by the outer policy must not reach those side effects before we reject it.
+  bool safety_allowed = false;
+  if (allowed && !relay_malfunction) {
+    safety_allowed = current_hooks->tx(to_send);
+  }
 
   /*
   int addr = GET_ADDR(to_send);
@@ -357,6 +365,9 @@ void safety_tick(const safety_config *cfg) {
   }
 
   safety_rx_checks_invalid = rx_checks_invalid;
+#ifdef CANFD
+  if (lx3_native_active()) lx3_native_maintain();
+#endif
 }
 
 static void relay_malfunction_set(void) {

@@ -1,0 +1,144 @@
+name: LX3 modern Carrot integration review
+on:
+  push:
+    branches: [dev/lx3-topdown-20261008]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-buffer:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Actual policy buffer tests with undefined-behavior checks
+        run: python3 tools/check_hyundai_canfd_buffer.py --compiler ${{ matrix.compiler }} --sanitize --output buffer-evidence
+      - name: Physical authority core and production native integration
+        run: |
+          set -o pipefail
+          for suite in core native; do
+            ${{ matrix.compiler }} -std=gnu11 -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=undefined -fno-sanitize-recover=undefined -g \
+              -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety \
+              opendbc_repo/opendbc/safety/tests/test_lx3_authority_${suite}.c -lm -o /tmp/lx3-${suite}
+            /tmp/lx3-${suite} | tee buffer-evidence/authority-${suite}.log
+          done
+      - name: Real comms, stamped software queues and pre-TXBAR with register model
+        run: python3 tools/check_lx3_board_delivery.py --compiler ${{ matrix.compiler }} --sanitize --output buffer-evidence/board-delivery
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: buffer-review-${{ matrix.compiler }}
+          path: buffer-evidence
+  board-firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install H7 build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi
+          python -m pip install scons pycryptodome
+      - name: Build actual H7 firmware for review only
+        working-directory: panda
+        run: |
+          set -o pipefail
+          mkdir -p board/obj
+          scons --minimal -j2 board/obj/panda_h7.bin.signed 2>&1 | tee h7-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: buffer-review-h7-development-not-qualified
+          path: |
+            panda/h7-build.log
+            panda/board/obj/panda_h7.bin.signed
+            panda/board/obj/version
+      - name: Record scope
+        if: always()
+        run: echo 'Development build only. Software authority regression does not establish OEM or closed-loop vehicle qualification. No release, OTA or vehicle installation.' >> "$GITHUB_STEP_SUMMARY"
+  full-runtime-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+      - name: Install locked dependencies
+        run: uv sync --frozen --no-dev --extra testing
+      - name: Build real runtime test dependencies first
+        run: uv run --no-sync scons --minimal -j2 openpilot/common/params_pyx.so msgq_repo/msgq/ipc_pyx.so opendbc_repo/opendbc/dbc/hyundai_canfd_generated.dbc
+      - name: Real Carrot and state machine paired with actual native policy
+        run: |
+          set -o pipefail
+          uv run --no-sync python openpilot/selfdrive/car/tests/test_lx3_authority_runtime.py -v 2>&1 | tee lx3-runtime-integration.log
+      - name: Complete runtime dependency graph
+        run: |
+          set -o pipefail
+          uv run --no-sync scons --minimal -j2 2>&1 | tee lx3-runtime-build.log
+      - name: Actual pandad serializer C++ regression
+        run: |
+          uv run --no-sync scons -j2 openpilot/selfdrive/pandad/tests/test_pandad_canprotocol
+          openpilot/selfdrive/pandad/tests/test_pandad_canprotocol
+      - name: Stock Carrot monitoring remains unchanged
+        run: |
+          set -o pipefail
+          uv run --no-sync python -m pytest openpilot/selfdrive/monitoring/test_monitoring.py -v 2>&1 | tee lx3-stock-dm.log
+      - name: Production host decisions and schema round trip
+        run: uv run --no-sync python openpilot/selfdrive/car/tests/test_lx3_authority.py -v
+      - name: Passive diagnostics and HUD recording contract
+        run: uv run --no-sync python -m unittest openpilot.selfdrive.carrot.can_diagnostics.test_automatic -v
+      - name: HUD updater, rollback and live payload API
+        run: |
+          set -o pipefail
+          uv run --no-sync python -m unittest openpilot.selfdrive.carrot.tests.test_hud_updater openpilot.selfdrive.carrot.tests.test_hud_rollback openpilot.selfdrive.carrot.server.live_runtime.test_hud_contract -v 2>&1 | tee lx3-hud-contract.log
+      - name: Clone camera topology and sealed logger rotation
+        run: |
+          set -o pipefail
+          uv run --no-sync python - <<'PY' 2>&1 | tee lx3-logger-topology.log
+          from openpilot.system.loggerd.tests.logger_rotation_case import run_case
+          for driver in (False, True):
+            for record in (False, True):
+              run_case('candidate', driver, record)
+          PY
+      - name: Import real paired control processes
+        run: |
+          uv run --no-sync python - <<'PY'
+          import importlib
+          for name in ('openpilot.selfdrive.car.card', 'openpilot.selfdrive.selfdrived.selfdrived',
+                       'openpilot.selfdrive.controls.controlsd', 'openpilot.selfdrive.controls.plannerd',
+                       'openpilot.selfdrive.monitoring.dmonitoringd'):
+            importlib.import_module(name)
+            print('IMPORTED', name)
+          PY
+      - name: Exercise linked lateral MPC and longitudinal solver initialization
+        run: |
+          uv run --no-sync python -m pytest openpilot/selfdrive/controls/tests/test_lateral_mpc.py -q
+          uv run --no-sync python - <<'PY'
+          from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc
+          mpc = LongitudinalMpc()
+          mpc.reset()
+          print('PASS actual longitudinal MPC construction and reset')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-authority-runtime-review-not-release
+          path: |
+            lx3-runtime-build.log
+            lx3-runtime-integration.log
+            lx3-stock-dm.log
+            lx3-hud-contract.log
+            lx3-logger-topology.log

@@ -1008,6 +1008,14 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   # - No CAN data received at all
   # - CAN data is received, but some message are not received at the right frequency
   # If you're not writing a new car port, this is usually cause by faulty wiring
+  EventName.lx3AuthorityDenied: {
+    ET.PERMANENT: Alert("제어 요청이 승인되지 않았습니다", "상태 확인 후 핸들 버튼으로 다시 요청하세요",
+                        AlertStatus.normal, AlertSize.small, Priority.LOW,
+                        VisualAlert.none, AudibleAlert.refuse, 2.),
+  },
+  EventName.lx3SteeringLimited: {
+    ET.PERMANENT: NormalPermanentAlert("조향 보조 시작 대기", "현재 조향각을 줄여 주세요"),
+  },
   EventName.canError: {
     ET.PERMANENT: car_parser_result,
     ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("Unknown Vehicle Variant"),

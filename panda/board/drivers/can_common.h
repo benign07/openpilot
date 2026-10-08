@@ -58,12 +58,26 @@ can_buffer(tx3_q, CAN_TX_BUFFER_SIZE)
 can_ring *can_queues[CAN_QUEUES_ARRAY_SIZE] = {&can_tx1_q, &can_tx2_q, &can_tx3_q};
 
 // ********************* interrupt safe queue *********************
-bool can_pop(can_ring *q, CANPacket_t *elem) {
+#ifdef CANFD
+static lx3_queue_stamp_t lx3_tx_queue_stamps[3][CAN_TX_BUFFER_SIZE];
+static lx3_queue_stamp_t *can_queue_stamps(const can_ring *q) {
+  for (unsigned i = 0U; i < 3U; i++) if (q == can_queues[i]) return lx3_tx_queue_stamps[i];
+  return NULL;
+}
+#endif
+
+bool can_pop_stamped(can_ring *q, CANPacket_t *elem, lx3_queue_stamp_t *stamp) {
   bool ret = 0;
 
   ENTER_CRITICAL();
   if (q->w_ptr != q->r_ptr) {
     *elem = q->elems[q->r_ptr];
+#ifdef CANFD
+    lx3_queue_stamp_t *stamps = can_queue_stamps(q);
+    if (stamp != NULL) *stamp = stamps != NULL ? stamps[q->r_ptr] : (lx3_queue_stamp_t){0};
+#else
+    if (stamp != NULL) *stamp = (lx3_queue_stamp_t){0};
+#endif
     if ((q->r_ptr + 1U) == q->fifo_size) {
       q->r_ptr = 0;
     } else {
@@ -76,7 +90,9 @@ bool can_pop(can_ring *q, CANPacket_t *elem) {
   return ret;
 }
 
-bool can_push(can_ring *q, const CANPacket_t *elem) {
+bool can_pop(can_ring *q, CANPacket_t *elem) { return can_pop_stamped(q, elem, NULL); }
+
+bool can_push_stamped(can_ring *q, const CANPacket_t *elem, const lx3_queue_stamp_t *stamp) {
   bool ret = false;
   uint32_t next_w_ptr;
 
@@ -88,6 +104,12 @@ bool can_push(can_ring *q, const CANPacket_t *elem) {
   }
   if (next_w_ptr != q->r_ptr) {
     q->elems[q->w_ptr] = *elem;
+#ifdef CANFD
+    lx3_queue_stamp_t *stamps = can_queue_stamps(q);
+    if (stamps != NULL) stamps[q->w_ptr] = stamp != NULL ? *stamp : (lx3_queue_stamp_t){0};
+#else
+    (void)stamp;
+#endif
     q->w_ptr = next_w_ptr;
     ret = true;
   }
@@ -111,6 +133,8 @@ bool can_push(can_ring *q, const CANPacket_t *elem) {
   }
   return ret;
 }
+
+bool can_push(can_ring *q, const CANPacket_t *elem) { return can_push_stamped(q, elem, NULL); }
 
 uint32_t can_slots_empty(const can_ring *q) {
   uint32_t ret = 0;
@@ -354,13 +378,20 @@ bool can_check_checksum(CANPacket_t *packet) {
 
 bool safety_tx_buffered_for_fwd = false;
 void can_send(CANPacket_t *to_push, uint8_t bus_number, bool skip_tx_hook) {
+  ENTER_CRITICAL();
   safety_tx_buffered_for_fwd = false;
   if (skip_tx_hook || safety_tx_hook(to_push) != 0) {
     if (safety_tx_buffered_for_fwd) safety_tx_buffered_for_fwd = false;
     else if (bus_number < PANDA_BUS_CNT) {
       can_set_checksum(to_push);
       // add CAN packet to send queue
+#ifdef CANFD
+      const lx3_queue_stamp_t stamp = lx3_native_active() ?
+        (skip_tx_hook ? lx3_forward_stamp : lx3_current_tx_stamp) : (lx3_queue_stamp_t){0};
+      tx_buffer_overflow += can_push_stamped(can_queues[bus_number], to_push, &stamp) ? 0U : 1U;
+#else
       tx_buffer_overflow += can_push(can_queues[bus_number], to_push) ? 0U : 1U;
+#endif
       process_can(CAN_NUM_FROM_BUS_NUM(bus_number));
     }
   } else {
@@ -372,6 +403,7 @@ void can_send(CANPacket_t *to_push, uint8_t bus_number, bool skip_tx_hook) {
     can_set_checksum(to_push);
     rx_buffer_overflow += can_push(&can_rx_q, to_push) ? 0U : 1U;
   }
+  EXIT_CRITICAL();
 }
 
 bool is_speed_valid(uint32_t speed, const uint32_t *all_speeds, uint8_t len) {

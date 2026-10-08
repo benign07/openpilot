@@ -23,6 +23,8 @@ from opendbc.car.interfaces import CarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.alternative_experience import get_alternative_experience
 from openpilot.selfdrive.car.card_diagnostics import should_log_card_diagnostics
+from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+from openpilot.selfdrive.car.lx3_authority import copy_status, populate_car_state
 from openpilot.selfdrive.car.cruise import VCruiseCarrot
 from openpilot.selfdrive.car.car_specific import MockCarState
 from openpilot.selfdrive.car.openpilot_toggle import CruiseMainOpenpilotToggle
@@ -256,6 +258,8 @@ class Car:
     #self.t2 = time.monotonic()
 
     #self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric)
+    if uses_lx3_authority(self.CP):
+      copy_status(CS, self.sm, time.monotonic_ns())
     self.v_cruise_helper.update_v_cruise(CS, self.sm, self.is_metric)
     #self.t3 = time.monotonic()
     if self.sm['carControl'].enabled and not self.CC_prev.enabled:
@@ -277,6 +281,9 @@ class Car:
     CS.latEnabled = self.v_cruise_helper._lat_enabled
     CS.useLaneLineSpeed = self.v_cruise_helper.useLaneLineSpeedApply
     CS.carrotCruise = 1 if self.v_cruise_helper.carrot_cruise_active else 0
+    if uses_lx3_authority(self.CP):
+      populate_car_state(CS, self.sm, self.v_cruise_helper, self.params, time.monotonic_ns())
+      CS.lx3SteeringLimited = self.last_actuators_output.lx3AngleLimited
 
     self.CI.CS.softHoldActive = CS.softHoldActive
     state_done_ns = time.monotonic_ns()
@@ -360,7 +367,8 @@ class Car:
       radar_state = self.sm['radarState'] if self.sm.valid['radarState'] and self.sm.alive['radarState'] else None
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, model_v2, radar_state)
       apply_done_ns = time.monotonic_ns()
-      self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
+      authority = CC.lx3Authority if uses_lx3_authority(self.CP) else None
+      self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid, lx3_authority=authority))
       sendcan_done_ns = time.monotonic_ns()
 
       process_us = (sendcan_done_ns - self.card_diag_recv_ns) // 1000

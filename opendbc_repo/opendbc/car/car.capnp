@@ -249,7 +249,7 @@ struct CarState {
   pcmCruiseGap @63 :Int16;      #0: can't read, 1,2,3,4: gap setting
   speedLimit @64 :Float32;
   speedLimitDistance @65 :Float32;
-  gearStep @66 :Int16;          
+  gearStep @66 :Int16;
   tpms @67 : Tpms;
   useLaneLineSpeed @68 : Float32;
   leftLatDist @69 : Float32;  # distance to left lane line
@@ -360,7 +360,13 @@ struct CarState {
       paddleLeft @13;
       paddleRight @14;
     }
-  }
+
+  # LX3 companion fields; stock ordinals above remain unchanged.
+  physicalKey @2 :UInt16;
+  physical @3 :Bool;
+  durationMs @4 :UInt32;
+  observedMonoTime @5 :UInt64;
+}
 
   # deprecated
   errorsDEPRECATED @0 :List(OnroadEventDEPRECATED.EventName);
@@ -369,6 +375,10 @@ struct CarState {
   canMonoTimesDEPRECATED @12: List(UInt64);
   canRcvTimeoutDEPRECATED @49 :Bool;
   eventsDEPRECATED @13 :List(OnroadEventDEPRECATED);
+
+  # LX3 companion fields; stock ordinals above remain unchanged.
+  lx3Authority @100 :Lx3Authority;
+  lx3SteeringLimited @101 :Bool;
 }
 
 # ******* radar state @ 20hz *******
@@ -475,7 +485,10 @@ struct CarControl {
       stopping @2;
       starting @3;
     }
-  }
+
+  # LX3 companion fields; stock ordinals above remain unchanged.
+  lx3AngleLimited @11 :Bool;
+}
 
   struct CruiseControl {
     cancel @0: Bool;
@@ -581,6 +594,9 @@ struct CarControl {
   rollDEPRECATED @8 :Float32;
   pitchDEPRECATED @9 :Float32;
   actuatorsOutputDEPRECATED @10 :Actuators;
+
+  # LX3 companion fields; stock ordinals above remain unchanged.
+  lx3Authority @18 :Lx3Authority;
 }
 
 struct CarOutput {
@@ -872,4 +888,55 @@ struct CarParams {
   longitudinalActuatorDelayLowerBoundDEPRECATED @61 :Float32;
   stoppingControlDEPRECATED @31 :Bool; # Does the car allow full control even at lows speeds when stopping
   radarTimeStep @45: Float32;  # time delta between radar updates, 20Hz is very standard
+}
+
+struct Lx3Authority {
+  version @0 :UInt8;
+  profile @1 :UInt8;
+  intent @2 :UInt8;
+  allowed @3 :UInt8;
+  inputReady @4 :Bool;
+  pendingKey @5 :UInt16;
+  pendingGeneration @6 :UInt16;
+  lateralGeneration @7 :UInt16;
+  longitudinalGeneration @8 :UInt16;
+  epoch @9 :UInt64;
+  sequence @10 :UInt32;
+  config @11 :UInt16;
+  longPressMs @12 :UInt16;
+  observedLongRevision @13 :UInt16;
+  lateralRevision @14 :UInt16;
+  longitudinalRevision @15 :UInt16;
+  reason @16 :UInt16;
+  oemLateralPassthrough @17 :UInt32;
+  oemLongitudinalPassthrough @18 :UInt32;
+  autoResume @19 :Bool;
+  decisionKey @20 :UInt16;
+  buttonHealthy @21 :Bool;
+  lateralDecisionKey @22 :UInt16;
+  longitudinalDecisionKey @23 :UInt16;
+  lateralDecisionTime @24 :UInt64;
+  longitudinalDecisionTime @25 :UInt64;
+  pendingAgeMs @26 :UInt16;
+  heartbeatAgeMs @27 :UInt16;
+  oemEmergency @28 :Bool;
+  armed @29 :UInt8;  # lateral, longitudinal, post-pedal OFF required
+  longPendingKey @30 :UInt16;
+  longPendingGeneration @31 :UInt16;
+  longPendingAgeMs @32 :UInt16;
+  statusMonoTime @33 :UInt64;
+  remoteRequest @34 :Bool;
+  lateralRefused @35 :Bool;
+  pendingAxes @36 :UInt8;
+  longPendingAxes @37 :UInt8;
+  refuseLong @38 :Bool;
+  refusedSequence @39 :UInt32;
+  refuseAfterSequence @40 :UInt32;  # Stable episode identity, even when a false flag is not sampled.
+}
+
+struct Lx3TxIdentity {
+  epoch @0 :UInt64;
+  generation @1 :UInt16;
+  axis @2 :UInt8;
+  valid @3 :Bool;
 }

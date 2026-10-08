@@ -142,6 +142,7 @@ class CanBus(CanBusBase):
 
 
 def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, apply_steer, CS, apply_angle, max_torque, angle_control):
+  from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 
   emergency_steering = False
   if CS.adrv_0x161 is not None:
@@ -178,6 +179,12 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
 
       ret.append(packer.make_can_msg("STEER_TOUCH_2AF", CAN.CAM, values))
 
+  if emergency_steering and uses_lx3_authority(CP):
+    # The guarded MCU flushes lateral replacement queues on the real OEM
+    # emergency indication. Preserve the actual OEM source, not a host copy.
+    return ret
+
+  angle_active = lat_active if uses_lx3_authority(CP) else CC.latActive
   if angle_control:
     if CS.lfa_alt is not None:
       values = copy.copy(CS.lfa_alt)
@@ -186,9 +193,9 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
         pass
       else:
         #values = {} #CS.lfa_alt
-        values["LKAS_ANGLE_ACTIVE"] = 2 if CC.latActive else 1
+        values["LKAS_ANGLE_ACTIVE"] = 2 if angle_active else 1
         values["LKAS_ANGLE_CMD"] = -apply_angle
-        values["LKAS_ANGLE_MAX_TORQUE"] = max_torque if CC.latActive else 0
+        values["LKAS_ANGLE_MAX_TORQUE"] = max_torque if angle_active else 0
       ret.append(packer.make_can_msg("LFA_ALT", CAN.ECAN, values, rx_counter = rx_counter))
 
     if CS.lfa is not None:
@@ -196,12 +203,12 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
       rx_counter = values.pop("COUNTER", None)
       if not emergency_steering:
         values["LKA_MODE"] = 0
-        values["LKA_ICON"] = 2 if CC.latActive else 1
+        values["LKA_ICON"] = 2 if angle_active else 1
         values["TORQUE_REQUEST"] = -1024  # apply_steer,
         values["VALUE63"] = 0 # LKA_ASSIST
         values["STEER_REQ"] = 0  # 1 if lat_active else 0,
         values["HAS_LANE_SAFETY"] = 0  # hide LKAS settings
-        values["LKA_ACTIVE"] = 3 if CC.latActive else 0  # this changes sometimes, 3 seems to indicate engaged
+        values["LKA_ACTIVE"] = 3 if angle_active else 0  # this changes sometimes, 3 seems to indicate engaged
         values["VALUE64"] = 0  #STEER_MODE, NEW_SIGNAL_2
         values["LKAS_ANGLE_CMD"] = -25.6 #-apply_angle,
         values["LKAS_ANGLE_ACTIVE"] = 0 #2 if lat_active else 1,
@@ -487,8 +494,10 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_value_last, accel, stopp
     if stop_controller is not None:
       stop_controller.reset()
     return None, accel_value_last
+  from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+  guarded = uses_lx3_authority(CS.CP)
   interlock_active = longitudinal_interlock_active(CS)
-  soft_hold_active = CS.softHoldActive > 0 and CS.out.cruiseState.available
+  soft_hold_active = CS.softHoldActive > 0 and CS.out.cruiseState.available and not guarded
   acc_control_enabled = (enabled or soft_hold_active) and CS.out.cruiseState.available and CS.paddle_button_prev == 0 and not interlock_active
   enabled = acc_control_enabled
 
@@ -516,6 +525,8 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_value_last, accel, stopp
   values["ACCMode"] = acc_mode
   values["MainMode_ACC"] = 1
   values["StopReq"] = 1 if acc_control_enabled and (stopping or soft_hold_active) else 0  # 1: Stop control is required, 2: Not used, 3: Error Indicator
+  if guarded and (not enabled or gas_override or acc_mode != 1):
+    values["StopReq"] = 0
   values["aReqValue"] = a_val
   values["aReqRaw"] = a_raw
   values["VSetDis"] = set_speed
@@ -670,8 +681,14 @@ def forward_button_message(packer, CAN, frame, CS, cruise_button, MainMode_ACC_t
       if cruise_button_driver == 0:
         values["CRUISE_BUTTONS"] = cruise_button
       if MainMode_ACC_trigger > 0:
-        #values["ADAPTIVE_CRUISE_MAIN_BTN"] = 1
-        pass
+        # v30.1: LX3_HEV 0x10B has no ADAPTIVE_CRUISE_MAIN_BTN field (only CRUISE_BUTTONS 4-bit + LFA_BTN);
+        # send CRUISE_BUTTONS=2 (SET_DECEL) on driver-idle frames to trigger stock SCC standby->active.
+        # TODO(device): confirm carrot-wip's main-engage path doesn't already engage LX3 (avoid double-trigger).
+        if CS.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+          if cruise_button_driver == 0:
+            values["CRUISE_BUTTONS"] = 2  # Buttons.SET_DECEL
+        #else:
+        #  values["ADAPTIVE_CRUISE_MAIN_BTN"] = 1
       elif LFA_trigger > 0:
         values["LFA_BTN"] = 1
 

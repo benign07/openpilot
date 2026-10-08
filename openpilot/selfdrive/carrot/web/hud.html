@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta http-equiv="Cache-Control" content="no-store" />
+  <title>Carrot HUD</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body {
+      margin: 0; height: 100%; background: #0a0e12; overflow: hidden;
+      font-family: -apple-system, system-ui, "Noto Sans KR", sans-serif;
+      -webkit-user-select: none; user-select: none;
+    }
+    #wf { position: fixed; inset: 0; display: flex; flex-direction: column; padding: 3vmin; box-sizing: border-box; }
+    .top { display: flex; align-items: center; gap: 2vmin; }
+    .gear {
+      font-weight: 800; color: #fff; background: #16331f; border: 1px solid #2c5738;
+      border-radius: 2.4vmin; padding: 0.6vmin 2.4vmin; min-width: 8vmin; text-align: center;
+      font-size: clamp(18px, 7vmin, 44px); line-height: 1.1;
+    }
+    .spacer { flex: 1; }
+    .stat { display: flex; align-items: center; gap: 1.2vmin; color: #9fb3a8; font-size: clamp(10px, 3vmin, 15px); }
+    .dot { width: clamp(7px,2vmin,12px); height: clamp(7px,2vmin,12px); border-radius: 50%; background: #888; }
+    .mid { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
+    .speed { font-weight: 800; line-height: 0.85; color: #fff; font-size: clamp(60px, 42vmin, 300px); }
+    .unit { color: #9fb3a8; font-size: clamp(12px, 5vmin, 30px); align-self: flex-end; padding-bottom: clamp(8px,5vmin,30px); margin-left: 1.4vmin; }
+    .mode {
+      display: block; width: 100%; box-sizing: border-box; border: none;
+      border-radius: 3vmin; padding: clamp(10px,3.4vmin,22px);
+      font-weight: 800; font-size: clamp(18px, 7vmin, 40px); color: #06130c; cursor: pointer;
+      background: #cfd6d2; transition: background .15s;
+    }
+    .mode small { display: block; font-size: clamp(9px,2.6vmin,14px); font-weight: 600; opacity: .8; margin-bottom: .3vmin; }
+    .mode:active { filter: brightness(0.9); }
+    .mode.m1 { background: #38d66a; } /* eco */
+    .mode.m2 { background: #ffb64d; } /* safe */
+    .mode.m3 { background: #e6ebe8; } /* normal */
+    .mode.m4 { background: #ff5c5c; color:#fff; } /* high */
+  </style>
+</head>
+<body>
+  <div id="wf">
+    <div class="top">
+      <div class="gear" id="gear">--</div>
+      <div class="spacer"></div>
+      <div class="stat"><span class="dot" id="dot"></span><span id="stat">연결 중…</span></div>
+    </div>
+    <div class="mid"><span class="speed" id="speed">--</span><span class="unit" id="unit">km/h</span></div>
+    <button class="mode" id="mode" type="button"><small>운전모드 (탭하면 변경)</small><span id="modeTxt">--</span></button>
+  </div>
+  <script>
+    "use strict";
+    var curMode = 0, metric = true;
+    function num(v){ return (typeof v==="number"&&isFinite(v))?v:null; }
+    function setTxt(id,t){ var e=document.getElementById(id); if(e&&e.textContent!==t)e.textContent=t; }
+
+    function gearText(cs){
+      if(!cs) return "--";
+      var g = (cs.gearShifter==null?"":(""+cs.gearShifter)).toUpperCase();
+      if(g.indexOf("DRIVE")>=0){ var s=num(cs.gearStep); return (s&&s>0)?(""+s):"D"; }
+      if(g.indexOf("PARK")>=0) return "P";
+      if(g.indexOf("REVERSE")>=0) return "R";
+      if(g.indexOf("NEUTRAL")>=0) return "N";
+      return g?g.charAt(0):"--";
+    }
+    var MODES = {1:"연비", 2:"안전", 3:"일반", 4:"고속"};
+    function applyMode(m){
+      curMode = m;
+      var mb = document.getElementById("mode");
+      mb.className = "mode" + (m>=1&&m<=4 ? " m"+m : "");
+      setTxt("modeTxt", MODES[m] || "--");
+    }
+
+    function pollRuntime(){
+      fetch("/api/live_runtime?force=1",{cache:"no-store"}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+        var dot=document.getElementById("dot"), st=document.getElementById("stat");
+        if(!d || !d.ok){ dot.style.background="#E5534B"; st.textContent="오파 연결 대기"; setTxt("speed","--"); setTxt("gear","--"); return; }
+        var s=d.services||{}, runtime=d.runtime||{}, p=runtime.params||{};
+        metric = String(p.IsMetric==null?"1":p.IsMetric)==="1";
+        var f = metric?3.6:2.2369363;
+        var age=num(runtime.serviceAgeMs&&runtime.serviceAgeMs.carState);
+        var fresh=d.snapshotAgeMs>=0 && d.snapshotAgeMs<1500 && age!==null && age<1000 &&
+          runtime.serviceAlive&&runtime.serviceAlive.carState===true &&
+          runtime.serviceValid&&runtime.serviceValid.carState===true;
+        var cs=fresh?s.carState:null, speed=null;
+        if(cs && (cs.canValid!==true || cs.canTimeout===true)) cs=null;
+        if(cs){ var v=num(cs.vEgoCluster); if(v==null)v=num(cs.vEgo); if(v!=null)speed=Math.max(0,Math.round(v*f)); }
+        setTxt("speed", speed==null?"--":""+speed);
+        setTxt("unit", metric?"km/h":"mph");
+        setTxt("gear", gearText(cs));
+        dot.style.background=cs?"#3DDC84":"#ffb64d"; st.textContent=cs?"차량 연결됨":"차량 연결 대기";
+      }).catch(function(){ document.getElementById("dot").style.background="#E5534B"; setTxt("stat","오파 연결 대기"); setTxt("speed","--"); setTxt("gear","--"); });
+    }
+    function pollMode(){
+      fetch("/api/params_bulk?names=MyDrivingMode",{cache:"no-store"}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+        var m = d && d.values ? parseInt(d.values.MyDrivingMode,10) : NaN;
+        if(!isNaN(m)) applyMode(m);
+      }).catch(function(){});
+    }
+    document.getElementById("mode").addEventListener("click", function(){
+      var button=document.getElementById("mode");
+      if(button.disabled || curMode<1 || curMode>4) return;
+      var next = (curMode>=1&&curMode<=4) ? (curMode%4+1) : 1;
+      button.disabled=true;
+      fetch("/api/param_set",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:"MyDrivingMode",value:next})})
+        .then(function(r){return r.json();})
+        .then(function(d){ if(d.ok && d.has_params && Number(d.value)===next) applyMode(next); })
+        .catch(function(){})
+        .finally(function(){button.disabled=false; pollMode();});
+    });
+
+    pollRuntime(); pollMode();
+    setInterval(pollRuntime, 1000);
+    setInterval(pollMode, 2000);
+  </script>
+</body>
+</html>

@@ -14,6 +14,7 @@ from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarContr
                                        EV_MODE_ACTIVE_VALUES, EV_MODE_STATUS_ADDR, EV_MODE_STATUS_DLC, EV_MODE_STATUS_MSG, \
                                        EV_MODE_STATUS_SIGNAL
 from opendbc.car.interfaces import CarStateBase
+from opendbc.car.hyundai.lx3_buttons import PhysicalButtons, uses_lx3_authority, MAIN, LFA
 
 from openpilot.common.params import Params
 
@@ -145,6 +146,9 @@ class CarState(CarStateBase):
 
     self.cruise_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
     self.main_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
+    self._lx3_main_btn_debounce = 0  # v29.1: LX3_HEV main button (0x10B byte10 raw=8) 60/40 flicker debounce
+    self.lx3_buttons = PhysicalButtons() if uses_lx3_authority(CP) else None
+    self.lx3_now_ns = 0
 
     self.gear_msg_canfd = "GEAR" if CP.extFlags & HyundaiExtFlags.CANFD_GEARS_69 else \
                           "ACCELERATOR" if CP.flags & HyundaiFlags.EV else \
@@ -216,6 +220,8 @@ class CarState(CarStateBase):
     self.blinkers = None
     self.blinkers_alt = None
     self.doors_seatbelts = None
+    self.doors = None       # LX3_HEV separate DOORS msg (BO_994)
+    self.seatbelts = None   # LX3_HEV separate SEATBELTS msg (BO_992)
     self.cruise_buttons_alt2 = None
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
@@ -231,6 +237,8 @@ class CarState(CarStateBase):
 
     self.main_enabled = True if self.op_params.get_int("AutoEngage") == 2 else False
     self.manual_main_off_latched = False
+    if self.lx3_buttons is not None:
+      self.main_enabled = False
     self.gear_shifter = GearShifter.drive # Gear_init for Nexo ?? unknown 21.02.23.LSW
 
     self.totalDistance = 0.0
@@ -274,7 +282,7 @@ class CarState(CarStateBase):
     #self.rf_lateral = 0
 
     fingerprints_str = Params().get("FingerPrints")
-    fingerprints = ast.literal_eval(fingerprints_str)
+    fingerprints = ast.literal_eval(fingerprints_str) if fingerprints_str else {i: {} for i in range(8)}
     #print("fingerprints =", fingerprints)
     ecu_disabled = False
     if self.CP.openpilotLongitudinalControl and not (self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC):
@@ -292,6 +300,7 @@ class CarState(CarStateBase):
     self.GEAR_ALT = True if 64 in fingerprints[pt_bus] else False
     self.TPMS = True if 0x3a0 in fingerprints[pt_bus] else False
     self.LOCAL_TIME = True if 1264 in fingerprints[pt_bus] else False
+    self.CCNC_0x161 = True if 0x161 in fingerprints[cam_bus] else False  # v10: LX3_HEV LFA_ICON source (ADRV_0x161)
 
     self.cp_bsm = None
     self.time_zone = "UTC"
@@ -459,6 +468,9 @@ class CarState(CarStateBase):
           add_and_cache(self.cp, "BLINKERS", "blinkers")
           add_and_cache(self.cp, "BLINKERS_ALT", "blinkers_alt")
           add_and_cache(self.cp, "DOORS_SEATBELTS", "doors_seatbelts")
+          if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":  # LX3 sends separate DOORS/SEATBELTS, not combined
+            add_and_cache(self.cp, "DOORS", "doors", ignore_counter = True)
+            add_and_cache(self.cp, "SEATBELTS", "seatbelts", ignore_counter = True)
         elif self.controls_ready_count == 126:
           add_and_cache(self.cp, "CRUISE_BUTTONS_ALT2", "cruise_buttons_alt2", ignore_counter = True)
           add_and_cache(self.cp, "TRAILER_STATUS", "trailer_status", ignore_counter = True)
@@ -1128,7 +1140,13 @@ class CarState(CarStateBase):
     ret.parkingBrake = is_canfd_parking_brake_active(cp.vl["TCS"]["ESC_PrkBrkActvSta"])
     #print(cp.vl["TCS"], cp.vl_all["TCS"]["DriverBraking"][-10:])
 
-    if self.doors_seatbelts is not None:
+    if self.CP.carFingerprint == "HYUNDAI_PALISADE_LX3_HEV":
+      # LX3_HEV reads separate DOORS(BO_994)/SEATBELTS(BO_992) (reference port validated)
+      if self.doors is not None:
+        ret.doorOpen = self.doors["DRIVER_DOOR"] == 1
+      if self.seatbelts is not None:
+        ret.seatbeltUnlatched = self.seatbelts["DRIVER_SEATBELT"] == 0
+    elif self.doors_seatbelts is not None:
       ret.doorOpen = self.doors_seatbelts["DRIVER_DOOR"] == 1
       ret.seatbeltUnlatched = self.doors_seatbelts["DRIVER_SEATBELT"] == 0
 
@@ -1228,8 +1246,9 @@ class CarState(CarStateBase):
     if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
       self.MainMode_ACC = cp_cam.vl["SCC_CONTROL"]["MainMode_ACC"] == 1
       self.ACCMode = cp_cam.vl["SCC_CONTROL"]["ACCMode"]
-      self.LFA_ICON = cp_cam.vl["LFAHDA_CLUSTER"]["HDA_LFA_SymSta"]
-    self._update_canfd_main_enabled(cruise_button, main_button_released)
+      self.LFA_ICON = cp_cam.vl["ADRV_0x161"]["LFA_ICON"] if self.CCNC_0x161 else cp_cam.vl["LFAHDA_CLUSTER"]["HDA_LFA_SymSta"]
+    if self.lx3_buttons is None:
+      self._update_canfd_main_enabled(cruise_button, main_button_released)
     # CAN FD cars enable on main button press, set available if no TCS faults preventing engagement
     ret.cruiseState.available = self.main_enabled and self.controls_ready_count >= READY_COUNT_OK #cp.vl["TCS"]["ACCEnable"] == 0
 
@@ -1347,7 +1366,9 @@ class CarState(CarStateBase):
     #self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
     #carrot {{
 
-    if self.cruise_buttons_alt2 is not None:
+    if self.lx3_buttons is not None:
+      cruise_button = [Buttons.LFA_BUTTON if self.lx3_buttons.held == LFA else self.lx3_buttons.held]
+    elif self.cruise_buttons_alt2 is not None:
       if int(self.cruise_buttons_alt2.get("LFA_BTN", 0)) == 1:
         cruise_button = [Buttons.LFA_BUTTON]
       else:
@@ -1397,6 +1418,29 @@ class CarState(CarStateBase):
 
     self.paddle_button_prev = paddle_button
 
+    if self.lx3_buttons is not None:
+      # One physical decoder owns both the semantic buttons and their native
+      # citation. Cached 0x1AA/10B values and OEM MainMode cannot create edges.
+      physical_events = []
+      types = {1: ButtonType.accelCruise, 2: ButtonType.decelCruise, 3: ButtonType.gapAdjustCruise,
+               4: ButtonType.cancel, MAIN: ButtonType.mainCruise, LFA: ButtonType.lfaButton}
+      for e in self.lx3_buttons.events:
+        b = structs.CarState.ButtonEvent()
+        b.type, b.pressed = types[e.button], e.pressed
+        b.physical, b.physicalKey = True, (e.button << 8) | e.counter
+        b.durationMs, b.observedMonoTime = e.held_ns // 1_000_000, e.mono_ns
+        physical_events.append(b)
+        if e.button == MAIN and not e.pressed:
+          # An early enable request gets the normal not-ready/no-entry alert,
+          # but must not latch MAIN on and make the next real press turn it off.
+          if self.main_enabled or self.controls_ready_count >= READY_COUNT_OK:
+            self.main_enabled = not self.main_enabled
+      paddles = [b for b in ret.buttonEvents if b.type in (ButtonType.paddleLeft, ButtonType.paddleRight)]
+      ret.buttonEvents = physical_events + paddles
+      healthy = self.lx3_buttons.stream_healthy(self.lx3_now_ns)
+      ret.lx3Authority.buttonHealthy = healthy
+      ret.cruiseState.available = self.main_enabled and self.controls_ready_count >= READY_COUNT_OK and healthy
+
     return ret
 
   def get_can_parsers_canfd(self, CP):
@@ -1424,6 +1468,15 @@ class CarState(CarStateBase):
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CAN.CAM),
       Bus.alt: CANParser(DBC[CP.carFingerprint][Bus.pt], alt_msgs, CAN.ACAN),
     }
+
+  def update_button_enable(self, buttonEvents):
+    if self.lx3_buttons is not None and not self.CP.pcmCruise:
+      if not self.lx3_buttons.healthy(self.lx3_now_ns):
+        return False
+      if (self.main_enabled or self.controls_ready_count < READY_COUNT_OK) and any(
+          b.type == ButtonType.mainCruise and not b.pressed and b.physical for b in buttonEvents):
+        return True
+    return super().update_button_enable(buttonEvents)
 
   def get_can_parsers(self, CP):
     if CP.flags & HyundaiFlags.CANFD:

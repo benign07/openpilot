@@ -92,8 +92,12 @@ void can_send_thread(std::vector<Panda *> pandas, bool fake_send) {
     const uint64_t event_ns = event.getLogMonoTime();
     const uint64_t queue_age_ns = recv_ns >= event_ns ? recv_ns - event_ns : 0U;
 
+    // Guarded commands have a 100 ms host freshness bound.
+    bool guarded = false;
+    for (const auto frame : event.getSendcan()) guarded |= frame.getLx3Identity().getValid();
+    const uint64_t max_age = guarded ? 100000000ULL : 1000000000ULL;
     // Don't send if older than 1 second
-    if ((queue_age_ns < 1e9) && !fake_send) {
+    if (((!guarded || event.getValid()) && queue_age_ns < max_age) && !fake_send) {
       for (Panda *panda : pandas) {
         LOGT("sending sendcan to panda: %s", (panda->hw_serial()).c_str());
         panda->can_send(event.getSendcan());
@@ -362,6 +366,33 @@ std::optional<bool> send_panda_states(PubMaster *pm, const std::vector<Panda *> 
 
     auto ps = pss[i];
     fill_panda_state(ps, panda->hw_type, health);
+    if (panda->lx3_guarded()) {
+      const auto status = panda->get_lx3_status();
+      if (!status) {
+        evt.setValid(false);
+      } else {
+        const auto &s = *status;
+        auto a = ps.initLx3Authority();
+        a.setVersion(s.version); a.setProfile(s.profile); a.setAllowed(s.allowed);
+        a.setInputReady(s.input_ready != 0); a.setEpoch(s.epoch); a.setSequence(s.sequence);
+        a.setPendingKey(s.pending_key); a.setPendingGeneration(s.pending_generation);
+        a.setLateralGeneration(s.lateral_generation); a.setLongitudinalGeneration(s.longitudinal_generation);
+        a.setLateralRevision(s.lateral_revision); a.setLongitudinalRevision(s.longitudinal_revision);
+        a.setConfig(s.config); a.setLongPressMs(s.lfa_long_ms); a.setReason(s.reason);
+        a.setPendingAgeMs(s.pending_age_ms); a.setHeartbeatAgeMs(s.heartbeat_age_ms);
+        a.setOemLateralPassthrough(s.oem_lateral_passthrough);
+        a.setOemLongitudinalPassthrough(s.oem_longitudinal_passthrough);
+        a.setOemEmergency(s.oem_emergency != 0);
+        a.setArmed(s.armed);
+        a.setLongPendingKey(s.long_pending_key); a.setLongPendingGeneration(s.long_pending_generation);
+        a.setLongPendingAgeMs(s.long_pending_age_ms);
+        a.setPendingAxes(s.pending_axes); a.setLongPendingAxes(s.long_pending_axes);
+        a.setRefusedSequence(s.refused_sequence);
+        ps.setControlsAllowed((s.allowed & 2U) != 0U);
+        ps.setControlsAllowedRESERVED1((s.allowed & 1U) != 0U);
+        ps.setControlsAllowedRESERVED2((s.allowed & 2U) != 0U);
+      }
+    }
 
     auto cs = std::array{ps.initCanState0(), ps.initCanState1(), ps.initCanState2()};
     for (uint32_t j = 0; j < PANDA_CAN_CNT; j++) {
@@ -566,7 +597,7 @@ void pandad_run(std::vector<Panda *> &pandas) {
 
   Params params;
   RateKeeper rk("pandad", 100);
-  SubMaster sm({"selfdriveState"});
+  SubMaster sm({"selfdriveState", "carControl", "carState"});
   PubMaster pm({"pandaStates", "peripheralState"});
   PandaSafety panda_safety(pandas);
   Panda *peripheral_panda = pandas[0];
@@ -585,6 +616,14 @@ void pandad_run(std::vector<Panda *> &pandas) {
       sm.update(0);
       engaged = sm.allAliveAndValid({"selfdriveState"}) && sm["selfdriveState"].getSelfdriveState().getEnabled();
       is_onroad = params.getBool("IsOnroad");
+      const uint64_t now = nanos_since_boot();
+      const bool fresh = is_onroad && sm.allAliveAndValid({"carControl", "carState", "selfdriveState"}) &&
+        (now - sm["carControl"].getLogMonoTime() < 100000000ULL) &&
+        (now - sm["carState"].getLogMonoTime() < 100000000ULL) &&
+        (now - sm["selfdriveState"].getLogMonoTime() < 100000000ULL);
+      for (Panda *panda : pandas) {
+        panda->send_lx3_state(sm["carControl"].getCarControl().getLx3Authority(), fresh);
+      }
       pandad_is_onroad.store(is_onroad, std::memory_order_relaxed);
       const auto ignition_opt = process_panda_state(pandas, &pm, engaged, is_onroad, spoofing_started);
       // A vehicle sleep can drop ignition without ending the onroad session.

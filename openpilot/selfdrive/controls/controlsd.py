@@ -35,6 +35,8 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.carrot.carrot_controls import CarrotControls
 from openpilot.selfdrive.carrot.carrot_man_input import get_carrot_man
 from openpilot.selfdrive.monitoring.dm_alerts import driver_monitoring_hud_alert
+from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+from openpilot.selfdrive.car.lx3_authority import configure_control, control_inputs_fresh
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -150,8 +152,21 @@ class Controls:
     CC.latActive = lateral_control_allowed(self.sm['selfdriveState'].active, lateral_enabled, CS.latEnabled,
                                            CS.steerFaultTemporary, CS.steerFaultPermanent, below_min_speed,
                                            CS.standstill, steer_at_standstill)
-    CC.latActive = self.carrot_controls.lat_suspend_control(CS, CC.latActive)
+    standstill = below_min_speed or CS.standstill
+    if not uses_lx3_authority(self.CP):
+      CC.latActive = self.carrot_controls.lat_suspend_control(CS, CC.latActive)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
+    if uses_lx3_authority(self.CP):
+      now = time.monotonic_ns()
+      fresh = control_inputs_fresh(self.sm, now)
+      lat_allowed, long_allowed = configure_control(CC, CS, self.sm['onroadEvents'], CC.enabled,
+        self.params.get_bool('AlwaysLateral'), driving_gear, fresh, now,
+        long_request=self.sm['selfdriveState'].lx3LongRequest, refuse_long=self.sm['selfdriveState'].lx3LongRefused,
+        refuse_after=self.sm['selfdriveState'].lx3RefuseAfterSequence)
+      # Permission persists across low-speed/driver-coexistence intervals;
+      # actual actuator output still follows stock speed and suspension rules.
+      CC.latActive = self.carrot_controls.lat_suspend_control(CS, lat_allowed and not standstill)
+      CC.longActive = CC.longActive and long_allowed
 
     # AlwaysLateral must also stop while manager drains workers for this reboot.
     if self.params.get_bool("ImpactDashcamReboot"):

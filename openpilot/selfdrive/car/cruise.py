@@ -8,6 +8,9 @@ from openpilot.selfdrive.carrot.cruise_gap import cruise_gap_levels, next_gap_pe
 from openpilot.selfdrive.carrot.bluetooth.model import BLUETOOTH_CANCEL, CommandReader, REMOTE_BUTTONS
 
 from opendbc.car import structs
+from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+from openpilot.selfdrive.car.lx3_authority import reconcile_lateral, verified, STATUS_MAX_NS
+import time
 GearShifter = structs.CarState.GearShifter
 
 
@@ -160,6 +163,15 @@ class VCruiseCarrot:
   def __init__(self, CP):
     self.CP = CP
     self.bluetooth_commands = CommandReader('cruise')
+    self.lx3_authority = uses_lx3_authority(CP)
+    self.lx3_lat_key = self.lx3_long_key = 0
+    self.lx3_lat_time = self.lx3_long_time = 0
+    self.lx3_auto_until = 0
+    self.lx3_remote_cycle = False
+    self.lx3_lat_was_allowed = False
+    self.lx3_lateral_refused = False
+    self.lx3_auto_blocked = False
+    self.lx3_auto_pending = None
     self.frame = 0
     self.params_memory = Params("/dev/shm/params")
     self.params = Params()
@@ -204,6 +216,10 @@ class VCruiseCarrot:
     self._hold_interlock_active = False
     self._steering_interlock_active = False
     self._lat_enabled = self.params.get_int("AutoEngage") > 0
+    if self.lx3_authority:
+      # A boot preference is not a physical permission grant. The first LFA
+      # press must turn assistance on, rather than turn a latent boot flag off.
+      self._lat_enabled = False
     self._v_cruise_kph_at_brake = 0
     self.cruise_state_available_last = False
 
@@ -318,6 +334,10 @@ class VCruiseCarrot:
       self.carrot_arg = ""
 
   def update_v_cruise(self, CS, sm, is_metric):
+    self.lx3_remote_cycle = False
+    self.lx3_lateral_refused = False
+    if self.lx3_authority:
+      reconcile_lateral(self, CS, self.params.get_bool('AlwaysLateral'), time.monotonic_ns())
     self._add_log("")
     self.update_params(is_metric)
     self.frame += 1
@@ -327,6 +347,38 @@ class VCruiseCarrot:
       self.autoCruiseControl_cancel_timer = max(0, self.autoCruiseControl_cancel_timer - 1)
 
     CC = sm['carControl']
+    if self.lx3_authority:
+      physical_enable = any(b.physical and not b.pressed and b.type in
+        (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.mainCruise) for b in CS.buttonEvents)
+      if physical_enable:
+        self.lx3_auto_pending = None
+        self.lx3_auto_until = 0
+        if not CC.enabled:
+          self._soft_hold_active = 0
+      if CC.lx3Authority.lateralRefused and self._lat_enabled:
+        self._lat_enabled = False
+        self.lx3_lat_key = self.lx3_lat_time = 0
+        self.lx3_lateral_refused = True
+      pending = self.lx3_auto_pending
+      if CC.enabled:
+        if pending and pending[2] and not (CS.brakePressed or CS.gasPressed):
+          self._soft_hold_active = 2
+        self.lx3_auto_pending = None
+        self.lx3_auto_blocked = False
+      elif CS.brakePressed or CS.gasPressed:
+        self.lx3_auto_pending = None
+      elif CC.lx3Authority.refuseLong:
+        if pending:
+          self._cruise_ready = pending[1]
+        # A refused hold is not a held vehicle. In particular it must not
+        # turn a subsequent physical SET into Carrot's "leave hold" cancel.
+        self._soft_hold_active = 0
+        self.lx3_auto_pending = None
+        self.lx3_auto_until = 0
+        self.lx3_auto_blocked = True
+      self.lx3_long_armed = bool(CS.lx3Authority.armed & 2)
+      self.lx3_arm_status_valid = (verified(CS.lx3Authority) and
+        0 <= time.monotonic_ns() - CS.lx3Authority.statusMonoTime <= STATUS_MAX_NS)
     self._update_carrot_man(sm)
     if sm.alive['longitudinalPlan']:
       lp = sm['longitudinalPlan']
@@ -370,13 +422,14 @@ class VCruiseCarrot:
 
     if self._activate_cruise > 0:
       #self.events.append(EventName.buttonEnable)
-      self._cruise_ready = False
+      if not self.lx3_authority or CC.enabled:
+        self._cruise_ready = False
     elif self._activate_cruise < 0:
       #self.events.append(EventName.buttonCancel)
       self._cruise_ready = True if self._activate_cruise == -2 else False
 
     if CS.cruiseState.available:
-      if not self.cruise_state_available_last:
+      if not self.cruise_state_available_last and not self.lx3_authority:
         self._lat_enabled = True
         v_cruise_kph = self.v_ego_kph_set
       if not self.CP.pcmCruise:
@@ -398,6 +451,28 @@ class VCruiseCarrot:
 
     self.cruise_state_available_last = CS.cruiseState.available
     self.enabled_last = CC.enabled
+    if self.lx3_authority:
+      for b in CS.buttonEvents:
+        if not b.physical or b.pressed:
+          continue
+        if b.type == ButtonType.mainCruise:
+          self._lat_enabled = CS.cruiseState.available
+          self._cruise_cancel_state = not CS.cruiseState.available
+          if CS.cruiseState.available:
+            # A physical MAIN enable has the same explicit resumption intent
+            # as RES/SET; clear Carrot's post-park automatic-resume timer.
+            self.autoCruiseControl_cancel_timer = 0
+            self.lx3_lat_key = self.lx3_long_key = b.physicalKey
+            self.lx3_lat_time = self.lx3_long_time = b.observedMonoTime
+          else:
+            self.lx3_auto_until = 0
+        elif b.type in (ButtonType.accelCruise, ButtonType.decelCruise):
+          self.lx3_long_key, self.lx3_long_time = b.physicalKey, b.observedMonoTime
+          if self._lat_enabled and CS.lx3Authority.armed & 1:
+            self.lx3_lat_key, self.lx3_lat_time = b.physicalKey, b.observedMonoTime
+      if self._cruise_cancel_state:
+        self.lx3_auto_until = 0
+      reconcile_lateral(self, CS, self.params.get_bool('AlwaysLateral'), time.monotonic_ns())
 
   def initialize_v_cruise(self, CS, experimental_mode: bool) -> None:
     return
@@ -420,6 +495,7 @@ class VCruiseCarrot:
     self.v_cruise_cluster_kph = self.v_cruise_kph
 
   def _prepare_buttons(self, CS, v_cruise_kph, remote=None):
+    physical_long_action = False
     button_kph = v_cruise_kph
     button_type = 0
     buttonEvents = CS.buttonEvents
@@ -467,6 +543,12 @@ class VCruiseCarrot:
         self.button_long_time = self._cruise_button_long_delay if bt in [ButtonType.accelCruise, ButtonType.decelCruise] else self._cruise_button_long_delay + 30
 
       elif not b.pressed and self.button_cnt > 0 and bt == self.button_prev:
+        if (self.lx3_authority and b.physical and b.durationMs > self.button_long_time * 10 and
+            not self.long_pressed and bt in (ButtonType.lfaButton, ButtonType.gapAdjustCruise, ButtonType.cancel)):
+          # A complete long gesture may arrive in one CAN batch. Preserve its
+          # lane/style/cancel action rather than inventing a short toggle.
+          self.long_pressed = physical_long_action = True
+          button_type = bt
         # VW 쓸어올리기: 래치된 self.button_big_step 사용 (뗄 때 신호를 다시 읽으면 이미 0)
         if bt == ButtonType.cancel:
           button_type = bt
@@ -509,7 +591,7 @@ class VCruiseCarrot:
       for b in buttonEvents:
         if not b.pressed and b.type in (ButtonType.setCruise, ButtonType.resumeCruise):
           return button_kph, b.type, False
-    return button_kph, button_type, self.long_pressed
+    return button_kph, button_type, self.long_pressed or physical_long_action
 
   @staticmethod
   def _long_button_speed(speed, button):
@@ -522,6 +604,8 @@ class VCruiseCarrot:
       self.carrot_cmd_index_last = self.carrot_cmd_index
       print(f"Carrot command(cruise.py): {self.carrot_cmd} {self.carrot_arg}")
       if self.carrot_cmd == "CRUISE":
+        self.lx3_remote_cycle = True
+        self.lx3_auto_until = 0
         if self.carrot_arg == "OFF":
           self._cruise_control(-2, -1, "Cruise off (carrot command)")
         elif self.carrot_arg == "ON":
@@ -591,9 +675,10 @@ class VCruiseCarrot:
         self._cruise_speed_initialized = True
 
       elif button_type == ButtonType.accelCruise:
-        self._lat_enabled = True
+        if not self.lx3_authority:
+          self._lat_enabled = True
         self._pause_auto_speed_up = False
-        if self._soft_hold_active > 0:
+        if self._soft_hold_active > 0 and (not self.lx3_authority or CC.enabled):
           self._soft_hold_active = 0
         elif self.carrot_cruise_active:
           self._v_cruise_kph_at_brake = 0
@@ -622,11 +707,13 @@ class VCruiseCarrot:
         self.carrot_cruise_active = False
 
       elif button_type == ButtonType.decelCruise:
-        self._lat_enabled = True
+        # v32 (A 기준): LX3_HEV는 accel/decel이 lat 안 건드림 (SCC 안 켜진 상태에서 LFA만 켜지는 부작용 차단)
+        if self.CP.carFingerprint != "HYUNDAI_PALISADE_LX3_HEV":
+          self._lat_enabled = True
         self._pause_auto_speed_up = True
         #self.carrot_cruise_active = False
 
-        if self._soft_hold_active > 0:
+        if self._soft_hold_active > 0 and (not self.lx3_authority or CC.enabled):
           self._cruise_control(-1, -1, "Cruise off,softhold mode (decelCruise)")
         elif self._cruise_ready:
           self._paddle_decel_active = True
@@ -662,6 +749,10 @@ class VCruiseCarrot:
       elif button_type == ButtonType.lfaButton:
         if self._lfa_button_mode == 0:
           self._lat_enabled = not self._lat_enabled
+          if self.lx3_authority:
+            for b in CS.buttonEvents:
+              if b.physical and b.type == ButtonType.lfaButton and not b.pressed:
+                self.lx3_lat_key, self.lx3_lat_time = b.physicalKey, b.observedMonoTime
           self._add_log("Lateral " + "enabled" if self._lat_enabled else "disabled")
         elif self._lfa_button_mode == 2:
           self.carrot_cruise_active = True
@@ -788,6 +879,14 @@ class VCruiseCarrot:
     return v_cruise_kph
 
   def _cruise_control(self, enable, cancel_timer, reason, allow_cancel_state=False, manual=False):
+    if self.lx3_authority and enable > 0 and not self.lx3_remote_cycle:
+      if not getattr(self, 'lx3_arm_status_valid', False):
+        return
+      if self.lx3_auto_blocked or not getattr(self, 'lx3_long_armed', False):
+        if not self.lx3_auto_blocked:
+          self._add_log(reason + ' > physical cruise arming required')
+        self.lx3_auto_blocked = True
+        return
     # Explicit HID button requests bypass automatic-engage preferences only;
     # availability/interlocks below and selfdrived's normal no-entry checks remain.
     if enable > 0 and not self._cruise_available:
@@ -818,6 +917,16 @@ class VCruiseCarrot:
         self._soft_hold_active = 0
         return
       self._activate_cruise = enable
+      if self.lx3_authority:
+        if enable > 0 and not self.lx3_remote_cycle:
+          # selfdrived owns the one-second handshake timeout. Keep this input
+          # eligible across its IPC round trips; only its explicit denial can
+          # fail the pending Carrot transaction.
+          self.lx3_auto_until = self.frame + 150
+          if self.lx3_auto_pending is None:
+            self.lx3_auto_pending = (self.frame, self._cruise_ready, self._soft_hold_active > 0)
+        elif enable < 0:
+          self.lx3_auto_until = 0
       self._cancel_timer = int(cancel_timer / 0.01)   # DT_CTRL: 0.01
       self._add_log(reason)
 
@@ -842,6 +951,8 @@ class VCruiseCarrot:
     if not CC.enabled:
       #self._pause_auto_speed_up = False
       if self._brake_pressed_count == -1 and self._soft_hold_active > 0:
+        if not self.lx3_authority:
+          self._soft_hold_active = 2
         #self.autoCruiseControl_cancel_timer = 0
         self._engage_soft_hold()
       # GM: autoResume

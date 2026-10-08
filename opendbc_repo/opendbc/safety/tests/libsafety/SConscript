@@ -1,5 +1,12 @@
 import platform
 
+# The parent openpilot build does not register the standalone safety options.
+def safety_option(name):
+  try:
+    return GetOption(name)
+  except AttributeError:
+    return False
+
 CC = 'gcc'
 system = platform.system()
 if system == 'Darwin':
@@ -23,7 +30,7 @@ env = Environment(
 if system == "Darwin":
   env.PrependENVPath('PATH', '/opt/homebrew/bin')
 
-if GetOption('mutation'):
+if safety_option('mutation'):
   env['CC'] = 'clang-17'
   flags = [
     '-fprofile-instr-generate',
@@ -35,7 +42,7 @@ if GetOption('mutation'):
   env['CFLAGS'] += flags
   env['LINKFLAGS'] += flags
 
-if GetOption('ubsan'):
+if safety_option('ubsan'):
   flags = [
     "-fsanitize=undefined",
     "-fno-sanitize-recover=undefined",
@@ -46,7 +53,7 @@ if GetOption('ubsan'):
 safety = env.SharedObject("safety.os", "safety.c")
 libsafety = env.SharedLibrary("libsafety.so", [safety])
 
-if GetOption('coverage'):
+if safety_option('coverage'):
   env.Append(
     CFLAGS=["-fprofile-arcs", "-ftest-coverage", "-fprofile-abs-path",],
     LIBS=["gcov"],

@@ -18,6 +18,7 @@ struct LoggerdState {
   std::atomic<double> last_camera_seen_tms{0.0};
   std::atomic<int> ready_to_rotate{0};  // count of encoders ready to rotate
   int max_waiting = 0;
+  bool camera_streams_known = false;
   double last_rotate_tms = 0.;      // last rotate time in ms
 };
 
@@ -307,6 +308,23 @@ void loggerd_thread() {
         }
 
         if (service.encoder) {
+          // Count only camera streams encoderd can actually subscribe to.
+          // A clone without a driver camera must not wait for its encoder at
+          // every segment boundary. Do not fabricate camera/model validity.
+          if (!s.camera_streams_known) {
+            const auto streams = VisionIpcClient::getAvailableStreams("camerad", false);
+            if (!streams.empty()) {
+              int active_encoders = 0;
+              for (const auto &cam : cameras_logged) {
+                if (streams.count(cam.stream_type)) active_encoders += cam.encoder_infos.size();
+              }
+              if (active_encoders > 0) {
+                s.max_waiting = active_encoders;
+                s.camera_streams_known = true;
+                LOGW("waiting for %d encoders from advertised camera streams", active_encoders);
+              }
+            }
+          }
           s.last_camera_seen_tms = millis_since_boot();
           bytes_count += handle_encoder_msg(&s, msg, service.name, remote_encoders[sock], encoder_infos_dict[service.name]);
         } else {

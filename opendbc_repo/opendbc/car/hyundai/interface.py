@@ -28,6 +28,13 @@ class CarInterface(CarInterfaceBase):
   CarController = CarController
   RadarInterface = RadarInterface
 
+  def update(self, can_packets):
+    if self.CS.lx3_buttons is not None:
+      self.CS.lx3_buttons.update(can_packets)
+      if can_packets:
+        self.CS.lx3_now_ns = can_packets[-1][0]
+    return super().update(can_packets)
+
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
 
@@ -257,6 +264,10 @@ class CarInterface(CarInterfaceBase):
     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
     #ret.dashcamOnly = candidate in {CAR.KIA_OPTIMA_H, }
 
+    if candidate == CAR.HYUNDAI_PALISADE_LX3_HEV:
+      # pandad must confirm companion v5 before this parameter reaches firmware.
+      # An unsupported flag combination fails closed in native init.
+      ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LX3_AUTHORITY.value
     return ret
 
   @staticmethod
