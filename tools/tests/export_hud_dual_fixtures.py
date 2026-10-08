@@ -10,9 +10,11 @@ import subprocess
 import sys
 import tempfile
 import time
+from unittest.mock import patch
 from types import ModuleType, SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 BASELINE = '75b5d824bd13f1a5d4225f36edfd769d4b52677b'
 destination = Path(sys.argv[1]); destination.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory() as temp:
@@ -39,3 +41,14 @@ with tempfile.TemporaryDirectory() as temp:
       json.dumps({'ok': True, 'snapshotAgeMs': 10, **payload}), encoding='utf-8')
     print(label, 'schema', payload['meta']['schemaVersion'],
           'freshness', 'serviceAgeMs' in payload['runtime'])
+
+# Real public status builder, with only the boot-id source substituted on PC.
+from openpilot.selfdrive.carrot.hud_update import core, service
+with tempfile.TemporaryDirectory() as temp:
+  folder = Path(temp)
+  core.save(folder / 'baseline-migration.json', {'phase': 'prepared', 'preserved_sequence': 41})
+  core.save(folder / 'config.json', {'phone_ip': '127.0.0.1', 'token': 'test-only', 'public_key': 'test-only'})
+  with patch.object(service, 'Path', return_value=SimpleNamespace(read_text=lambda: 'fixture-boot')):
+    status = service.UpdateService({}, state_root=folder).public()
+  assert status['phase'] == 'migration_blocked' and status['latest'] is None
+  (destination / 'hud_migration_blocked.json').write_text(json.dumps(status), encoding='utf8')

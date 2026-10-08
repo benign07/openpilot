@@ -53,4 +53,11 @@ class HudDualBackendTest {
             assertNull(OpUpdatePolicy.available(state))
         }
     }
+
+    @Test fun pendingBaselineShowsStatusWithoutOfferingInstallOrRollback() {
+        val state = payload("migration_blocked")
+        assertEquals("migration_blocked", state.getString("phase"))
+        assertNull(OpUpdatePolicy.available(state))
+        assertNull(OpUpdatePolicy.rollback(state))
+    }
 }

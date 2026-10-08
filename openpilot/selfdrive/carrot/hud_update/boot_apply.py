@@ -22,6 +22,8 @@ def wait_for_synchronized_clock(marker=Path('/run/systemd/timesync/synchronized'
 
 def apply_with_clock(root=core.ROOT, state_root=core.STATE_ROOT):
   state = core.load(state_root / 'state.json', {})
+  if state.get('phase') not in ('applying', 'rolling_back') and core.baseline_migration(state_root) in ('pending', 'invalid'):
+    return 'migration_blocked'
   if state.get('phase') == 'armed' and not wait_for_synchronized_clock():
     state.update(phase='failed', message='부팅 시각 동기화 실패 · 기존 파일 유지. 연결 확인 후 다시 예약하세요.')
     core.save(state_root / 'state.json', state)

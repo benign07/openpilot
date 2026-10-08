@@ -8,6 +8,7 @@ on:
       - tools/tests/export_hud_dual_fixtures.py
       - tools/tests/HudDualBackendTest.kt
       - openpilot/selfdrive/carrot/server/live_runtime/**
+      - openpilot/selfdrive/carrot/hud_update/**
 permissions:
   contents: read
 jobs:
@@ -21,7 +22,9 @@ jobs:
         run: |
           git clone --no-checkout https://github.com/benign07/carrot-hud.git hud-contract-app
           git -C hud-contract-app checkout --detach c70c3a24
-          python3 tools/tests/export_hud_dual_fixtures.py hud-contract-app/app/src/test/resources
+          python3 -m venv hud-fixture-venv
+          hud-fixture-venv/bin/pip install 'aiohttp==3.13.3'
+          hud-fixture-venv/bin/python tools/tests/export_hud_dual_fixtures.py hud-contract-app/app/src/test/resources
           cp tools/tests/HudDualBackendTest.kt hud-contract-app/app/src/test/java/com/carrot/hud/
       - uses: actions/setup-java@v4
         with:

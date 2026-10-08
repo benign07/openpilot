@@ -66,7 +66,8 @@ def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not started
 
 def enable_updated(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return not started and params.get_bool("SoftwareMenu")
+  return (not started and params.get_bool("SoftwareMenu") and
+          not os.path.isfile('/data/community/hud_updates/config.json'))
 
 def or_(*fns):
   return lambda *args: any(fn(*args) for fn in fns)

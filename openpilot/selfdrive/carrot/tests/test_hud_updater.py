@@ -219,6 +219,68 @@ class BootClockTests(unittest.TestCase):
     self.assertEqual(elapsed[0], 5)
 
 
+class BaselineMigrationGuardTests(unittest.TestCase):
+  def setUp(self):
+    self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+    self.folder = Path(self.tmp.name)
+    self.journal = self.folder / 'baseline-migration.json'
+
+  def test_interrupted_baseline_blocks_boot_before_clock_or_state_writes(self):
+    for phase in ('prepared', 'restoring'):
+      core.save(self.journal, {'phase': phase, 'preserved_sequence': 41})
+      core.save(self.folder / 'state.json', {'phase': 'armed'})
+      before = (self.folder / 'state.json').read_bytes()
+      with patch.object(boot_apply, 'wait_for_synchronized_clock') as clock, patch.object(core, 'apply_at_boot', return_value='unchanged'):
+        self.assertEqual(boot_apply.apply_with_clock(self.folder / 'repo', self.folder), 'migration_blocked')
+        clock.assert_not_called()
+      self.assertEqual((self.folder / 'state.json').read_bytes(), before)
+      self.assertEqual(core.apply_at_boot(self.folder / 'repo', self.folder, boot_id='new', now=1020), 'migration_blocked')
+
+  def test_service_refuses_interrupted_state_before_normalizing_it(self):
+    core.save(self.journal, {'phase': 'prepared', 'preserved_sequence': 41})
+    core.save(self.folder / 'state.json', {'phase': 'armed'})
+    before = (self.folder / 'state.json').read_bytes()
+    with patch.object(service, 'Path', return_value=SimpleNamespace(read_text=lambda: 'test-boot')):
+      svc = service.UpdateService({}, self.folder / 'repo', self.folder)
+      self.assertEqual(svc.public()['phase'], 'migration_blocked')
+    self.assertEqual((self.folder / 'state.json').read_bytes(), before)
+
+  def test_absent_completed_and_restored_preserve_normal_boot(self):
+    self.assertEqual(core.apply_at_boot(self.folder / 'repo', self.folder), 'unchanged')
+    for phase in ('complete', 'restored'):
+      core.save(self.journal, {'phase': phase, 'preserved_sequence': 41})
+      core.save(self.folder / 'installed.json', {'sequence': 42})
+      self.assertEqual(core.baseline_migration(self.folder), phase)
+      self.assertEqual(core.apply_at_boot(self.folder / 'repo', self.folder), 'unchanged')
+
+  def test_corrupt_unknown_and_lost_sequence_refuse_without_repair(self):
+    for data in (b'{', b'[]', b'{}', b'{"phase":"unknown"}',
+                 b'{"phase":"complete","preserved_sequence":true}',
+                 b'{"phase":"restored","preserved_sequence":41}'):
+      self.journal.write_bytes(data)
+      self.assertEqual(core.baseline_migration(self.folder), 'invalid')
+      self.assertEqual(core.apply_at_boot(self.folder / 'repo', self.folder), 'migration_blocked')
+      self.assertEqual(self.journal.read_bytes(), data)
+    self.journal.unlink(); self.journal.mkdir()
+    self.assertEqual(core.baseline_migration(self.folder), 'invalid')
+
+  def test_dangling_journal_symlink_is_not_absence(self):
+    try: self.journal.symlink_to(self.folder / 'missing')
+    except OSError: self.skipTest('Symlink privilege unavailable')
+    self.assertEqual(core.baseline_migration(self.folder), 'invalid')
+
+  def test_incomplete_source_transaction_still_recovers_or_stops(self):
+    core.save(self.journal, {'phase': 'prepared'})
+    for phase in ('applying', 'rolling_back'):
+      core.save(self.folder / 'state.json', {'phase': phase})
+      with patch.object(core, 'rollback') as recover:
+        self.assertEqual(core.apply_at_boot(self.folder / 'repo', self.folder), 'rolled_back')
+        recover.assert_called_once()
+      with patch.object(core, 'rollback', side_effect=ValueError('Backup damaged')):
+        with self.assertRaisesRegex(ValueError, 'Backup damaged'):
+          boot_apply.apply_with_clock(self.folder / 'repo', self.folder)
+
+
 class ApiTests(unittest.IsolatedAsyncioTestCase):
   async def asyncSetUp(self):
     self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
@@ -231,6 +293,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         with real_read(path, 'r', encoding='utf-8') as f: return f.read()
       reader.side_effect = read
       self.svc = service.UpdateService({}, root=folder/'repo', state_root=folder)
+    self.svc.external_web = False  # Managed topology; external case is explicit below.
     self.svc.latest = {'schema': 1, 'release_id': 'test-1', 'sequence': 1, 'notes': ['notes'], 'bundle_commit': 'b'*40,
                        'bundle_sha256': 'a'*64, 'bundle_bytes': 100}
     app = web.Application(); app['hud_update_service'] = self.svc
@@ -250,6 +313,67 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(response.status, 401)
     response = await self.client.get('/api/hud_update/status', headers=self.headers)
     self.assertNotIn('x'*43, await response.text())
+
+  async def test_real_external_web_topology_verifies_without_managed_web_entry(self):
+    class Health(dict):
+      def update(self, _):
+        self.logMonoTime = {name: service.time.monotonic_ns() for name in self}
+    health = Health(managerState=SimpleNamespace(processes=[]), deviceState=SimpleNamespace(started=False),
+                    carState=SimpleNamespace(canValid=True))
+    health.alive = health.valid = {name: True for name in health}
+    self.svc.health_sm = health
+    self.svc.external_web = True
+    for started in (False, True):
+      health['deviceState'].started = started
+      names = (service.REQUIRED - {'carrot_server'}) if started else {'ui'}
+      health['managerState'].processes = [SimpleNamespace(name=n, running=True, pid=i+100) for i, n in enumerate(sorted(names))]
+      self.svc.state = {'release': {'files': [{'path': 'openpilot/selfdrive/carrot/web/hud.html'}]}}
+      self.assertTrue(await self.svc.healthy(), started)
+      health['managerState'].processes.pop()
+      self.assertFalse(await self.svc.healthy(), started)
+
+    # Continuous real-manager health still governs a critical update's success.
+    health['deviceState'].started = True
+    health['managerState'].processes = [SimpleNamespace(name=n, running=True, pid=i+100)
+                                       for i, n in enumerate(sorted(service.REQUIRED - {'carrot_server'}))]
+    target = self.svc.root / 'openpilot/selfdrive/controls/controlsd.py'
+    target.parent.mkdir(parents=True); target.write_bytes(b'validated\n')
+    self.svc.state = {'phase': 'verifying', 'release': {'files': [{'path': 'openpilot/selfdrive/controls/controlsd.py',
+                                                               'sha256': core.sha(target.read_bytes())}]}}
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'verifying')
+    self.svc.onroad_healthy_since = service.time.monotonic() - service.ONROAD_HEALTH_SECONDS - 1
+    await self.svc.tick()
+    self.assertEqual(self.svc.state['phase'], 'complete')
+
+  async def test_interrupted_migration_keeps_status_but_refuses_all_actions(self):
+    for phase in ('prepared', 'restoring'):
+      core.save(self.svc.folder / 'baseline-migration.json', {'phase': phase, 'preserved_sequence': 41})
+      response = await self.client.get('/api/hud_update/status', headers=self.headers)
+      self.assertEqual(response.status, 200)
+      body = await response.json()
+      self.assertEqual(body['phase'], 'migration_blocked')
+      self.assertIsNone(body['latest']); self.assertFalse(body['rollback']['available'])
+      for command in ('check', 'queue', 'cancel', 'rollback'):
+        response = await self.post({'action': command})
+        self.assertEqual(response.status, 409, command)
+      with patch.object(service, 'fetch') as fetch, patch.object(service.asyncio, 'create_subprocess_exec') as reboot:
+        await self.svc.tick(); fetch.assert_not_called(); reboot.assert_not_called()
+      self.assertFalse((self.svc.folder / 'state.json').exists())
+
+  async def test_migration_interruption_during_fetch_never_stages_at_floor_zero(self):
+    self.svc.state = {'phase': 'waiting_parked', 'index': self.svc.latest}
+    self.svc.parked = AsyncMock(return_value=True)
+    self.svc.vehicle_matches = lambda: True
+    self.svc.parked_since = service.time.monotonic() - 20
+    def interrupted_fetch(*args):
+      core.save(self.svc.folder / 'baseline-migration.json', {'phase': 'prepared', 'preserved_sequence': 41})
+      return b'release'
+    with patch.object(service, 'fetch', side_effect=interrupted_fetch), patch.object(core, 'verify_bundle') as verify, patch.object(core, 'stage') as stage:
+      await self.svc.tick()
+      verify.assert_not_called(); stage.assert_not_called()
+    self.assertEqual(core.load(self.svc.folder / 'state.json')['phase'], 'downloading')
+    self.assertEqual(self.svc.public()['phase'], 'migration_blocked')
 
   async def test_queue_while_moving_never_downloads_writes_or_reboots(self):
     response = await self.queue(); self.assertEqual(response.status, 200)

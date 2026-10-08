@@ -55,6 +55,34 @@ def load(path, default=None):
   except FileNotFoundError: return default
 
 
+def baseline_migration(state_root):
+  """Read-only gate for interrupted full-baseline metadata, not source rollback."""
+  path = Path(state_root) / 'baseline-migration.json'
+  try:
+    if path.is_symlink(): return 'invalid'
+    if not path.exists(): return 'none'
+    if not path.is_file(): return 'invalid'
+    journal = load(path)
+    if not isinstance(journal, dict): return 'invalid'
+    phase = journal.get('phase')
+    if phase in ('prepared', 'restoring'): return 'pending'
+    if phase not in ('complete', 'restored'): return 'invalid'
+    floor = journal.get('preserved_sequence')
+    installed = load(Path(state_root) / 'installed.json', {})
+    if type(floor) is not int or floor < 0 or not isinstance(installed, dict): return 'invalid'
+    sequence = installed.get('sequence', 0)
+    if type(sequence) is not int or sequence < floor: return 'invalid'
+    if phase == 'complete' and not installed: return 'invalid'
+    return phase
+  except (OSError, ValueError):
+    return 'invalid'
+
+
+def require_baseline_ready(state_root):
+  if baseline_migration(state_root) in ('pending', 'invalid'):
+    raise ValueError('Recover the baseline migration before updating')
+
+
 def checked_path(root, name):
   p = PurePosixPath(name)
   if not isinstance(name, str) or str(p) != name or p.is_absolute() or '..' in p.parts or '\\' in name:
@@ -132,6 +160,7 @@ def verify_bundle(raw, index, public_key, current_sequence=0):
 
 def stage(root, state_root, release):
   """Prepare immutable originals and replacements; production files stay untouched."""
+  require_baseline_ready(state_root)
   directory = state_root / 'releases' / release['release_id']
   if directory.exists():
     existing = load(directory / 'release.json')
@@ -154,6 +183,7 @@ def stage(root, state_root, release):
 
 
 def validate_staged(root, state_root, release):
+  require_baseline_ready(state_root)
   directory = state_root / 'releases' / release['release_id']
   for row in release['files']:
     target = checked_path(root, row['path'])
@@ -188,6 +218,7 @@ def apply_at_boot(root=ROOT, state_root=STATE_ROOT, boot_id=None, now=None, writ
   if state.get('phase') in ('applying', 'rolling_back'):
     rollback(root, state_root, state)
     return 'rolled_back'
+  if baseline_migration(state_root) in ('pending', 'invalid'): return 'migration_blocked'
   if state.get('phase') != 'armed': return 'unchanged'
   now = time.time() if now is None else now
   boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip() if boot_id is None else boot_id
@@ -231,6 +262,7 @@ def prepare_rollback(root, state_root, installed, public_key):
   Keep the highest installed sequence so an old channel cannot reinstall a
   withdrawn update after rollback. The next corrected publication increments it.
   """
+  require_baseline_ready(state_root)
   name = installed.get('release_id', '')
   if not RELEASE.fullmatch(name) or installed.get('rollback_of'):
     raise ValueError('복원 가능한 직전 업데이트가 없습니다.')

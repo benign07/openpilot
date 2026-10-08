@@ -3,6 +3,7 @@ import asyncio
 import hmac
 import ipaddress
 import json
+import os
 import time
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -34,10 +35,14 @@ def fetch(url, limit):
 class UpdateService:
   def __init__(self, app, root=core.ROOT, state_root=core.STATE_ROOT):
     self.app, self.root, self.folder = app, root, state_root
+    self.external_web = os.getenv('CARROT_WEB_EXTERNAL') == '1'
     self.config = core.load(state_root / 'config.json')
-    self.state = core.load(state_root / 'state.json', {'phase': 'idle', 'message': '업데이트 확인 대기'})
-    self.history = core.load(state_root / 'history.json', [])
-    self.latest = core.load(state_root / 'latest.json')
+    blocked = core.baseline_migration(state_root) in ('pending', 'invalid')
+    # Full-baseline recovery requires stopping this service, then restarting it
+    # with the recovered tree/state; it never reloads archived metadata live.
+    self.state = {} if blocked else core.load(state_root / 'state.json', {'phase': 'idle', 'message': '업데이트 확인 대기'})
+    self.history = [] if blocked else core.load(state_root / 'history.json', [])
+    self.latest = None if blocked else core.load(state_root / 'latest.json')
     self.lock = asyncio.Lock()
     self.parked_since = None
     self.countdown_since = None
@@ -68,6 +73,11 @@ class UpdateService:
       raise web.HTTPUnauthorized(text='기기 업데이트 연결 등록이 필요합니다.')
 
   def public(self):
+    migration = core.baseline_migration(self.folder)
+    if migration in ('pending', 'invalid'):
+      return {'ok': True, 'configured': bool(self.config), 'installed': {}, 'latest': None,
+              'phase': 'migration_blocked', 'message': '기준 버전 교체 기록 복구 필요 · PC에서 확인하세요.',
+              'migration': migration, 'history': [], 'rollback': {'available': False}, 'cancel_available': False}
     installed = core.load(self.folder / 'installed.json', {})
     rollback = {'available': False}
     if self.config and self.state.get('phase') not in ACTIVE:
@@ -84,6 +94,7 @@ class UpdateService:
             'cancel_available': self.state.get('phase') in ('waiting_parked', 'countdown')}
 
   def change(self, phase, message, **extra):
+    core.require_baseline_ready(self.folder)
     self.state.update(phase=phase, message=message, **extra)
     core.save(self.folder / 'state.json', self.state)
     self.history.append({'at': time.time(), 'phase': phase, 'message': message,
@@ -92,7 +103,9 @@ class UpdateService:
     core.save(self.folder / 'history.json', self.history)
 
   async def check(self):
+    core.require_baseline_ready(self.folder)
     index = core.validate_index(json.loads(await asyncio.to_thread(fetch, core.CHANNEL, 65536)))
+    core.require_baseline_ready(self.folder)
     self.latest = index
     core.save(self.folder / 'latest.json', index)
     return index
@@ -135,18 +148,23 @@ class UpdateService:
         return None  # A real offroad state does not start the onroad timer.
       if not fresh('managerState'): return None
       running = {p.name: p for p in sm['managerState'].processes if p.running}
-      return {'carrot_server', 'ui'} <= running.keys()
+      required = {'ui'} if self.external_web else {'carrot_server', 'ui'}
+      return required <= running.keys()
     self.health_mode = 'onroad'
     if not fresh('managerState'):
       return False  # Started vehicle with missing manager health is a failure.
     running = {p.name: p for p in sm['managerState'].processes if p.running}
-    healthy = bool(REQUIRED <= running.keys() and sm.alive.get('carState') and sm.valid.get('carState') and
+    # This tick runs in the external web server itself, which launch supervises
+    # separately. Requiring it in managerState would reject every modern update.
+    required = REQUIRED - {'carrot_server'} if self.external_web else REQUIRED
+    healthy = bool(required <= running.keys() and sm.alive.get('carState') and sm.valid.get('carState') and
                    0 <= time.monotonic() - sm.logMonoTime['carState'] / 1e9 < .5 and sm['carState'].canValid)
-    self.health_identity = tuple(sorted((name, running[name].pid) for name in REQUIRED)) if healthy else None
+    self.health_identity = tuple(sorted((name, running[name].pid) for name in required)) if healthy else None
     return healthy
 
   async def tick(self):
     async with self.lock:
+      if core.baseline_migration(self.folder) in ('pending', 'invalid'): return
       phase = self.state.get('phase')
       if phase == 'verifying':
         release = self.state['release']
@@ -155,6 +173,7 @@ class UpdateService:
           self.change('health_warning', '적용 파일 무결성 확인 실패 · PC 점검 필요')
           return
         health = await self.healthy()
+        core.require_baseline_ready(self.folder)
         critical = requires_onroad_verification(release)
         if critical and health is None:
           self.onroad_healthy_since = self.onroad_healthy_identity = None
@@ -218,6 +237,7 @@ class UpdateService:
           release = self.state['release']
         else:
           raw = await asyncio.to_thread(fetch, core.bundle_url(index), core.LIMIT)
+          if core.baseline_migration(self.folder) in ('pending', 'invalid'): return
           release = core.verify_bundle(raw, index, self.config['public_key'], previous.get('sequence', 0))
         # Disconnect or gear change during download leaves all production files untouched.
         if not await self.parked():
@@ -241,6 +261,7 @@ class UpdateService:
         self.parked_since = self.countdown_since = None
         self.change('waiting_parked', '차량 상태 변경 · 업데이트 예약 유지')
         return
+      core.require_baseline_ready(self.folder)
       self.change('armed', '재부팅 요청 · 시작 전에 준비된 파일을 적용합니다', armed_boot=self.boot, armed_at=time.time())
       proc = await asyncio.create_subprocess_exec('sudo', '-n', 'reboot', stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
       try:
@@ -255,7 +276,9 @@ class UpdateService:
       try: await self.tick()
       except asyncio.CancelledError: raise
       except Exception as exc:
-        if self.state.get('phase') == 'verifying':
+        if core.baseline_migration(self.folder) in ('pending', 'invalid'):
+          pass  # Preserve the interrupted installer records for explicit recovery.
+        elif self.state.get('phase') == 'verifying':
           self.change('health_warning', '파일 적용 후 실행 확인 실패 · PC 점검 필요 (' + type(exc).__name__ + ')')
         else:
           detail = str(exc)[:240] if isinstance(exc, ValueError) else type(exc).__name__
@@ -277,10 +300,15 @@ async def action(request):
   # Do not hold a long download/reboot transaction open behind a second button press.
   if service.lock.locked(): raise web.HTTPConflict(text='업데이트 처리 중입니다. 상태를 다시 확인하세요.')
   async with service.lock:
+    if core.baseline_migration(service.folder) in ('pending', 'invalid'):
+      raise web.HTTPConflict(text='기준 버전 교체 기록 복구가 필요합니다. PC에서 확인하세요.')
     command = body.get('action')
     if command == 'check':
       try: await service.check()
-      except Exception: raise web.HTTPBadGateway(text='GitHub 버전을 확인하지 못했습니다. 다시 시도하세요.')
+      except Exception:
+        if core.baseline_migration(service.folder) in ('pending', 'invalid'):
+          raise web.HTTPConflict(text='기준 버전 교체 기록 복구가 필요합니다. PC에서 확인하세요.')
+        raise web.HTTPBadGateway(text='GitHub 버전을 확인하지 못했습니다. 다시 시도하세요.')
     elif command == 'cancel':
       if service.state.get('phase') not in ('waiting_parked', 'countdown'):
         raise web.HTTPConflict(text='현재 단계에서는 취소할 수 없습니다.')
