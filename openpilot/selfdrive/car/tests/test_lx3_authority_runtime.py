@@ -22,6 +22,7 @@ from opendbc.car import Bus
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.carcontroller import apply_steer_angle_limits_physics
 from opendbc.car.hyundai.values import CAR, DBC
+from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.car_specific import CarSpecificEvents
@@ -55,7 +56,8 @@ class Status(ct.LittleEndianStructure):
 class Messages(dict):
   def __init__(self):
     super().__init__(carControl=car.CarControl.new_message(), pandaStates=[])
-    self.alive = defaultdict(bool); self.valid = defaultdict(bool); self.logMonoTime = defaultdict(int)
+    self.alive = defaultdict(bool); self.valid = defaultdict(bool); self.seen = defaultdict(bool)
+    self.logMonoTime = defaultdict(int)
 
 
 class TestLx3Runtime(unittest.TestCase):
@@ -93,8 +95,11 @@ class TestLx3Runtime(unittest.TestCase):
     self.params.put('FingerPrints', str(fp))
     self.CP = CarInterface.get_params(CAR.HYUNDAI_PALISADE_LX3_HEV, fp, [], True, False, False)
     self.assertEqual(self.CP.safetyConfigs[-1].safetyParam, 16574)
+    self.assertTrue(uses_lx3_authority(self.CP))
     self.CI = CarInterface(self.CP); self.packer = CANPacker(DBC[self.CP.carFingerprint][Bus.pt])
     self.cruise = VCruiseCarrot(self.CP); self.car_events = CarSpecificEvents(self.CP)
+    self.assertIsNotNone(self.CI.CS.lx3_buttons)
+    self.assertTrue(self.cruise.lx3_authority)
     self.machine = StateMachine(); self.handshake = Lx3Engagement(); self.sm = Messages()
     self.prev = car.CarState.new_message(); self.CC = self.sm['carControl']; self.CS = self.prev
     self.now = 2_000_000_000; self.frame = 0; self.counters = defaultdict(int)
@@ -107,6 +112,15 @@ class TestLx3Runtime(unittest.TestCase):
     self.step(0, ticks=220)
     self.assertFalse(self.enabled)
     self.assertFalse(self.CS.latEnabled)  # AutoEngage preference cannot grant at boot.
+
+  def test_modern_authority_flag_does_not_alias_stock_cluster_tx(self):
+    CP = self.CP.as_reader().as_builder()
+    CP.safetyConfigs[-1].safetyParam = 2048 | 190
+    self.assertFalse(uses_lx3_authority(CP))
+    CP.safetyConfigs[-1].safetyParam = 16384 | 190
+    self.assertTrue(uses_lx3_authority(CP))
+    CP.carFingerprint = CAR.KIA_EV9
+    self.assertFalse(uses_lx3_authority(CP))
 
   def tearDown(self):
     # Include state transitions, not just the final assertion, in CI evidence.

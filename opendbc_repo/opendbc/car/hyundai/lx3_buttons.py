@@ -6,8 +6,9 @@ including the MAIN debounce; processing the same cached value is not an edge.
 """
 from dataclasses import dataclass
 import binascii
+from opendbc.car.hyundai.values import HyundaiSafetyFlags
 
-LX3_AUTHORITY_FLAG = 2048
+LX3_AUTHORITY_FLAG = HyundaiSafetyFlags.LX3_AUTHORITY.value
 BUTTON_TIMEOUT_NS = 200_000_000
 HOST_CONTINUITY_NS = 1_000_000_000
 MAIN_RELEASE_NS = 300_000_000
