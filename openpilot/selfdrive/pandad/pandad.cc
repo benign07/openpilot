@@ -20,6 +20,7 @@
 #include "common/timing.h"
 #include "common/util.h"
 #include "selfdrive/pandad/spi_alert.h"
+#include "selfdrive/pandad/state_schedule.h"
 #include "system/hardware/hw.h"
 
 #define MAX_IR_PANDA_VAL 50
@@ -603,16 +604,35 @@ void pandad_run(std::vector<Panda *> &pandas) {
   Panda *peripheral_panda = pandas[0];
   bool engaged = false;
   bool is_onroad = false;
+  PandaStateSchedule schedule;
+  uint64_t diag_start = nanos_since_boot(), last_state_start = 0U;
+  uint64_t state_count = 0U, state_gap_max = 0U, fresh_false_count = 0U;
+  std::array<uint64_t, 5> stage_max{};  // peripheral, authority, health/status, serial, peripheral publish
+  bool timing_guarded = false;
 
   // Main loop: process lower-rate state, peripheral, and diagnostic work.
   while (!do_exit && check_all_connected(pandas)) {
+    const bool guarded = std::any_of(pandas.begin(), pandas.end(), [](Panda *p) { return p->lx3_guarded(); });
+    schedule.set_guarded(guarded);
+    if (guarded != timing_guarded) {
+      diag_start = nanos_since_boot();
+      last_state_start = state_count = state_gap_max = fresh_false_count = 0U;
+      stage_max.fill(0U);
+      timing_guarded = guarded;
+    }
     // Process peripheral state at 20 Hz
-    if (rk.frame() % 5 == 0) {
+    if (schedule.peripheral(rk.frame(), nanos_since_boot())) {
+      const uint64_t start = nanos_since_boot();
       process_peripheral_state(peripheral_panda, &pm, no_fan_control);
+      stage_max[0] = std::max(stage_max[0], nanos_since_boot() - start);
     }
 
     // Process panda state at 10 Hz
-    if (rk.frame() % 10 == 0) {
+    if (schedule.state(rk.frame(), nanos_since_boot())) {
+      const uint64_t state_start = nanos_since_boot();
+      if (last_state_start != 0U) state_gap_max = std::max(state_gap_max, state_start - last_state_start);
+      last_state_start = state_start;
+      ++state_count;
       sm.update(0);
       engaged = sm.allAliveAndValid({"selfdriveState"}) && sm["selfdriveState"].getSelfdriveState().getEnabled();
       is_onroad = params.getBool("IsOnroad");
@@ -621,25 +641,32 @@ void pandad_run(std::vector<Panda *> &pandas) {
         (now - sm["carControl"].getLogMonoTime() < 100000000ULL) &&
         (now - sm["carState"].getLogMonoTime() < 100000000ULL) &&
         (now - sm["selfdriveState"].getLogMonoTime() < 100000000ULL);
+      fresh_false_count += !fresh;
       for (Panda *panda : pandas) {
         panda->send_lx3_state(sm["carControl"].getCarControl().getLx3Authority(), fresh);
       }
+      const uint64_t health_start = nanos_since_boot();
+      stage_max[1] = std::max(stage_max[1], health_start - state_start);
       pandad_is_onroad.store(is_onroad, std::memory_order_relaxed);
       const auto ignition_opt = process_panda_state(pandas, &pm, engaged, is_onroad, spoofing_started);
       // A vehicle sleep can drop ignition without ending the onroad session.
       // Reset on a known ignition drop, and always preserve offroad cleanup even
       // when a Panda state read fails.
       panda_safety.configureSafetyMode(is_onroad && ignition_opt.value_or(true));
+      stage_max[2] = std::max(stage_max[2], nanos_since_boot() - health_start);
     }
 
     // Send out peripheralState at 2Hz
-    if (rk.frame() % 50 == 0) {
+    if (schedule.publish(rk.frame(), nanos_since_boot())) {
+      const uint64_t start = nanos_since_boot();
       send_peripheral_state(peripheral_panda, &pm);
+      stage_max[4] = std::max(stage_max[4], nanos_since_boot() - start);
     }
 
     // Forward logs from pandas to cloudlog if available. Panda retains serial
     // output, so 10 Hz is enough while avoiding a control SPI transfer every tick.
-    if (rk.frame() % 10 == 0) {
+    if (schedule.serial(rk.frame(), nanos_since_boot())) {
+      const uint64_t start = nanos_since_boot();
       for (size_t i = 0; i < pandas.size(); ++i) {
         Panda *panda = pandas[i];
         std::string log = panda->serial_read();
@@ -647,6 +674,20 @@ void pandad_run(std::vector<Panda *> &pandas) {
           log_panda_serial(i, log);
         }
       }
+      stage_max[3] = std::max(stage_max[3], nanos_since_boot() - start);
+    }
+
+    const uint64_t diag_now = nanos_since_boot();
+    if (diag_now - diag_start >= 5000000000ULL) {
+      if (guarded) {
+        LOGW("lx3_state_timing: hz=%.3f, max_gap_ms=%.3f, fresh_false=%" PRIu64 ", count=%" PRIu64 ", peripheral_max_ms=%.3f, authority_max_ms=%.3f, health_max_ms=%.3f, serial_max_ms=%.3f, publish_max_ms=%.3f",
+             state_count * 1e9 / (diag_now - diag_start), state_gap_max / 1e6,
+             fresh_false_count, state_count,
+             stage_max[0] / 1e6, stage_max[1] / 1e6, stage_max[2] / 1e6, stage_max[3] / 1e6, stage_max[4] / 1e6);
+      }
+      diag_start = diag_now;
+      state_count = state_gap_max = fresh_false_count = 0U;
+      stage_max.fill(0U);
     }
 
     rk.keepTime();

@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from .automatic import AutoRecorder, ChunkStore, control_mode
 from .button_trace_report import summarize as summarize_button_traces
 from .automatic_routes import register
-from .automatic_runtime import AutomaticController, panda_summary, read_param, selected_fields
+from .automatic_runtime import AutomaticController, panda_summary, read_param, selected_fields, service_snapshot
 from tools.can_auto_sync import analyze, download
 
 
@@ -28,6 +28,67 @@ def services(now=100, started=True, lat=False, long=False):
 
 
 class RuntimeTests(unittest.TestCase):
+  def test_control_events_and_observer_health_are_bounded_and_json_safe(self):
+    class SM:
+      logMonoTime = {'onroadEvents': 123000000}
+      valid = {'onroadEvents': True}
+      alive = {'onroadEvents': True}
+      freq_ok = {'onroadEvents': False}
+      freq_tracker = {'onroadEvents': SimpleNamespace(recent_avg_dt=SimpleNamespace(count=1, get_average=lambda: .15))}
+      def __getitem__(self, key):
+        return [SimpleNamespace(name='commIssueAvgFreq', softDisable=True, noEntry=True)] * 65
+    row = service_snapshot(SM(), 'onroadEvents', ())
+    self.assertEqual(row['mono_ns'], 123000000)
+    self.assertEqual(len(row['data']['events']), 64)
+    self.assertTrue(row['data']['truncated'])
+    self.assertTrue(row['data']['events'][0]['softDisable'])
+    self.assertFalse(row['data']['events'][0]['immediateDisable'])
+    self.assertAlmostEqual(row['observer_recent_hz'], 1 / .15)
+    self.assertFalse(row['observer_freq_ok'])
+    self.assertTrue(row['valid'])  # diagnostic observation never changes producer validity
+    json.dumps(row, allow_nan=False)
+
+  def test_device_resource_context_is_small_and_missing_fields_remain_optional(self):
+    reader = SimpleNamespace(started=True, thermalStatus='green', cpuUsagePercent=range(32), cpuTempC=(42., 45.))
+    row = selected_fields(reader, ('started', 'thermalStatus', 'cpuUsagePercent', 'cpuTempC', 'memoryUsagePercent'))
+    self.assertEqual(row['thermalStatus'], 'green')
+    self.assertEqual(len(row['cpuUsagePercent']), 16)
+    self.assertEqual(row['cpuTempC'], [42., 45.])
+    self.assertIsNone(row['memoryUsagePercent'])
+    json.dumps(row, allow_nan=False)
+
+  def test_actual_cereal_event_and_resource_fields_serialize(self):
+    try:
+      from openpilot.cereal import log
+    except ImportError:
+      self.skipTest('Full cereal runtime required; executed in Linux CI and on installed ARM')
+    event = log.Event.new_message()
+    events = event.init('onroadEvents', 1)
+    events[0].name = 'commIssueAvgFreq'
+    events[0].noEntry = True
+    events[0].softDisable = True
+    class SM:
+      logMonoTime = {'onroadEvents': 100}
+      valid = {'onroadEvents': True}
+      alive = {'onroadEvents': True}
+      freq_ok = {'onroadEvents': True}
+      freq_tracker = {'onroadEvents': SimpleNamespace(recent_avg_dt=SimpleNamespace(count=0))}
+      def __getitem__(self, key): return events
+    row = service_snapshot(SM(), 'onroadEvents', ())
+    self.assertEqual(row['data']['events'][0]['name'], 'commIssueAvgFreq')
+    self.assertTrue(row['data']['events'][0]['softDisable'])
+    self.assertIsNone(row['observer_recent_hz'])
+    json.dumps(row, allow_nan=False)
+    device = log.Event.new_message().init('deviceState')
+    device.started = True
+    device.cpuUsagePercent = [10, 90]
+    device.cpuTempC = [42., 45.]
+    device.thermalStatus = 'green'
+    resource = selected_fields(device, ('started', 'cpuUsagePercent', 'cpuTempC', 'thermalStatus'))
+    self.assertEqual(resource['cpuUsagePercent'], [10, 90])
+    self.assertEqual(resource['thermalStatus'], 'green')
+    json.dumps(resource, allow_nan=False)
+
   def test_transient_worker_error_retries_without_losing_service(self):
     class Shutdown:
       def __init__(self, controller): self.controller = controller

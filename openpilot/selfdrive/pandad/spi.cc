@@ -100,6 +100,7 @@ struct SpiPhaseDiagStats {
   uint64_t total_sum_us = 0U;
   uint64_t total_max_us = 0U;
   uint64_t lock_max_us = 0U;
+  uint64_t lock_sum_us = 0U;
   uint64_t turnaround_max_us = 0U;
   uint64_t hack_max_us = 0U;
   uint64_t dack_max_us = 0U;
@@ -108,7 +109,9 @@ struct SpiPhaseDiagStats {
 
 static thread_local SpiAttemptTiming spi_attempt_timing;
 static std::mutex spi_phase_diag_lock;
-static SpiPhaseDiagStats spi_phase_diag[2];
+static SpiPhaseDiagStats spi_phase_diag[3];
+static uint64_t spi_control_diag_last_ns = 0U;
+static uint64_t spi_phase_diag_last_ns[3] = {};
 static std::mutex spi_error_event_lock;
 static PandaSpiErrorEvent latest_spi_error_event;
 static std::atomic<uint64_t> spi_error_event_sequence = 0U;
@@ -151,6 +154,7 @@ uint64_t get_panda_spi_error_sequence() {
 static int spi_phase_diag_index(uint8_t endpoint) {
   if (endpoint == 0x03U) return 0;
   if (endpoint == 0x81U) return 1;
+  if (endpoint == 0x00U) return 2;
   return -1;
 }
 
@@ -166,6 +170,7 @@ static void record_spi_phase_diag(uint8_t endpoint, uint64_t total_us, uint32_t 
   if (idx < 0) return;
 
   bool emit = false;
+  bool periodic = false;
   SpiPhaseDiagStats snapshot = {};
   {
     std::lock_guard lk(spi_phase_diag_lock);
@@ -185,35 +190,40 @@ static void record_spi_phase_diag(uint8_t endpoint, uint64_t total_us, uint32_t 
     st.total_sum_us += total_us;
     st.total_max_us = std::max(st.total_max_us, total_us);
     st.lock_max_us = std::max(st.lock_max_us, lock_max_us);
+    st.lock_sum_us += lock_max_us;
     st.turnaround_max_us = std::max(st.turnaround_max_us, turnaround_max_us);
     st.hack_max_us = std::max(st.hack_max_us, hack_max_us);
     st.dack_max_us = std::max(st.dack_max_us, dack_max_us);
     st.recovery_max_us = std::max(st.recovery_max_us, recovery_max_us);
 
-    if (st.count >= 100U) {
+    const bool control_window = endpoint != 0U || nanos_since_boot() - spi_control_diag_last_ns >= 5000000000ULL;
+    if (st.count >= 100U && control_window) {
       snapshot = st;
       st = {};
       emit = true;
+      if (endpoint == 0U) spi_control_diag_last_ns = nanos_since_boot();
+      const uint64_t now = nanos_since_boot();
+      periodic = now - spi_phase_diag_last_ns[idx] >= 5000000000ULL;
+      if (periodic) spi_phase_diag_last_ns[idx] = now;
     }
   }
 
-  // Keep healthy SPI traffic silent. The timing summary is useful only when
-  // its window contains a retry or protocol failure; slow transfers alone are
-  // expected when the CAN threads contend for the shared bus.
+  // Keep existing CAN issue windows, and one bounded timing sample per five
+  // seconds on every endpoint. Lock contention need not cause a protocol error.
   const bool has_issue = snapshot.retry_count > 0U || snapshot.nack_count > 0U ||
                          snapshot.hack_nack_count > 0U || snapshot.dack_nack_count > 0U ||
                          snapshot.ack_timeout_count > 0U || snapshot.host_checksum_count > 0U ||
                          snapshot.other_failure_count > 0U || snapshot.recovery_count > 0U ||
                          snapshot.recovery_restart_count > 0U;
-  if (emit && has_issue) {
-    LOGW("spi_phase_diag: endpoint=0x%x, total_avg_us=%" PRIu64 ", total_max_us=%" PRIu64
-         ", lock_max_us=%" PRIu64 ", turnaround_max_us=%" PRIu64 ", hack_max_us=%" PRIu64
+  if (emit && (has_issue || periodic || endpoint == 0U)) {
+    LOGW("spi_phase_diag: endpoint=0x%x, count=%u, total_avg_us=%" PRIu64 ", total_max_us=%" PRIu64
+         ", lock_max_us=%" PRIu64 ", lock_attempt_max_avg_us=%" PRIu64 ", turnaround_max_us=%" PRIu64 ", hack_max_us=%" PRIu64
          ", dack_max_us=%" PRIu64 ", recovery_max_us=%" PRIu64
          ", slow_over_5ms=%u, retries=%u, nacks=%u, ack_timeouts=%u, max_attempts=%u"
          ", hack_nacks=%u, dack_nacks=%u, host_checksums=%u, other_failures=%u"
          ", recoveries=%u, recovery_restarts=%u",
-         endpoint, snapshot.total_sum_us / snapshot.count, snapshot.total_max_us,
-         snapshot.lock_max_us, snapshot.turnaround_max_us, snapshot.hack_max_us,
+         endpoint, snapshot.count, snapshot.total_sum_us / snapshot.count, snapshot.total_max_us,
+         snapshot.lock_max_us, snapshot.lock_sum_us / snapshot.count, snapshot.turnaround_max_us, snapshot.hack_max_us,
          snapshot.dack_max_us, snapshot.recovery_max_us, snapshot.slow_count,
          snapshot.retry_count, snapshot.nack_count, snapshot.ack_timeout_count,
          snapshot.max_attempts, snapshot.hack_nack_count, snapshot.dack_nack_count,

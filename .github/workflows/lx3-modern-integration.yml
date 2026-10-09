@@ -14,6 +14,8 @@ jobs:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
+      - name: Actual RateKeeper with guarded status deadlines
+        run: python3 tools/check_pandad_schedule.py --compiler ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
       - name: Actual policy buffer tests with undefined-behavior checks
         run: python3 tools/check_hyundai_canfd_buffer.py --compiler ${{ matrix.compiler }} --sanitize --output buffer-evidence
       - name: Physical authority core and production native integration

@@ -8,7 +8,7 @@ import time
 from .automatic import AutoRecorder, ChunkStore
 
 FIELDS = {
-  'deviceState': ('started',),
+  'deviceState': ('started', 'thermalStatus', 'cpuUsagePercent', 'cpuTempC', 'memoryUsagePercent'),
   'carState': ('vEgo', 'aEgo', 'standstill', 'gearShifter', 'canValid', 'canTimeout', 'brakePressed',
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'latEnabled',
@@ -17,10 +17,12 @@ FIELDS = {
   'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType', 'lx3LongRequest', 'lx3LongRefused', 'lx3RefuseAfterSequence'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
   'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels'),
+  'onroadEvents': (),
 }
+HEALTH_SERVICES = ('pandaStates', 'peripheralState', 'managerState')
 PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFollowGap1', 'TFollowGap2',
           'TFollowGap3', 'TFollowGap4', 'LaneChangeNeedTorque', 'AlwaysLateral', 'TurnSpeedControlMode',
-          'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar')
+          'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar', 'HardwareC3xLite')
 
 
 def read_param(params, key):
@@ -33,8 +35,10 @@ def selected_fields(reader, fields):
   result = {}
   for key in fields:
     value = getattr(reader, key, None)
-    if key in ('gearShifter', 'state', 'longitudinalPlanSource') and value is not None:
+    if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'thermalStatus') and value is not None:
       value = str(value)
+    elif key in ('cpuUsagePercent', 'cpuTempC') and value is not None:
+      value = list(islice(value, 16))
     elif key in ('speeds', 'accels') and value is not None:
       value = list(value)
     elif key == 'errors' and value is not None:
@@ -47,6 +51,22 @@ def selected_fields(reader, fields):
       value = value.to_dict()
     result[key] = value
   return result
+
+
+def service_snapshot(sm, name, fields):
+  # These are this passive reader's observations (20 Hz maximum), not the
+  # control process's frequency decision. The latter is captured as events.
+  tracker = sm.freq_tracker[name]
+  recent_dt = tracker.recent_avg_dt.get_average() if tracker.recent_avg_dt.count else 0
+  if name == 'onroadEvents':
+    flags = ('enable', 'noEntry', 'warning', 'userDisable', 'softDisable', 'immediateDisable', 'preEnable', 'permanent', 'overrideLateral', 'overrideLongitudinal')
+    data = {'events': [{'name': str(event.name), **{key: bool(getattr(event, key, False)) for key in flags}}
+                       for event in islice(sm[name], 64)], 'truncated': len(sm[name]) > 64}
+  else:
+    data = selected_fields(sm[name], fields)
+  return {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]),
+          'alive': bool(sm.alive[name]), 'observer_freq_ok': bool(sm.freq_ok[name]),
+          'observer_recent_hz': 1 / recent_dt if recent_dt > 0 else None, 'data': data}
 
 
 def panda_summary(panda):
@@ -137,7 +157,7 @@ class AutomaticController:
     from openpilot.common.params import Params
 
     params = Params()
-    sm = messaging.SubMaster(list(FIELDS))
+    sm = messaging.SubMaster([*FIELDS, *HEALTH_SERVICES], frequency=20)
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
     panda_socket = messaging.sub_sock('pandaStates', timeout=0, conflate=True)
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
@@ -148,7 +168,9 @@ class AutomaticController:
                                  'max_window_s': 30, 'max_traces_per_trip': 24,
                                  'max_frames_per_trace': 20000, 'can_source': 'selected_unthrottled',
                                  'host_context_max_hz': 20, 'panda_max_hz': 20, 'panda_periodic_max_hz': 10},
-                'physical_ecu_origin': 'not_inferred_from_bus'}
+                'physical_ecu_origin': 'not_inferred_from_bus',
+                'sample_extensions': ['service_health_observer_v1', 'onroad_events_v1', 'device_resources_v1'],
+                'service_health_observer': 'passive_reader_max_20hz_not_selfdrived_frequency_check'}
     repo = Path(__file__).resolve().parents[3]
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
                'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
@@ -180,8 +202,9 @@ class AutomaticController:
         # Read only required fields at the recorded rate. Full carState/deviceState
         # conversion on every CAN drain needlessly copies unrelated payloads.
         for name, fields in FIELDS.items():
-          services[name] = {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]),
-                            'data': selected_fields(sm[name], fields)}
+          services[name] = service_snapshot(sm, name, fields)
+        for name in HEALTH_SERVICES:
+          services[name] = service_snapshot(sm, name, ())
         last_context = now
       with self.lock:
         self.recorder.update(services, now)
