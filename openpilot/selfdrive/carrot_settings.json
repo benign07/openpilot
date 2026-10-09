@@ -145,6 +145,7 @@
               "zh": "变道 (自动转向)",
               "params": [
                 "LaneChangeNeedTorque",
+                "ManualSteerWithBlinker",
                 "LaneChangeDelay",
                 "LaneChangeBsd",
                 "LaneLineCheck",
@@ -2458,6 +2459,23 @@
       "max": 1,
       "default": 0,
       "unit": 1
+    },
+    {
+      "group": "조향일반",
+      "name": "ManualSteerWithBlinker",
+      "title": "깜빡이 사용 중 수동조향",
+      "descr": "LX3 전용 권한 경로에서 자동차선변경 사용 안 함(-1)일 때, 한쪽 방향지시등을 켜면 조향 보조력 상한을 약 1초 동안 0까지 줄인 뒤 중지합니다. 목표각을 0으로 바꾸지 않으며 운전자 개입 시 더 빨리 줄어들 수 있습니다. 취소·고장 등 즉시 해제 조건은 지연하지 않습니다. 비상등만 켠 경우에는 시작하지 않습니다. 속도제어는 별도이며 기존 해제 조건을 따릅니다. 양쪽 등이 꺼지고 운전자 조향개입 없음·핸들각 15도 미만·정상 CAN 상태가 1초간 이어져야 기존 조향 제한 안에서 복귀합니다. 일시중지 중 옵션이나 차선변경 설정을 바꿔도 이 복귀 조건을 유지합니다. 복귀 시 속도별 조향 한계와 기존 토크 복귀 규칙을 유지합니다. 기본 OFF, 설정은 약 1초 주기로 재부팅 없이 반영됩니다.",
+      "egroup": "LAT",
+      "etitle": "Manual steering while signalling",
+      "edescr": "On the LX3 authority profile with automatic lane change disabled (-1), a single turn signal fades the existing steering assistance ceiling to zero over about 1 second, then pauses steering. It does not command zero angle. Driver coexistence may reduce assistance faster; cancellation and fault stops are never delayed. Hazard lights alone do not start the pause. Speed control remains separate with its normal disengagement conditions. Steering can resume through existing limits after both signals are off, no driver steering input is detected, wheel angle is below 15 degrees, and CAN is healthy continuously for 1 second. Changing either setting during a pause does not bypass these return conditions. Speed-dependent steering limits and the existing torque recovery remain in effect. Default OFF; settings refresh about once per second without reboot.",
+      "cgroup": "转向",
+      "ctitle": "打灯时手动转向",
+      "cdescr": "LX3专用控制权限模式下，自动变道关闭(-1)时，单侧转向灯使转向助力上限在约1秒内降至零后暂停，不会把目标角度设为零。驾驶员介入可更快减弱助力；取消或故障停用不会延迟。仅双闪灯不会触发。速度控制独立并保留正常退出条件。双侧灯关闭、未检测到驾驶员转向输入、方向盘角度小于15度且CAN正常持续1秒后，才可按原有限制恢复。暂停期间更改设置不会跳过恢复条件。恢复仍遵守车速相关限制及原有力矩恢复规则。默认关闭，设置约每秒刷新，无需重启。",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "unit": 1,
+      "control": "toggle"
     },
     {
       "group": "조향일반",

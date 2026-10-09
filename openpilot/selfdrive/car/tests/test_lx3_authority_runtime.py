@@ -29,6 +29,7 @@ from openpilot.selfdrive.car.car_specific import CarSpecificEvents
 from openpilot.selfdrive.car.cruise import VCruiseCarrot
 from openpilot.selfdrive.car.lx3_authority import copy_status, populate_car_state, configure_control, control_inputs_fresh
 from openpilot.selfdrive.car.lx3_engagement import Lx3Engagement
+from openpilot.selfdrive.carrot.carrot_controls import CarrotControls
 from openpilot.selfdrive.selfdrived.events import ET
 from openpilot.selfdrive.selfdrived.state import StateMachine
 
@@ -108,6 +109,8 @@ class TestLx3Runtime(unittest.TestCase):
     self.input_gate = control_inputs_fresh
     self.input_events_prev = None
     self.status_before_host = False
+    self.manual_controls = None
+    self.manual_snapshot = {}
     self.gear = next(k for k,v in self.CI.CS.shifter_values.items() if v == 'D')
     self.step(0, ticks=220)
     self.assertFalse(self.enabled)
@@ -206,9 +209,17 @@ class TestLx3Runtime(unittest.TestCase):
         self.input_sm.update_msgs(self.now/1e9,msgs)
         host_fresh=self.input_gate(self.input_sm,self.now)
       CC = car.CarControl.new_message(enabled=self.enabled)
+      # Offline observations are applied before the production authority gate.
+      if self.manual_controls is not None:
+        for name,value in self.manual_snapshot.items(): setattr(CS,name,value)
       control_events=self.input_sm['onroadEvents'] if self.input_sm is not None else events.to_msg()
       CC.latActive, CC.longActive = configure_control(CC,CS,control_events,self.enabled,
         self.params.get_bool('AlwaysLateral'),True,host_fresh,self.now,self.handshake.request,self.handshake.refusing,self.handshake.refusal_sequence)
+      if self.manual_controls is not None:
+        # Explicit offline observation inputs only; native authority still
+        # comes from the real CRC/counter/physical-button RX path above.
+        CC.latActive = self.manual_controls.lat_suspend_control(CS,CC.latActive and not CS.standstill)
+        CC.manualSteeringScale = self.manual_controls.manual_steering.scale
       if self.frame % 10 == 0:
         a = CC.lx3Authority
         self.native.fixture_state(a.intent,a.decisionKey,a.pendingGeneration,int(a.autoResume),a.observedLongRevision,a.config,int(a.refuseLong),a.refuseAfterSequence)
@@ -529,6 +540,120 @@ class TestLx3Runtime(unittest.TestCase):
           self.assertTrue(self.native.fixture_tx(addr,data,len(data),gen),f'rejected {addr:x}, native={self.status().message()}')
           counts[addr]+=1
     self.assertTrue(counts[0xCB] and counts[0x1A0],counts)
+
+  def start_manual_pause(self):
+    self.params.put_bool('ManualSteerWithBlinker',True)
+    self.params.put_int('LaneChangeNeedTorque',-1)
+    self.params.put_int('LatSuspendAngleDeg',300)
+    self.manual_controls=CarrotControls(self.CP)
+    # These tests isolate host steering-state input from physical authority;
+    # they do not claim to validate the blinker DBC or real vehicle health.
+    self.manual_snapshot={'leftBlinker':True,'rightBlinker':False,'canValid':True,'canTimeout':False}
+
+  def test_manual_scale_wire_default_and_round_trip(self):
+    CC=car.CarControl.new_message()
+    self.assertEqual(CC.manualSteeringScale,1.)
+    CC.manualSteeringScale=.5
+    with car.CarControl.from_bytes(CC.to_bytes()) as decoded:
+      self.assertEqual(decoded.manualSteeringScale,.5)
+
+  def test_lfa_cancel_during_fade_does_not_wait_for_timer(self):
+    self.lfa();self.start_manual_pause();self.step(ticks=10)
+    self.assertTrue(self.CC.latActive)
+    self.assertGreater(self.CC.manualSteeringScale,0.)
+    self.lfa()
+    self.assertEqual(self.status().allowed,0)
+    self.assertFalse(self.CC.latActive)
+    self.assertEqual(self.CC.manualSteeringScale,0.)
+    out,_=self.CI.apply(self.CC.as_reader(),self.now,None)
+    self.assertEqual(out.torqueOutputCan,0.)
+
+  def test_manual_blinker_pause_keeps_long_and_native_intent_with_neutral_can(self):
+    self.main(); self.assertTrue(self.enabled)
+    generation=self.status().lateralGeneration
+    # Establish real controller output before asking for a gradual handoff.
+    for _ in range(150):
+      self.step()
+      out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
+      for addr,data,bus in msgs:
+        if bus==0 and addr in (0xCB,0x12A,0x1A0):
+          gen=self.CC.lx3Authority.longitudinalGeneration if addr==0x1A0 else generation
+          self.assertTrue(self.native.fixture_tx(addr,data,len(data),gen))
+    before=out.torqueOutputCan;self.assertGreater(before,0)
+    self.start_manual_pause()
+    counts=defaultdict(int)
+    previous=before;fade_frames=0
+    for i in range(100):
+      self.step()
+      self.assertEqual(self.CC.latActive,i<99)
+      self.assertTrue(self.CC.longActive);self.assertEqual(self.CC.lx3Authority.intent,3)
+      out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
+      self.assertLessEqual(out.torqueOutputCan,previous+1e-5)
+      self.assertLessEqual(out.torqueOutputCan,before*max(0.,1-(i+1)/100.)+1e-4)
+      previous=out.torqueOutputCan
+      for addr,data,bus in msgs:
+        if bus==0 and addr in (0xCB,0x12A,0x1A0):
+          gen=self.CC.lx3Authority.longitudinalGeneration if addr==0x1A0 else generation
+          self.assertTrue(self.native.fixture_tx(addr,data,len(data),gen))
+          if addr==0xCB:fade_frames+=1
+    self.assertGreater(fade_frames,20);self.assertEqual(previous,0.)
+    for _ in range(25):
+      self.step()
+      self.assertFalse(self.CC.latActive);self.assertTrue(self.CC.longActive)
+      self.assertEqual(self.CC.lx3Authority.intent,3)
+      self.assertFalse(self.CC.lx3Authority.lateralRefused)
+      self.assertEqual(self.status().allowed,3)
+      self.assertEqual(self.status().lateralGeneration,generation)
+      out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
+      self.assertEqual(out.torqueOutputCan,0)
+      for addr,data,bus in msgs:
+        if bus==0 and addr in (0xCB,0x12A,0x1A0):
+          gen=self.CC.lx3Authority.longitudinalGeneration if addr==0x1A0 else generation
+          self.assertTrue(self.native.fixture_tx(addr,data,len(data),gen))
+          counts[addr]+=1
+          if addr==0xCB:
+            self.assertEqual((data[3]>>4)&3,1)
+            self.assertEqual(data[6],0)
+            self.assertTrue(self.native.fixture_oem_lateral_replaced_by_inactive())
+    self.assertTrue(counts[0xCB] and counts[0x1A0])
+    self.manual_snapshot['leftBlinker']=False
+    self.manual_snapshot['steeringPressed']=True
+    self.step(ticks=200);self.assertFalse(self.CC.latActive)
+    self.manual_snapshot['steeringPressed']=False
+    self.step(ticks=99);self.assertFalse(self.CC.latActive)
+    self.step();self.assertTrue(self.CC.latActive)
+    out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
+    self.assertLessEqual(out.torqueOutputCan,25)
+    self.assertFalse(out.lx3AngleLimited)
+    recovered=False
+    for addr,data,bus in msgs:
+      if bus==0 and addr==0xCB:
+        recovered=True
+        self.assertEqual((data[3]>>4)&3,2)
+        self.assertLessEqual(data[6],25)
+        self.assertTrue(self.native.fixture_tx(addr,data,len(data),generation))
+    self.assertTrue(recovered)
+
+  def test_manual_pause_cannot_restore_cancelled_physical_lfa_permission(self):
+    self.lfa();self.assertEqual(self.status().allowed,1)
+    self.start_manual_pause();self.step(ticks=100)
+    self.assertFalse(self.CC.latActive)
+    self.lfa();self.assertEqual(self.status().allowed,0)
+    self.manual_snapshot['leftBlinker']=False
+    self.step(ticks=150)
+    self.assertFalse(self.manual_controls.manual_steering.paused)
+    self.assertFalse(self.CC.latActive);self.assertEqual(self.status().allowed,0)
+    self.lfa();self.assertEqual(self.status().allowed,1)
+    self.assertTrue(self.CC.latActive)
+
+  def test_physical_regrant_during_signal_retains_manual_pause(self):
+    self.lfa();self.start_manual_pause();self.step(ticks=100)
+    self.lfa();self.assertEqual(self.status().allowed,0)
+    self.lfa();self.assertEqual(self.status().allowed,1)
+    self.assertFalse(self.CC.latActive)
+    self.step(ticks=150);self.assertFalse(self.CC.latActive)
+    self.manual_snapshot['leftBlinker']=False
+    self.step(ticks=100);self.assertTrue(self.CC.latActive)
 
   def test_initial_large_angle_waits_then_real_controller_recovers(self):
     self.main()

@@ -13,7 +13,7 @@ FIELDS = {
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'latEnabled',
                'steerFaultTemporary', 'steerFaultPermanent', 'buttonEvents', 'lx3Authority', 'lx3SteeringLimited'),
-  'carControl': ('enabled', 'latActive', 'longActive', 'actuators', 'lx3Authority'),
+  'carControl': ('enabled', 'latActive', 'longActive', 'actuators', 'lx3Authority', 'manualSteeringScale'),
   'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType', 'lx3LongRequest', 'lx3LongRefused', 'lx3RefuseAfterSequence'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
   'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels'),
@@ -21,7 +21,7 @@ FIELDS = {
 }
 HEALTH_SERVICES = ('pandaStates', 'peripheralState', 'managerState')
 PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFollowGap1', 'TFollowGap2',
-          'TFollowGap3', 'TFollowGap4', 'LaneChangeNeedTorque', 'AlwaysLateral', 'TurnSpeedControlMode',
+          'TFollowGap3', 'TFollowGap4', 'LaneChangeNeedTorque', 'ManualSteerWithBlinker', 'AlwaysLateral', 'TurnSpeedControlMode',
           'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar', 'HardwareC3xLite')
 
 

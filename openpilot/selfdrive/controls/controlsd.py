@@ -168,6 +168,8 @@ class Controls:
       CC.latActive = self.carrot_controls.lat_suspend_control(CS, lat_allowed and not standstill)
       CC.longActive = CC.longActive and long_allowed
 
+    CC.manualSteeringScale = self.carrot_controls.manual_steering.scale
+
     # AlwaysLateral must also stop while manager drains workers for this reboot.
     if self.params.get_bool("ImpactDashcamReboot"):
       CC.enabled = CC.latActive = CC.longActive = False

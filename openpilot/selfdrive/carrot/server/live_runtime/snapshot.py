@@ -603,6 +603,7 @@ def _build_car_control(service: Any, previous: dict[str, Any] | None = None) -> 
   p = previous if isinstance(previous, dict) else {}
   p["latActive"] = safe_bool(safe_get(service, "latActive"))
   p["longActive"] = safe_bool(safe_get(service, "longActive"))
+  p["manualSteeringScale"] = safe_float(safe_get(service, "manualSteeringScale", 1.0))
   return p
 
 

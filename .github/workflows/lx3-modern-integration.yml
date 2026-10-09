@@ -87,9 +87,12 @@ jobs:
           set -o pipefail
           uv run --no-sync python openpilot/selfdrive/car/tests/test_lx3_authority_runtime.py -v 2>&1 | tee lx3-runtime-integration.log
       - name: Complete runtime dependency graph
+        # The dedicated state/ceiling tests also run without hardware.
         run: |
           set -o pipefail
           uv run --no-sync scons --minimal -j2 2>&1 | tee lx3-runtime-build.log
+      - name: Manual steering handoff regression
+        run: uv run --no-sync python -m unittest discover -s openpilot/selfdrive/carrot/tests -p test_manual_steering.py -v
       - name: Actual pandad serializer C++ regression
         run: |
           uv run --no-sync scons -j2 openpilot/selfdrive/pandad/tests/test_pandad_canprotocol

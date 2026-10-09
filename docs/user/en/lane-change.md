@@ -47,6 +47,16 @@ The same maneuver can feel faster or slower with different scenes or installed m
 
 Value `1` can reduce unintended immediate entry for drivers who signal well in advance. Torque confirmation is not a safety-confirmation button; the driver must check again before nudging the wheel.
 
+### `ManualSteerWithBlinker` — manual steering while signalling
+
+On the LX3 authority profile, enable this option with `LaneChangeNeedTorque=-1` to reduce the existing steering assistance ceiling to zero over about one second when a single turn signal is on, then pause steering. This does not command a zero steering angle. Existing driver coexistence may reduce assistance faster. Acceleration and braking remain separate; cancellation, faults and other immediate disengagement conditions are never delayed. The default is OFF; settings refresh about once per second.
+
+Steering may resume only after both signals are off, no driver steering input is detected, wheel angle is below 15 degrees, and CAN is healthy continuously for one second. Speed-dependent steering limits and the existing torque recovery still apply. Physical return feel requires separate vehicle validation.
+
+Hazard lights alone do not start a pause. Once paused, changing sides, turning on hazards or changing either setting does not end it until both signals are off and the return conditions pass. Cancelling LFA permission cannot be undone by cancelling the signal; pressing LFA again while signalling also does not bypass the pause.
+
+This feature leaves lane-change steering to the driver. Do not assume stock LFA takes over while openpilot steering is paused. Automatic lane-change modes 0 and 1 do not start a new pause.
+
 ### `LaneChangeDelay` — wait before entry
 
 The displayed value is multiplied by `0.1 seconds`. For example, `10` means 1.0 second.

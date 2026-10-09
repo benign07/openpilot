@@ -8,6 +8,7 @@ from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.stopping import CanfdStopping
 from opendbc.car.hyundai.steering_handover import SteeringHandover
+from opendbc.car.hyundai.manual_steering import ManualSteeringCeiling
 from opendbc.car.carlog import carlog
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS, HyundaiExtFlags
@@ -233,6 +234,7 @@ class CarController(CarControllerBase):
     self.pre_override_frames = 0
 
     self.steer_handover = SteeringHandover()
+    self.manual_steering_ceiling = ManualSteeringCeiling()
     self.handover_model_frame = None
     self.handover_model_time = 0
 
@@ -492,6 +494,9 @@ class CarController(CarControllerBase):
         carlog.info("SteeringHandover mode=3 state=%s effort=%.3f error=%.3f legacy=%.1f cap=%.1f",
                     self.steer_handover.state, self.steer_handover.effort or 0.0,
                     self.steer_handover.error, self.lkas_max_torque, steering_authority)
+
+    if lx3_guard and angle_control:
+      steering_authority = self.manual_steering_ceiling.update(steering_authority, CC.manualSteeringScale, lat_active)
 
     if not lat_active:
         apply_torque = 0

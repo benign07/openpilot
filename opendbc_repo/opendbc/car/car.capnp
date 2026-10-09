@@ -597,6 +597,9 @@ struct CarControl {
 
   # LX3 companion fields; stock ordinals above remain unchanged.
   lx3Authority @18 :Lx3Authority;
+  # Remaining opt-in manual handoff ceiling. Absent/old producers mean no
+  # extra restriction. Never grants lateral permission or changes angle limits.
+  manualSteeringScale @19 :Float32 = 1;
 }
 
 struct CarOutput {
