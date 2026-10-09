@@ -109,6 +109,10 @@ jobs:
           uv run --no-sync python -m pytest openpilot/system/tests/test_startup_recovery.py -q
       - name: Passive diagnostics and HUD recording contract
         run: uv run --no-sync python -m unittest openpilot.selfdrive.carrot.can_diagnostics.test_automatic -v
+      - name: Lite recording policy and physical-authority button compatibility
+        run: |
+          uv run --no-sync python -m pytest openpilot/system/manager/test/test_lite_recording.py -q
+          uv run --no-sync python -m pytest opendbc_repo/opendbc/car/hyundai/tests/test_alt2_adas_buttons.py opendbc_repo/opendbc/car/hyundai/tests/test_ccnc_cluster.py opendbc_repo/opendbc/car/hyundai/tests/test_ccnc_counter.py opendbc_repo/opendbc/car/hyundai/tests/test_ccnc_lead.py opendbc_repo/opendbc/car/hyundai/tests/test_dm_cluster.py -q
       - name: HUD updater, rollback and live payload API
         run: |
           set -o pipefail
@@ -121,6 +125,7 @@ jobs:
           for driver in (False, True):
             for record in (False, True):
               run_case('candidate', driver, record)
+          run_case('candidate', False, False, record_road=0, record_audio=False)
           PY
       - name: Import real paired control processes
         run: |

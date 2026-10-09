@@ -281,7 +281,9 @@ In modes `EnableRadarTracks=1`–`3`, a confirmed departing front lead can recei
 
 `CarrotRadarCutInSensitivity` controls only Carrot Radar Mode CUT-IN detection: `0` disables it, `1` is insensitive, `3` is normal (default), and `5` is very sensitive; `2` and `4` are the intermediate levels. Levels `1` through `5` require `0.50`, `0.40`, `0.35`, `0.25`, and `0.20 s` of continuing measured motion evidence, while the physical future prediction remains fixed at 5.0 seconds. A front-radar track with at least 0.50 m of strongly one-way progress in its recent measured history may receive at most one 20 Hz radar-frame credit so timestamp quantization does not discard a completed dwell; small adjacent drift does not. It does not affect conventional radar mode or `EnableCornerRadar`. The value is read at the next OnRoad start, so restart the vehicle or reboot the device after changing it.
 
-`HardwareC3xLite` must remain off on standard C3 and C3X hardware. Enable it only on a C3X Lite, then reboot the device. The setting skips the unavailable amplifier so startup is not delayed by I2C retries, uses the GPIO buzzer for alerts, disables `micd`, `soundd`, and `loggerd`, and turns off `RecordAudio`. Normal route logging is unavailable while this hardware mode is enabled.
+`HardwareC3xLite` must remain off on standard C3 and C3X hardware. Enable it only on a C3X Lite, then reboot the device. The setting skips the unavailable amplifier so startup is not delayed by I2C retries and uses the GPIO buzzer for alerts. It disables `micd`, `soundd`, and `RecordAudio`, while keeping `loggerd` available for route logs and the low-resolution road video shown in the HUD. This low-resolution video is recorded even with `RecordRoadCam` off; high-resolution recording follows that setting.
+
+Turning Lite mode off later does not automatically re-enable audio recording. Enable `RecordAudio` separately if audio recording is wanted on supported hardware.
 
 <a id="display"></a>
 ## Display

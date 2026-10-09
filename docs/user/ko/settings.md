@@ -280,7 +280,9 @@ VW MEB(ID.4 포함)에도 수동 조향비와 학습 비율이 적용됩니다. 
 - `CarrotVisionEnabled`: 운전자 감시와 별도로 웹 도로 영상을 켭니다. `DisableDM`은 이관 전용이며, 기존 `DisableDM=2`의 영상 기능만 최초 전환 시 `CarrotVisionEnabled`로 승계합니다.
 - `SpeedFromPCM`: 기본값은 `2`(커브·카메라 감속)이며, 비롱컨 순정 SCC의 버튼 스패밍과 감속 방식에 영향을 줍니다. [버튼 전송 상세](buttons-presets.md#button-spam)를 참고하세요.
 
-`HardwareC3xLite`는 일반 C3/C3X에서는 반드시 꺼 두고 C3X Lite에서만 켠 뒤 기기를 재부팅하세요. 이 설정을 켜면 존재하지 않는 앰프를 초기화하지 않아 I2C 재시도로 인한 시작 지연을 없애고, 경고음을 GPIO 부저로 출력합니다. 또한 `micd`, `soundd`, `loggerd`를 실행하지 않고 `RecordAudio`를 끄므로 이 하드웨어 모드에서는 일반 주행 로그 기록을 사용할 수 없습니다.
+`HardwareC3xLite`는 일반 C3/C3X에서는 반드시 꺼 두고 C3X Lite에서만 켠 뒤 기기를 재부팅하세요. 이 설정을 켜면 존재하지 않는 앰프를 초기화하지 않아 I2C 재시도로 인한 시작 지연을 없애고, 경고음을 GPIO 부저로 출력합니다. `micd`, `soundd`와 `RecordAudio`는 끄지만, `loggerd`는 유지하여 주행 로그와 HUD에서 보는 저해상도 도로 영상을 기록합니다. `RecordRoadCam`을 꺼도 이 저해상도 영상은 기록되며, 고해상도 영상 저장 여부는 해당 설정을 따릅니다.
+
+Lite 설정을 나중에 꺼도 음성 녹음은 자동으로 다시 켜지지 않습니다. 음성 녹음이 필요한 지원 기기에서는 `RecordAudio`를 별도로 켜세요.
 
 <a id="display"></a>
 ## 화면 표시

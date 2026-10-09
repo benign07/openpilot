@@ -35,7 +35,7 @@ def test_fd_warning_transitions_preserve_raw_stock_and_integrity(monkeypatch, ca
   for i, level in enumerate((0, 1, 2, 3, 0, 1, 0)):
     cc.hudControl.driverMonitoringAlert = level
     if camera_scc:
-      messages = hyundaicanfd.create_ccnc_messages(NS(flags=HyundaiFlags.CAMERA_SCC), packer, can, i * 5,
+      messages = hyundaicanfd.create_ccnc_messages(NS(carFingerprint="KIA_EV9", flags=HyundaiFlags.CAMERA_SCC), packer, can, i * 5,
                                                   cc, cs, cc.hudControl, 0, False, False, 0, False, 0, 0)
     else:
       messages = hyundaicanfd.create_lfa_icon_non_camera_scc(packer, cs, can, cc)

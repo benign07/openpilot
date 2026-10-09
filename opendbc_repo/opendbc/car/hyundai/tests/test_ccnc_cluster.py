@@ -8,6 +8,7 @@ from opendbc.can.parser import get_raw_value
 from opendbc.car.hyundai import hyundaicanfd
 from opendbc.car.hyundai.hyundaicanfd import _select_cluster_background
 from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.lx3_buttons import LX3_AUTHORITY_FLAG
 
 
 @pytest.mark.parametrize(
@@ -27,6 +28,7 @@ def test_paddle_background_requires_enabled_paddle_mode(
 
 
 @pytest.mark.parametrize("distance", (0.0, 1.6, 14.0, 14.1, 20.0, 25.5))
+@pytest.mark.parametrize("native_lx3", (False, True))
 @pytest.mark.parametrize(("message", "detect", "expected_corner", "expected_front"), [
   *(('ADRV_0x1ea', detect, expected, None) for detect, expected in (
     (0, 0), (1, 1), (2, 2), (3, 3), (4, 1), (5, 1), (6, 1), (7, 1),
@@ -39,7 +41,7 @@ def test_paddle_background_requires_enabled_paddle_mode(
   ('CCNC_0x162', 0, 3, 0),
 ])
 def test_cluster_objects_restore_corner_state_without_blinking_or_distance_clamp(monkeypatch, message, distance, detect,
-                                                                               expected_corner, expected_front):
+                                                                               expected_corner, expected_front, native_lx3):
   monkeypatch.setattr(hyundaicanfd, "Params", lambda: SimpleNamespace(get_int=lambda key: 0))
   packer = CANPacker("hyundai_canfd_generated")
   display_types = CANDefine("hyundai_canfd_generated").dv[message]
@@ -61,7 +63,9 @@ def test_cluster_objects_restore_corner_state_without_blinking_or_distance_clamp
     ccnc_0x162=source if message == "CCNC_0x162" else None,
     radarState=SimpleNamespace(leadOne=SimpleNamespace(status=True, dRel=81.2, yRel=-1.3, vRel=-5.0)),
   )
-  cp = SimpleNamespace(flags=HyundaiFlags.CAMERA_SCC.value)
+  cp = SimpleNamespace(flags=HyundaiFlags.CAMERA_SCC.value,
+                       carFingerprint="HYUNDAI_PALISADE_LX3_HEV" if native_lx3 else "KIA_EV9",
+                       safetyConfigs=[SimpleNamespace(safetyParam=LX3_AUTHORITY_FLAG if native_lx3 else 0)])
   can = SimpleNamespace(ECAN=0, CAM=2)
   control = SimpleNamespace(latActive=True, enabled=True)
   # FF uses radarState directly, independently of the older HUD distance.

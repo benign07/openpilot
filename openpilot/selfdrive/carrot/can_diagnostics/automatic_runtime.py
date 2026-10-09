@@ -22,7 +22,7 @@ FIELDS = {
 HEALTH_SERVICES = ('pandaStates', 'peripheralState', 'managerState')
 PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFollowGap1', 'TFollowGap2',
           'TFollowGap3', 'TFollowGap4', 'LaneChangeNeedTorque', 'ManualSteerWithBlinker', 'AlwaysLateral', 'TurnSpeedControlMode',
-          'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar', 'HardwareC3xLite')
+          'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar', 'HardwareC3xLite', 'RecordRoadCam', 'RecordAudio')
 
 
 def read_param(params, key):
@@ -62,11 +62,34 @@ def service_snapshot(sm, name, fields):
     flags = ('enable', 'noEntry', 'warning', 'userDisable', 'softDisable', 'immediateDisable', 'preEnable', 'permanent', 'overrideLateral', 'overrideLongitudinal')
     data = {'events': [{'name': str(event.name), **{key: bool(getattr(event, key, False)) for key in flags}}
                        for event in islice(sm[name], 64)], 'truncated': len(sm[name]) > 64}
+  elif name == 'managerState':
+    processes = sm[name].processes
+    data = {'processes': [{'name': str(p.name)[:64], 'pid': int(p.pid), 'running': bool(p.running),
+                           'shouldBeRunning': bool(p.shouldBeRunning), 'exitCode': int(p.exitCode)}
+                          for p in islice(processes, 64)], 'truncated': len(processes) > 64}
   else:
     data = selected_fields(sm[name], fields)
   return {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]),
           'alive': bool(sm.alive[name]), 'observer_freq_ok': bool(sm.freq_ok[name]),
           'observer_recent_hz': 1 / recent_dt if recent_dt > 0 else None, 'data': data}
+
+
+def source_metadata(app_root):
+  """Stable logical keys for both flat and nested openpilot checkouts."""
+  dbc_root = app_root if (app_root / 'opendbc_repo').is_dir() else app_root.parent
+  sources = {rel: app_root / rel for rel in (
+    'selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
+    'system/manager/manager.py')}
+  sources.update({rel: dbc_root / rel for rel in (
+    'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
+    'opendbc_repo/opendbc/car/hyundai/radar_interface.py', 'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py')})
+  result = {'source_hashes': {rel: hashlib.sha256(path.read_bytes()).hexdigest()
+                            for rel, path in sources.items() if path.is_file()},
+            'source_hashes_missing': [rel for rel, path in sources.items() if not path.is_file()]}
+  dbc = dbc_root / 'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc'
+  if dbc.is_file():
+    result['dbc_sha256'] = hashlib.sha256(dbc.read_bytes()).hexdigest()
+  return result
 
 
 def panda_summary(panda):
@@ -169,17 +192,9 @@ class AutomaticController:
                                  'max_frames_per_trace': 20000, 'can_source': 'selected_unthrottled',
                                  'host_context_max_hz': 20, 'panda_max_hz': 20, 'panda_periodic_max_hz': 10},
                 'physical_ecu_origin': 'not_inferred_from_bus',
-                'sample_extensions': ['service_health_observer_v1', 'onroad_events_v1', 'device_resources_v1'],
+                'sample_extensions': ['service_health_observer_v1', 'onroad_events_v1', 'device_resources_v1', 'manager_processes_v1'],
                 'service_health_observer': 'passive_reader_max_20hz_not_selfdrived_frequency_check'}
-    repo = Path(__file__).resolve().parents[3]
-    sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
-               'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
-               'opendbc_repo/opendbc/car/hyundai/radar_interface.py')
-    metadata['source_hashes'] = {rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest()
-                               for rel in sources if (repo / rel).is_file()}
-    dbc = repo / 'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc'
-    if dbc.exists():
-      metadata['dbc_sha256'] = hashlib.sha256(dbc.read_bytes()).hexdigest()
+    metadata.update(source_metadata(Path(__file__).resolve().parents[3]))
     with self.lock:
       self.recorder = AutoRecorder(ChunkStore(self.root), metadata)
       self.error = None

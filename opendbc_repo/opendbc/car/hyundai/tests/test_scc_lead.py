@@ -16,6 +16,7 @@ def make_radar(**overrides):
 
 def make_cs(radar):
   return SimpleNamespace(
+    CP=SimpleNamespace(carFingerprint="KIA_EV9"),
     radarState=radar,
     scc_control={"COUNTER": 47, "ACC_ObjDist": 204.6, "ACC_ObjLatPos": 0.0,
                  "ACC_ObjRelSpd": 239.4, "InfoDisplay": 5},

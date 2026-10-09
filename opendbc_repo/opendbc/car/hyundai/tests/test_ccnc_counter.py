@@ -24,7 +24,7 @@ def test_ccnc_counter_seed_once_and_advance_only_when_message_generated(monkeypa
     modelV2=None, radarState=None, lfahda_cluster=None, cruise_buttons_msg=None,
     adrv_0x161=None, adrv_0x200=None, adrv_0x1ea=None, ccnc_0x162=None,
   )
-  cp = SimpleNamespace(flags=HyundaiFlags.CAMERA_SCC | (HyundaiFlags.CANFD_CLUSTER_DIRECT_TX if direct else 0))
+  cp = SimpleNamespace(carFingerprint="KIA_EV9", flags=HyundaiFlags.CAMERA_SCC | (HyundaiFlags.CANFD_CLUSTER_DIRECT_TX if direct else 0))
   bus = SimpleNamespace(ECAN=0, CAM=2)
   control = SimpleNamespace(latActive=False, enabled=False)
 

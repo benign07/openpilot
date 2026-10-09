@@ -97,7 +97,7 @@ class TestLoggerd:
 
     return sent_msgs
 
-  def _publish_camera_and_audio_messages(self, num_segs=1, segment_length=5, include_driver=True):
+  def _publish_camera_and_audio_messages(self, num_segs=1, segment_length=5, include_driver=True, publish_audio=True):
     # Use small frame sizes for testing (width, height, size, stride, uv_offset)
     # NV12 format: size = stride * height * 1.5, uv_offset = stride * height
     w, h = 320, 240
@@ -112,7 +112,7 @@ class TestLoggerd:
       streams = [row for row in streams if row[0] != VisionStreamType.VISION_STREAM_DRIVER]
 
     sm = messaging.SubMaster(["roadEncodeData"])
-    pm = messaging.PubMaster([s for _, _, s in streams] + ["rawAudioData"])
+    pm = messaging.PubMaster([s for _, _, s in streams] + (["rawAudioData"] if publish_audio else []))
     vipc_server = VisionIpcServer("camerad")
     for stream_type, frame_spec, _ in streams:
       vipc_server.create_buffers_with_sizes(stream_type, 40, *(frame_spec))
@@ -145,11 +145,11 @@ class TestLoggerd:
         frame.frameId = n
         pm.send(state, camera_state)
 
-      # send audio
-      msg = messaging.new_message('rawAudioData')
-      msg.rawAudioData.data = bytes(800 * 2) # 800 samples of int16
-      msg.rawAudioData.sampleRate = 16000
-      pm.send('rawAudioData', msg)
+      if publish_audio:
+        msg = messaging.new_message('rawAudioData')
+        msg.rawAudioData.data = bytes(800 * 2) # 800 samples of int16
+        msg.rawAudioData.sampleRate = 16000
+        pm.send('rawAudioData', msg)
 
       for _, _, state in streams:
         assert pm.wait_for_readers_to_update(state, timeout=5, dt=0.001)

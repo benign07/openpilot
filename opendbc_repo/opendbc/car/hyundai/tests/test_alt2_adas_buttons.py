@@ -3,7 +3,9 @@ from types import SimpleNamespace
 import pytest
 
 from opendbc.can import CANPacker
+from opendbc.car import structs
 from opendbc.car.hyundai import hyundaicanfd
+from opendbc.car.hyundai.lx3_buttons import LX3_AUTHORITY_FLAG
 from opendbc.car.hyundai.values import HyundaiFlags
 
 
@@ -93,7 +95,10 @@ def test_standstill_resume_retains_existing_stopping_guard():
 
 
 @pytest.mark.parametrize("alt2", (False, True))
-def test_ccnc_routes_button_request_to_observed_format(monkeypatch, alt2):
+@pytest.mark.parametrize("fingerprint,authority", (("HYUNDAI_PALISADE_LX3_HEV", True),
+                                                  ("HYUNDAI_PALISADE_LX3_HEV", False),
+                                                  ("KIA_EV9", False), ("KIA_EV9", True)))
+def test_ccnc_routes_button_request_to_observed_format(monkeypatch, alt2, fingerprint, authority):
   monkeypatch.setattr(hyundaicanfd, "Params", lambda: SimpleNamespace(get_int=lambda key: 0))
   cs = state()
   if not alt2:
@@ -101,11 +106,22 @@ def test_ccnc_routes_button_request_to_observed_format(monkeypatch, alt2):
   cs.cruise_buttons_msg = {"NORMAL_CRUISE_MAIN_BTN": 0, "LFA_BTN": 0, "CRUISE_BUTTONS": 0}
   cs.cruise_btns_msg_canfd = "CRUISE_BUTTONS_ALT"
   cs.modelV2 = cs.adrv_0x161 = cs.adrv_0x200 = cs.adrv_0x1ea = cs.ccnc_0x162 = None
-  msgs = hyundaicanfd.create_ccnc_messages(
-    SimpleNamespace(flags=HyundaiFlags.CAMERA_SCC.value), CANPacker("hyundai_canfd_generated"),
-    SimpleNamespace(CAM=2, ECAN=0), 2, SimpleNamespace(enabled=True, latActive=True), cs,
-    SimpleNamespace(), 0, False, False, 0, False, 0, 0,
-  )
-  assert len(msgs) == 1
-  assert msgs[0][0] == (0x10B if alt2 else 0x1AA)
-  assert msgs[0][2] == 2
+  cp = structs.CarParams()
+  cp.carFingerprint = fingerprint
+  cp.flags = HyundaiFlags.CAMERA_SCC.value
+  cp.init("safetyConfigs", 1)[0].safetyParam = LX3_AUTHORITY_FLAG if authority else 0
+  packer = CANPacker("hyundai_canfd_generated")
+  # Include release, LFA, SCC main/set/resume periods and both enabled states.
+  for enabled in (False, True):
+    for frame in range(1000):
+      msgs = hyundaicanfd.create_ccnc_messages(
+        cp, packer, SimpleNamespace(CAM=2, ECAN=0), frame,
+        SimpleNamespace(enabled=enabled, latActive=enabled), cs,
+        SimpleNamespace(), 0, False, False, 0, False, 0, 0,
+      )
+      if (fingerprint == "HYUNDAI_PALISADE_LX3_HEV" and authority) or frame % 2:
+        assert msgs == []
+      else:
+        assert len(msgs) == 1
+        assert msgs[0][0] == (0x10B if alt2 else 0x1AA)
+        assert msgs[0][2] == 2

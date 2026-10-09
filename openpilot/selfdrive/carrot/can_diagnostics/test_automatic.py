@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from .automatic import AutoRecorder, ChunkStore, control_mode
 from .button_trace_report import summarize as summarize_button_traces
 from .automatic_routes import register
-from .automatic_runtime import AutomaticController, panda_summary, read_param, selected_fields, service_snapshot
+from .automatic_runtime import AutomaticController, panda_summary, read_param, selected_fields, service_snapshot, source_metadata
 from tools.can_auto_sync import analyze, download
 
 
@@ -28,6 +28,61 @@ def services(now=100, started=True, lat=False, long=False):
 
 
 class RuntimeTests(unittest.TestCase):
+  def test_manager_process_exit_and_restart_are_bounded_and_json_safe(self):
+    process = SimpleNamespace(name='loggerd', pid=321, running=False, shouldBeRunning=True, exitCode=-11)
+    class SM:
+      logMonoTime = {'managerState': 123}
+      valid = alive = freq_ok = {'managerState': True}
+      freq_tracker = {'managerState': SimpleNamespace(recent_avg_dt=SimpleNamespace(count=0))}
+      def __getitem__(self, key): return SimpleNamespace(processes=[process] * 65)
+    row = service_snapshot(SM(), 'managerState', ())
+    self.assertEqual(row['data']['processes'][0], vars(process))
+    self.assertEqual(len(row['data']['processes']), 64)
+    self.assertTrue(row['data']['truncated'])
+    process.pid, process.running, process.exitCode = 987, True, 0
+    restarted = service_snapshot(SM(), 'managerState', ())
+    self.assertEqual(row['data']['processes'][0]['pid'], 321)
+    self.assertEqual(restarted['data']['processes'][0]['pid'], 987)
+    self.assertEqual(restarted['data']['processes'][0]['exitCode'], 0)
+    json.dumps(restarted, allow_nan=False)
+
+  def test_source_hashes_find_sibling_opendbc_in_modern_and_flat_layouts(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      for layout in ('flat', 'nested'):
+        root = Path(tmp) / layout
+        app = root / 'openpilot' if layout == 'nested' else root
+        paths = {app / 'selfdrive/carrot/can_diagnostics/automatic.py': b'diagnostic',
+                 root / 'opendbc_repo/opendbc/car/hyundai/carcontroller.py': b'controller',
+                 root / 'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc': b'dbc'}
+        for path, content in paths.items():
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_bytes(content)
+        row = source_metadata(app)
+        self.assertEqual(row['source_hashes']['opendbc_repo/opendbc/car/hyundai/carcontroller.py'], hashlib.sha256(b'controller').hexdigest())
+        self.assertEqual(row['source_hashes']['selfdrive/carrot/can_diagnostics/automatic.py'], hashlib.sha256(b'diagnostic').hexdigest())
+        self.assertEqual(row['dbc_sha256'], hashlib.sha256(b'dbc').hexdigest())
+        self.assertIn('system/manager/manager.py', row['source_hashes_missing'])
+
+  def test_actual_cereal_manager_process_fields_serialize(self):
+    try:
+      from openpilot.cereal import log
+    except ImportError:
+      self.skipTest('Full cereal runtime required')
+    manager = log.Event.new_message().init('managerState')
+    process = manager.init('processes', 1)[0]
+    process.name, process.pid, process.exitCode = 'loggerd', 123, -9
+    process.running, process.shouldBeRunning = False, True
+    class SM:
+      logMonoTime = {'managerState': 1}
+      valid = alive = freq_ok = {'managerState': True}
+      freq_tracker = {'managerState': SimpleNamespace(recent_avg_dt=SimpleNamespace(count=0))}
+      def __getitem__(self, key): return manager
+    row = service_snapshot(SM(), 'managerState', ())
+    self.assertEqual(row['data']['processes'], [{'name': 'loggerd', 'pid': 123, 'exitCode': -9,
+                                              'running': False, 'shouldBeRunning': True}])
+    self.assertFalse(row['data']['truncated'])
+    json.dumps(row, allow_nan=False)
+
   def test_control_events_and_observer_health_are_bounded_and_json_safe(self):
     class SM:
       logMonoTime = {'onroadEvents': 123000000}

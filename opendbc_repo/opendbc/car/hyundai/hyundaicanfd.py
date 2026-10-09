@@ -6,6 +6,7 @@ from opendbc.car.carlog import carlog
 from opendbc.car.crc import CRC16_XMODEM
 from opendbc.car.hyundai.values import HyundaiFlags, HyundaiExtFlags
 from opendbc.car.hyundai.stopping import MOVING_SPEED
+from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
 from opendbc.car.common.conversions import Conversions as CV
@@ -932,7 +933,9 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
       HDA_CntrlModSta = CS.lfahda_cluster["HDA_CntrlModSta"]
       HDA_LFA_SymSta = CS.lfahda_cluster["HDA_LFA_SymSta"]
 
-    if frame % 2 == 0:
+    # Native LX3 authority observes physical buttons. Automatic ADAS button
+    # requests are deliberately rejected by that policy, including releases.
+    if frame % 2 == 0 and not uses_lx3_authority(CP):
       #if CS.adrv_0x160 is not None:
       #  values = copy.copy(CS.adrv_0x160)
       #  ret.append(packer.make_can_msg("ADRV_0x160", CAN.ECAN, values))

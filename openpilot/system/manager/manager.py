@@ -187,7 +187,8 @@ def manager_thread(update_status: UpdateStatus) -> None:
   ignore += [x for x in os.getenv("BLOCK", "").split(",") if len(x) > 0]
 
   if params.get_bool("HardwareC3xLite"):
-    ignore += ["micd", "soundd", "loggerd"]
+    # Speakerless hardware still records rlog and the HUD's qcamera video.
+    ignore += ["micd", "soundd"]
     params.put_bool("RecordAudio", False)
 
   sm = messaging.SubMaster(['deviceState', 'carParams', 'pandaStates', 'selfdriveState', 'modelV2', 'carState'], poll='deviceState')
