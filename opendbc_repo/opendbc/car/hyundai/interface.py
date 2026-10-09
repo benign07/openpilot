@@ -1,10 +1,11 @@
 from opendbc.car import Bus, get_safety_config, structs
+from opendbc.can.dbc import DBC as DbcDefinition
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, CANFD_RADAR_SCC_CAR, \
                                                    CANFD_UNSUPPORTED_LONGITUDINAL_CAR, \
                                                    UNSUPPORTED_LONGITUDINAL_CAR, HyundaiSafetyFlags, HyundaiExtFlags, \
                                                    CANFD_HYBRID_STATUS_ADDR, CANFD_HYBRID_STATUS_DLC, \
-                                                   EV_MODE_STATUS_ADDR, EV_MODE_STATUS_DLC
+                                                   EV_MODE_STATUS_ADDR, EV_MODE_STATUS_DLC, EV_MODE_STATUS_MSG, EV_MODE_STATUS_SIGNAL
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
@@ -67,7 +68,13 @@ class CarInterface(CarInterfaceBase):
       has_ev_mode_status = fingerprint[CAN.ECAN].get(CANFD_HYBRID_STATUS_ADDR) == CANFD_HYBRID_STATUS_DLC and \
                            fingerprint[CAN.ECAN].get(EV_MODE_STATUS_ADDR) == EV_MODE_STATUS_DLC
       if has_ev_mode_status:
-        ret.extFlags |= HyundaiExtFlags.EV_MODE_STATUS_230.value
+        # A custom platform DBC may not define this optional display feature.
+        # Advertise it only when that DBC can decode it; do not infer a new
+        # platform's power-flow meaning from matching addresses/lengths alone.
+        status_msg = DbcDefinition(DBC[candidate][Bus.pt]).name_to_msg.get(EV_MODE_STATUS_MSG)
+        if (status_msg is not None and status_msg.address == EV_MODE_STATUS_ADDR and
+            status_msg.size == EV_MODE_STATUS_DLC and EV_MODE_STATUS_SIGNAL in status_msg.sigs):
+          ret.extFlags |= HyundaiExtFlags.EV_MODE_STATUS_230.value
 
       # Tucson can broadcast LFA_ALT while using LFA torque steering.
       # Keep its torque controller instead of inferring angle support from 0xCB alone.
