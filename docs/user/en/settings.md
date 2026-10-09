@@ -283,6 +283,8 @@ In modes `EnableRadarTracks=1`–`3`, a confirmed departing front lead can recei
 
 `HardwareC3xLite` must remain off on standard C3 and C3X hardware. Enable it only on a C3X Lite, then reboot the device. The setting skips the unavailable amplifier so startup is not delayed by I2C retries and uses the GPIO buzzer for alerts. It disables `micd`, `soundd`, and `RecordAudio`, while keeping `loggerd` available for route logs and the low-resolution road video shown in the HUD. This low-resolution video is recorded even with `RecordRoadCam` off; high-resolution recording follows that setting.
 
+On Lite hardware without a driver camera, this hides only the permanent camera-unavailable notice. Driver-response monitoring, hands-on warnings and no-response lockout remain active; loss of a previously working camera still displays the notice.
+
 Turning Lite mode off later does not automatically re-enable audio recording. Enable `RecordAudio` separately if audio recording is wanted on supported hardware.
 
 <a id="display"></a>

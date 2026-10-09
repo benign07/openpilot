@@ -24,6 +24,21 @@ def test_recovered_camera_lost_during_startup_gets_normal_notice():
   assert notice.update(8, True, True, False)
 
 
+def test_camera_absent_lite_has_no_permanent_fallback_notice():
+  notice = CameraFallbackNotice(expected_absent=True)
+  for t in (0, 30, 300, 3600):
+    assert not notice.update(t, True, True, False)
+
+
+def test_lite_still_reports_loss_of_a_previously_working_camera():
+  notice = CameraFallbackNotice(expected_absent=True)
+  assert not notice.update(40, True, True, False)
+  assert not notice.update(41, True, False, False)
+  assert not notice.update(42, False, True, False)
+  assert not notice.update(43, True, True, True)
+  assert notice.update(44, True, True, False)
+
+
 @pytest.mark.parametrize('invalid,disabled', [(False, False), (True, False), (False, True), (True, True)])
 @pytest.mark.parametrize('level,expected', [('none', 0), ('one', 1), ('two', 2), ('three', 3)])
 def test_hud_level_requires_fresh_enabled_monitoring(level, expected, invalid, disabled):

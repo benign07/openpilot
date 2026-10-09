@@ -100,7 +100,7 @@ jobs:
       - name: Stock Carrot monitoring remains unchanged
         run: |
           set -o pipefail
-          uv run --no-sync python -m pytest openpilot/selfdrive/monitoring/test_monitoring.py -v 2>&1 | tee lx3-stock-dm.log
+          uv run --no-sync python -m pytest openpilot/selfdrive/monitoring/test_monitoring.py openpilot/selfdrive/monitoring/test_dm_alerts.py openpilot/selfdrive/monitoring/test_parked_reset.py -v 2>&1 | tee lx3-stock-dm.log
       - name: Production host decisions and schema round trip
         run: uv run --no-sync python openpilot/selfdrive/car/tests/test_lx3_authority.py -v
       - name: LX3 observed-capability startup, AVH fields and signed-baseline recovery guard

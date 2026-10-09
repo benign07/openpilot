@@ -146,7 +146,7 @@ class SelfdriveD:
     self.cutin_audio_tracker = CutinAlertTracker()
     self.dm_uncertain_alerted = False
     self.dm_disabled_prev = False
-    self.dm_camera_notice = CameraFallbackNotice()
+    self.dm_camera_notice = CameraFallbackNotice(expected_absent=self.params.get_bool("HardwareC3xLite"))
     self.update_reboot_alerted = False
     self.system_ready_alerted = False
     self.system_ready_since = None
