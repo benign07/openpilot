@@ -567,6 +567,39 @@ class TestLx3Runtime(unittest.TestCase):
     self.assertEqual(self.CC.manualSteeringScale,0.)
     out,_=self.CI.apply(self.CC.as_reader(),self.now,None)
     self.assertEqual(out.torqueOutputCan,0.)
+    self.lfa();self.assertEqual(self.status().allowed,1)
+    self.assertFalse(self.CC.latActive)
+    out,_=self.CI.apply(self.CC.as_reader(),self.now,None)
+    self.assertEqual(out.torqueOutputCan,0.)
+
+  def test_cold_controller_during_fade_uses_inactive_wire_command(self):
+    self.main()
+    # Controller has never actuated; equivalent to restarting card mid-fade.
+    self.CC.manualSteeringScale=.5
+    out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
+    self.assertEqual(out.torqueOutputCan,0.)
+    cb=[data for addr,data,bus in msgs if addr==0xCB and bus==0]
+    self.assertEqual(len(cb),1)
+    self.assertEqual((cb[0][3]>>4)&3,1)
+    self.assertEqual(cb[0][6],0)
+
+  def test_lost_host_fade_state_reacquires_through_inactive_frame(self):
+    self.main()
+    for _ in range(150):
+      self.step();self.CI.apply(self.CC.as_reader(),self.now,None)
+    self.CC.manualSteeringScale=.5
+    out,_=self.CI.apply(self.CC.as_reader(),self.now,None)
+    self.assertGreater(out.torqueOutputCan,25.)
+    self.step()  # A new default message models loss of the host's fade state.
+    self.assertEqual(self.CC.manualSteeringScale,1.)
+    out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
+    self.assertEqual(out.torqueOutputCan,0.)
+    for addr,data,bus in msgs:
+      if addr==0xCB and bus==0:self.assertEqual((data[3]>>4)&3,1)
+    self.step()
+    out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
+    self.assertGreater(out.torqueOutputCan,0.)
+    self.assertLessEqual(out.torqueOutputCan,25.)
 
   def test_manual_blinker_pause_keeps_long_and_native_intent_with_neutral_can(self):
     self.main(); self.assertTrue(self.enabled)
@@ -579,6 +612,10 @@ class TestLx3Runtime(unittest.TestCase):
         if bus==0 and addr in (0xCB,0x12A,0x1A0):
           gen=self.CC.lx3Authority.longitudinalGeneration if addr==0x1A0 else generation
           self.assertTrue(self.native.fixture_tx(addr,data,len(data),gen))
+          if addr==0xCB:
+            # Supply the real OEM trigger at each simulated source period;
+            # otherwise this fixture only fills the forward FIFO indefinitely.
+            self.assertEqual(self.native.fixture_oem_lateral_replacement(),(((data[3]>>4)&3)<<8)|data[6])
     before=out.torqueOutputCan;self.assertGreater(before,0)
     self.start_manual_pause()
     counts=defaultdict(int)
@@ -590,13 +627,19 @@ class TestLx3Runtime(unittest.TestCase):
       out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
       self.assertLessEqual(out.torqueOutputCan,previous+1e-5)
       self.assertLessEqual(out.torqueOutputCan,before*max(0.,1-(i+1)/100.)+1e-4)
+      if i<50:self.assertGreater(out.torqueOutputCan,0.)
+      if i==0:self.assertGreaterEqual(out.torqueOutputCan,before*.99-1.)
       previous=out.torqueOutputCan
       for addr,data,bus in msgs:
         if bus==0 and addr in (0xCB,0x12A,0x1A0):
           gen=self.CC.lx3Authority.longitudinalGeneration if addr==0x1A0 else generation
           self.assertTrue(self.native.fixture_tx(addr,data,len(data),gen))
-          if addr==0xCB:fade_frames+=1
-    self.assertGreater(fade_frames,20);self.assertEqual(previous,0.)
+          if addr==0xCB:
+            fade_frames+=1
+            self.assertEqual((data[3]>>4)&3,2 if out.torqueOutputCan>0 else 1)
+            self.assertLessEqual(abs(data[6]-out.torqueOutputCan),.501)
+            self.assertEqual(self.native.fixture_oem_lateral_replacement(),(((data[3]>>4)&3)<<8)|data[6])
+    self.assertEqual(fade_frames,100);self.assertEqual(previous,0.)
     for _ in range(25):
       self.step()
       self.assertFalse(self.CC.latActive);self.assertTrue(self.CC.longActive)
@@ -622,6 +665,13 @@ class TestLx3Runtime(unittest.TestCase):
     self.manual_snapshot['steeringPressed']=False
     self.step(ticks=99);self.assertFalse(self.CC.latActive)
     self.step();self.assertTrue(self.CC.latActive)
+    out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
+    self.assertEqual(out.torqueOutputCan,0.)
+    for addr,data,bus in msgs:
+      if bus==0 and addr==0xCB:
+        self.assertEqual((data[3]>>4)&3,1)
+        self.assertTrue(self.native.fixture_tx(addr,data,len(data),generation))
+    self.step()
     out,msgs=self.CI.apply(self.CC.as_reader(),self.now,None)
     self.assertLessEqual(out.torqueOutputCan,25)
     self.assertFalse(out.lx3AngleLimited)

@@ -28,9 +28,13 @@ int fixture_tx(unsigned address, const uint8_t *data, unsigned length, unsigned 
   return lx3_native_final_tx(&p,&stamp);
 }
 
-int fixture_oem_lateral_replaced_by_inactive(void) {
+int fixture_oem_lateral_replacement(void) {
   CANPacket_t p=cb(2U,90U,0); p.bus=2U;
   const int bus=safety_fwd_hook(&p);
-  return bus==0 && ((p.data[3] >> 4U) & 3U)==1U && p.data[6]==0U &&
-         lx3_forward_stamp.origin==1U && lx3_native_final_tx(&p,&lx3_forward_stamp);
+  if (bus!=0 || lx3_forward_stamp.origin!=1U || !lx3_native_final_tx(&p,&lx3_forward_stamp)) return -1;
+  return (((p.data[3] >> 4U) & 3U) << 8U) | p.data[6];
+}
+
+int fixture_oem_lateral_replaced_by_inactive(void) {
+  return fixture_oem_lateral_replacement()==256;
 }

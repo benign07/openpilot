@@ -311,6 +311,11 @@ class CarController(CarControllerBase):
     lx3_guard = uses_lx3_authority(self.CP)
     lat_active = CC.latActive
     self.lx3_angle_limited = False
+    if lx3_guard and angle_control and self.manual_steering_ceiling.fading and CC.manualSteeringScale >= 1.0:
+      # End every handoff through a real inactive frame, including a host
+      # restart which loses its fade state. Stock measured-angle/25-torque
+      # reacquisition then applies on the following frame.
+      lat_active = False
     if lx3_guard and lat_active and not self.lx3_angle_active_last:
       bound = min(self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                   float(np.degrees(np.arctan(8.5 * self.CP.wheelbase / max(CS.out.vEgoRaw, 1.0) ** 2))) * self.CP.steerRatio)
@@ -497,6 +502,8 @@ class CarController(CarControllerBase):
 
     if lx3_guard and angle_control:
       steering_authority = self.manual_steering_ceiling.update(steering_authority, CC.manualSteeringScale, lat_active)
+      if self.manual_steering_ceiling.fading and round(steering_authority) < 1:
+        lat_active = False
 
     if not lat_active:
         apply_torque = 0
