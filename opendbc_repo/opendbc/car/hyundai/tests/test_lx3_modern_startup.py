@@ -28,7 +28,7 @@ class TestLx3ModernStartup(unittest.TestCase):
     self.params.put_int('CanfdHDA2', 1)
     for module in ('opendbc.car.interfaces', 'opendbc.car.hyundai.interface',
                    'opendbc.car.hyundai.carstate', 'opendbc.car.hyundai.carcontroller',
-                   'opendbc.car.hyundai.radar_interface'):
+                   'opendbc.car.hyundai.radar_interface', 'opendbc.car.hyundai.hyundaicanfd'):
       self.stack.enter_context(patch(module + '.Params', return_value=self.params))
 
   def interface(self, candidate=CAR.HYUNDAI_PALISADE_LX3_HEV, *, status_bus=0, status_length=32, hybrid_status=True):
