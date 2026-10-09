@@ -77,7 +77,7 @@ jobs:
       - name: Install Linux build prerequisites
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev ffmpeg
       - name: Install locked dependencies
         run: uv sync --frozen --no-dev --extra testing --extra tools
       - name: Build real runtime test dependencies first
