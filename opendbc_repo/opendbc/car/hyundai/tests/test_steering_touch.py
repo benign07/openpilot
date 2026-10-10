@@ -6,7 +6,7 @@ import pytest
 from opendbc.can import CANParser
 from opendbc.car import structs
 from opendbc.car.hyundai.steering_touch import HyundaiSteeringTouch, TOUCH_ADDR, TOUCH_MSG, touch_checksum
-from opendbc.car.hyundai.values import CANFD_CAR
+from opendbc.car.hyundai.values import CANFD_CAR, CAR
 
 
 def frame(counter, status=1, touch1=19, touch2=14):
@@ -89,7 +89,7 @@ def test_missing_message_and_read_only_payload_contract():
   assert snapshot == (dict(cp.vl[TOUCH_MSG]), cp.dat[TOUCH_ADDR])
 
 
-@pytest.mark.parametrize('platform', sorted(CANFD_CAR))
+@pytest.mark.parametrize('platform', sorted(CANFD_CAR - {CAR.HYUNDAI_PALISADE_LX3_HEV}))
 def test_every_canfd_platform_uses_received_profile_without_fingerprint_gate(monkeypatch, platform):
   from opendbc.car import Bus
   from opendbc.car.hyundai import carstate, hyundaicanfd

@@ -2,6 +2,7 @@
 import math
 
 from opendbc.car.crc import CRC8J1850, mk_crc8_fun
+from opendbc.car.hyundai.hyundaicanfd import hkg_can_fd_checksum
 
 TOUCH_ADDR = 0x2AF
 TOUCH_MSG = 'STEER_TOUCH_2AF'
@@ -55,3 +56,58 @@ class HyundaiSteeringTouch:
     return dict(available=timestamp > 0, valid=valid, touched=bool(valid and data[2] >= 1),
                 sampleMonoTime=timestamp, rawStatus=data[2] if len(data) == 8 else 0,
                 rawTouch1=data[4] if len(data) == 8 else 0, rawTouch2=data[5] if len(data) == 8 else 0)
+
+
+class LX3SteeringTouch:
+  """Read-only LX3 receive profile, separate from the other Hyundai 0x2AF profile."""
+
+  ADDR = 0x208
+  MSG = "STEER_TOUCH_LX3"
+  TIMEOUT_NS = 250_000_000  # The observed original-bus stream is about 5 Hz.
+
+  def __init__(self):
+    self.last_timestamp = 0
+    self.last_counter = None
+    self.frame_valid = False
+
+  def update(self, cp) -> dict:
+    message = cp.dbc.name_to_msg.get(self.MSG)
+    if message is None or message.address != self.ADDR or message.size != 16:
+      return {}
+    # Optional receive-only registration after an original-bus frame appears.
+    # Absence of this sensor must never make the whole CAN parser invalid.
+    if self.ADDR not in cp.addresses and self.ADDR in cp.seen_addresses:
+      cp._add_message(self.MSG, math.nan)
+
+    timestamp = cp.ts_nanos.get(self.MSG, {}).get("TOUCH_RAW1", 0)
+    data = cp.dat.get(self.ADDR, b'')
+    now = cp._last_update_nanos
+    fresh = timestamp > 0 and 0 <= now - timestamp <= self.TIMEOUT_NS and not cp.bus_timeout
+
+    if timestamp != self.last_timestamp:
+      previous_timestamp = self.last_timestamp
+      previous_counter = self.last_counter
+      self.last_timestamp = timestamp
+      # Only the observed LX3 layout is accepted. Byte 2 advanced by two in
+      # 1,498 consecutive samples; an unknown counter jump revokes evidence.
+      layout_ok = (len(data) == 16 and data[3:10] == b'\x00' * 7 and
+                   data[10] <= 4 and data[11] == 1 and data[14:] == b'\x01\x00')
+      integrity = layout_ok and int.from_bytes(data[:2], 'little') == hkg_can_fd_checksum(self.ADDR, None, bytearray(data))
+      counter = data[2] if integrity else None
+      self.frame_valid = (fresh and integrity and previous_counter is not None and
+                          0 < timestamp - previous_timestamp <= self.TIMEOUT_NS and
+                          counter == (previous_counter + 2) % 256)
+      self.last_counter = counter if fresh else None
+
+    if not fresh:
+      self.frame_valid = False
+      self.last_counter = None
+
+    valid = fresh and self.frame_valid
+    return dict(available=timestamp > 0, valid=valid,
+                # Byte 12 is an observed contact magnitude, not a bit field:
+                # a recorded continuous grip reaches 64 (bit 5 clears).
+                touched=bool(valid and data[10] in (3, 4) and data[12] >= 32),
+                sampleMonoTime=timestamp, rawStatus=data[10] if len(data) == 16 else 0,
+                rawTouch1=data[12] if len(data) == 16 else 0,
+                rawTouch2=data[13] if len(data) == 16 else 0)
