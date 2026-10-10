@@ -423,3 +423,5 @@ Carrot Vision에는 `carrot_settings.json` 카탈로그와 별도로 **AR 표시
 7. 나빠지거나 판단하기 어렵다면 즉시 이전 값 또는 기준 프로필로 복원합니다.
 
 조향과 가감속의 실제 조정 순서는 [튜닝 입문](https://github.com/ajouatom/openpilot/wiki/Guide-Tuning)을 참고하세요.
+
+LX3의 `앞차 접근·정차 편안함`은 기본 OFF이며 HUD 차간거리 메뉴에서 네 강도를 조절합니다. 적용 조건, 기존 차간거리 설정과의 관계 및 정지 간격은 [차간거리 설명](cruise-gap.md#lx3-앞차-접근정차-편안함)을 참고하세요.

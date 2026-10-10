@@ -391,3 +391,6 @@ Experimental DM switches to standard monitoring for 20 seconds only when moving 
 7. Restore the previous value or baseline profile immediately if the result is worse or unclear.
 
 See the Wiki [Tuning introduction](https://github.com/ajouatom/openpilot/wiki/Guide-Tuning) for the recommended steering and longitudinal adjustment order.
+## LX3 approach comfort settings
+
+Lead approach comfort defaults OFF. Its four strengths are available in the HUD Follow Gap menu. See [follow-gap settings](cruise-gap.md#lx3-lead-approach-comfort) for activation conditions, interaction with existing headroom and the unchanged standstill gap.

@@ -333,6 +333,11 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TFollowGap4", {PERSISTENT, INT, "160"}},
 
     {"LeadAccelResponse", {PERSISTENT, INT, "0"}},
+    {"ApproachComfortEnabled", {PERSISTENT, BOOL, "0"}},
+    {"ApproachCoastStrength", {PERSISTENT, INT, "40"}},
+    {"ApproachBrakeMargin", {PERSISTENT, INT, "40"}},
+    {"ApproachStopSmooth", {PERSISTENT, INT, "40"}},
+    {"ApproachTrafficCalm", {PERSISTENT, INT, "40"}},
     {"LeadAccelResponseTF1", {PERSISTENT, INT, "-1"}},
     {"LeadAccelResponseTF2", {PERSISTENT, INT, "-1"}},
     {"LeadAccelResponseTF3", {PERSISTENT, INT, "-1"}},

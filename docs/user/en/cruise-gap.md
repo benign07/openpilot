@@ -422,3 +422,15 @@ Related: [Understanding Settings](settings.md) · [Tuning introduction](https://
 When a previously confirmed moving front vehicle is leaving your path and vision has switched to a farther vehicle, ACC can gradually reduce the following-distance demand for the future period after its predicted departure. The radar track and its measured distance and speed remain available.
 
 The adjustment requires continuous measured outward motion and sufficient separation until the vehicle body clears the path. It affects only predictions after clearance plus 0.30 seconds, and is limited to half the selected time gap, at most 0.50 seconds or 8 m. Closer leadTwo vehicles, traffic stops, cruise limits, and the original collision-warning trajectory remain in the calculation. Loss of evidence cancels the adjustment; it does not operate during pedal override, in blended mode, or for stationary or strongly braking leads. See [radar behavior](radar.md).
+
+
+## LX3 lead approach comfort
+
+In HUD Settings → Driving Control → Follow Gap, enable **Lead approach comfort** to apply the four preferences. The default is OFF. Older builds without this feature do not provide the settings. Other cars running this build may display them, but they only operate on LX3. Values refresh about once per second.
+
+- **Anticipatory acceleration reduction** reduces the positive acceleration ceiling when approaching a slower/braking lead. Maximum strength can reach a zero ceiling; this does not guarantee physical coasting.
+- **High-speed approach headroom** adds up to 0.5 seconds of speed-dependent comfort headroom, tapering at low speeds. It uses the larger of this and existing Carrot headroom.
+- **Low-speed stopping smoothness** increases jerk cost up to 1.5 times during a mild, well-spaced low-speed approach. Close/rapidly closing leads or stronger braking use the original cost.
+- **Stop-go acceleration calmness** reduces the positive acceleration ceiling by up to half when following a nearby slow lead.
+
+Zero disables each added preference. The existing StopDistanceCarrot remains the standstill gap. Physical obstacles, braking bounds, FCW, standstill hold and Panda permissions are unchanged. Pedal override, inactive control, lane changes, experimental mode and invalid/stale radar suspend the feature. Stopping comfort and clearance still require vehicle validation.

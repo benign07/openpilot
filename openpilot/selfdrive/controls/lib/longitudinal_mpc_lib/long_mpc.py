@@ -12,7 +12,7 @@ from openpilot.selfdrive.controls.radar_constants import LEAD_ACCEL_TAU
 from openpilot.selfdrive.carrot.traffic_stop import get_traffic_stop_distance_adjust, get_traffic_stop_obstacle_distance
 from openpilot.selfdrive.controls.lib.longitudinal_preview import LEAD_ACCEL_MIN_TRACK_FRAMES, LeadAccelResponseState, get_lead_accel_mpc_request
 from openpilot.selfdrive.controls.lib.longitudinal_cutout import cutout_obstacle_relief
-from openpilot.selfdrive.controls.lib.longitudinal_gap_recovery import LeadGapState, gap_reference, displayed_follow_distance
+from openpilot.selfdrive.controls.lib.longitudinal_gap_recovery import MAX_TOTAL_TF, LeadGapState, gap_reference, displayed_follow_distance
 from openpilot.selfdrive.carrot.radar_motion.lane_change_gap import LaneChangeGapPlan
 
 if __name__ == '__main__':  # generating code
@@ -401,12 +401,14 @@ class LongitudinalMpc:
              lead_gap_enabled=False,
              lead_track_frames=(0, 0),
              measured_a_ego=0.0,
-             cutout_relief_enabled=False):
+             cutout_relief_enabled=False,
+             approach_extra_tf=0.0,
+             approach_jerk_factor=1.0):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
-    jerk_factor = carrot.jerk_factor
+    jerk_factor = carrot.jerk_factor * float(np.clip(approach_jerk_factor, 1.0, 1.5))
 
     lead_xv_0, lead_v_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1, lead_v_1 = self.process_lead(radarstate.leadTwo)
@@ -565,6 +567,13 @@ class LongitudinalMpc:
     # Display the current following reference, including comfort headroom and
     # any already-authorized cutout/lane-change relief. This does not select
     # control leads or modify solver obstacles.
+    if mode == 'acc' and not reset_state and approach_extra_tf > 0.0:
+      for index, lead in enumerate((radarstate.leadOne, radarstate.leadTwo)):
+        if lead.status and lead.radar and lead.radarTrackId >= 0:
+          # Use the larger reference; do not stack the new and stock margins.
+          self.lead_gap_margins[:, index] = np.maximum(
+            self.lead_gap_margins[:, index], gap_v * min(float(np.clip(approach_extra_tf, 0.0, 0.5)), max(0.0, MAX_TOTAL_TF - t_follow)),
+          )
     self.desired_distance = displayed_follow_distance(
       self.base_desired_distances, np.array([lead_0_obstacle[0], lead_1_obstacle[0]]),
       x_obstacles[0, :2], self.lead_gap_margins[0],
