@@ -1,0 +1,33 @@
+{
+  "source_patch_commit": "3bb3d84c1f2eaa53b66b9610fdaad195339dd5a1",
+  "additional_device_only": true,
+  "deployment": "Separate verified parked SSH native install; source-only HUD OTA unsupported",
+  "six_file_hashes_verified": true,
+  "native_params_keys_verified": 5,
+  "reboot_verified": true,
+  "vehicle_fingerprint": "HYUNDAI_PALISADE_LX3_HEV",
+  "matching_panda_firmware": true,
+  "protected_control_mdps_panda_sources_unchanged": true,
+  "hud_catalog_and_values_verified": true,
+  "hud_menu_path": [
+    [
+      "주행 제어",
+      "크루즈·차간",
+      "차간거리"
+    ]
+  ],
+  "settings": {
+    "ApproachComfortEnabled": true,
+    "ApproachCoastStrength": 40,
+    "ApproachBrakeMargin": 40,
+    "ApproachStopSmooth": 40,
+    "ApproachTrafficCalm": 40
+  },
+  "postboot_passive_sample_count": 59,
+  "displayed_alerts_during_sample": [],
+  "road_comfort_verified": false,
+  "phone_ui_test_performed": false,
+  "diagnostic_and_active_recording_growth_observed": true,
+  "whole_trip_retention_verified": false,
+  "previous_clone_rollback_preserved": true
+}

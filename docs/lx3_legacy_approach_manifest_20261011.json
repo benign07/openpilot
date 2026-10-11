@@ -40,7 +40,7 @@
     "native_mpc_cases": 5,
     "native_cycles_per_case": 60,
     "road_comfort_qualified": false,
-    "vehicle_installation": "Not installed; fresh preflight observed drive and21.55m/s, aborted before manager stop/live writes",
+    "vehicle_installation": "Separate parked SSH native installation/reboot and vehicle services/HUD verified; moving road comfort pending",
     "github_full_build": "Not run for this review overlay; target Params native build and offline native tests are separate evidence"
   }
 }

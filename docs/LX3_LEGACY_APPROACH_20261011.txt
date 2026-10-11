@@ -16,8 +16,12 @@ deploy this branch with a whole-tree git pull onto another version.
 Six changed deployment files include a new Python module and native Params
 registry. The existing HUD source-only OTA cannot deploy these additions or
 the native binary. A separately verified parked native installation is needed.
-Feature catalogue defaults OFF; all four strengths default40. Installation
-has not occurred: fresh final guard saw D and21.55m/s and stopped before writes.
+Feature catalogue defaults OFF; all four strengths default40. Additional
+vehicle installation completed after fresh continuous P0/inactive sampling.
+Six file hashes, native Params keys, reboot, vehicle CAN/model/Panda and HUD
+catalog/values were verified. Feature ON; four strengths40. Original device
+unchanged. Passive startup verification is not road comfort qualification.
+The separate deployment receipt records the scope without private logs.
 Preserve the exact original-clone source/runtime/Params rollback, not the
 previous modern experimental device image. Do not copy camera calibration.
 
