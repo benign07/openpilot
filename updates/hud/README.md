@@ -36,3 +36,8 @@ GitHub에는 소스, 공개 가능한 배포 명세·서명된 bundle, 변경 �
 ## Latest verified publication
 
 [palisade-20261006-01](releases/palisade-20261006-01.md) / sequence 4. The source branch alone is not an OTA release. Publish the signed bundle, pinned index, change notes and verification record together. Application remains parked and hash-bound.
+
+
+## Latest verified publication
+
+[lx3-approach-preview-20261011-01](releases/lx3-approach-preview-20261011-01.md) / sequence 5. The source branch alone is not an OTA release. Publish the signed bundle, pinned index, change notes and verification record together. Application remains parked and hash-bound.
