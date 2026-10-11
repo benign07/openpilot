@@ -237,6 +237,7 @@ class LongitudinalPlanner:
       # Use the last applied base gap; MPC refreshes it later in this cycle.
       base_tf=max(0.3, carrot.t_follow_last), stop_distance=carrot.stop_distance,
       maximum_accel=accel_limits_turns[1], comfort_brake=carrot.comfort_brake,
+      cruise_speed=v_cruise, planned_accel=self.a_desired,
     )
     accel_limits_turns[1] = apply_approach_ceiling(accel_limits_turns[1], self.a_desired, approach_request)
 

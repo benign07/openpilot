@@ -52,7 +52,7 @@ class ApproachComfort:
     self.smooth_ready_time = 0.0
     self.smooth_engaged = False
 
-  def update(self, settings, leads, *, eligible, v_ego, a_ego, base_tf, stop_distance, maximum_accel, comfort_brake=2.5):
+  def update(self, settings, leads, *, eligible, v_ego, a_ego, base_tf, stop_distance, maximum_accel, comfort_brake=2.5, cruise_speed=None, planned_accel=None):
     values = (v_ego, a_ego, base_tf, stop_distance, maximum_accel, comfort_brake)
     if not settings.enabled or not eligible or not all(math.isfinite(x) for x in values):
       self.reset()
@@ -87,15 +87,29 @@ class ApproachComfort:
       closing = max(0.0, -vr)
       # Only slow/braking leads which we will approach within a bounded horizon.
       # Far braking traffic does not suppress acceleration indefinitely.
-      horizon = 4.0
+      # A small additional lookahead is controlled by the existing early
+      # braking preference: 4.2 s at 40, bounded at 4.5 s at 100.
+      horizon = 4.0 + 0.5 * clamp(settings.margin, 0, 100) / 100.0
       lead_decel = clamp(-al, 0.0, 3.0)
       projected_closing = closing + min(vl, lead_decel * horizon) * 0.5
+      # Preview actual positive planning intent, never the global capability.
+      # Equal-speed cruising at its target and a launch from rest must not
+      # acquire an extra coasting constraint just because acceleration exists.
+      preview_accel = 0.0
+      if cruise_speed is not None and planned_accel is not None and math.isfinite(cruise_speed) and math.isfinite(planned_accel):
+        slow_to_target = clamp((cruise_speed - vl - 0.5) / 1.0, 0.0, 1.0)
+        opening_fade = clamp((1.0 - vr) / 0.5, 0.0, 1.0)
+        moving_fade = clamp((v_ego - 0.5) / 1.0, 0.0, 1.0)
+        preview_accel = clamp(planned_accel, 0.0, max(0.0, maximum_accel)) * slow_to_target * opening_fade * moving_fade
+      preview_closing = preview_accel * horizon
       reference = max(1.0, stop_distance + v_ego * base_tf +
                       max(0.0, (v_ego * v_ego - vl * vl) / (2.0 * comfort_brake)))
-      window = reference + closing * horizon + min(vl * horizon, lead_decel * horizon * horizon * 0.5)
-      cue = max(clamp((closing - 0.3) / 2.0, 0.0, 1.0), clamp((lead_decel - 0.2) / 0.8, 0.0, 1.0))
+      window = (reference + closing * horizon + 0.5 * preview_accel * horizon * horizon +
+                min(vl * horizon, lead_decel * horizon * horizon * 0.5))
+      cue = max(clamp((closing - 0.3) / 2.0, 0.0, 1.0), clamp((lead_decel - 0.2) / 0.8, 0.0, 1.0),
+                clamp((closing + preview_closing - 0.3) / 2.0, 0.0, 1.0) if preview_accel > 0.0 else 0.0)
       # Do not respond to a much faster lead merely because it is decelerating.
-      cue *= clamp((projected_closing - max(0.0, vr)) / 1.0, 0.0, 1.0)
+      cue *= clamp((projected_closing + preview_closing - max(0.0, vr)) / 1.0, 0.0, 1.0)
       proximity = clamp((window - d) / max(10.0, window - reference), 0.0, 1.0)
       risk = max(risk, cue * proximity)
       if v_ego < 6.0 and vl < 6.0 and vr <= 0.5 and d < reference + 10.0:
@@ -124,10 +138,14 @@ class ApproachComfort:
     self.extra_tf += clamp(target_tf - self.extra_tf, -0.08 * self.dt, 0.10 * self.dt)
     for name, target in (("coast_weight", risk), ("traffic_weight", traffic)):
       old = getattr(self, name)
-      release_rate = 1.0 if name == 'traffic_weight' and all(vr > 0.5 for _, _, _, vr, _ in valid) else 0.25
+      release_rate = 0.25 + 0.75 * min(clamp((vr - 0.5) / 0.5, 0.0, 1.0) for _, _, _, vr, _ in valid)
       setattr(self, name, old + clamp(target - old, -release_rate * self.dt, 1.0 * self.dt))
 
-    reduction = max(self.coast_weight * clamp(settings.coast, 0, 100) / 100.0,
+    # The strength adjusts how early a confirmed approach can reach a zero
+    # positive ceiling. At 40, a strong cue (at least 5/6) reaches zero;
+    # it never becomes a negative brake command. MPC entry feasibility and
+    # all existing negative braking bounds remain the planner's responsibility.
+    reduction = max(clamp(self.coast_weight * clamp(settings.coast, 0, 100) * 0.03, 0.0, 1.0),
                     self.traffic_weight * clamp(settings.traffic, 0, 100) * 0.005)
     ceiling = None if reduction <= 0.0 else max(0.0, maximum_accel) * (1.0 - reduction)
     # Zero upper acceleration means no acceleration request, not guaranteed
