@@ -1,0 +1,79 @@
+LX3 legacy clone longitudinal approach overlay — 2026-10-11
+
+Problem and behavior
+The deployed legacy LX3 clone has independent mode, following-time, radar,
+MPC cost and Hyundai jerk policies. This optional overlay requests earlier
+positive-acceleration reduction and a bounded radar-lead comfort margin, and
+conditionally increases low-speed jerk/previous-acceleration-change costs.
+It does not replace the legacy control-authority, MDPS or lateral paths.
+
+Installation prerequisite
+Review source overlay against the exact before hashes in the manifest.
+Git base6a3d7783 alone is NOT the complete deployed original clone: that
+installation includes independently reviewed manual-steering/diagnostic
+overlays. The registry/catalog preserve those installed options. Do not
+deploy this branch with a whole-tree git pull onto another version.
+Six changed deployment files include a new Python module and native Params
+registry. The existing HUD source-only OTA cannot deploy these additions or
+the native binary. A separately verified parked native installation is needed.
+Feature catalogue defaults OFF; all four strengths default40. Installation
+has not occurred: fresh final guard saw D and21.55m/s and stopped before writes.
+Preserve the exact original-clone source/runtime/Params rollback, not the
+previous modern experimental device image. Do not copy camera calibration.
+
+Settings and interactions
+ApproachComfortEnabled: LX3 openpilot-long ACC only. OFF is the original
+calculation. Invalid/stale radar, pedal override, reset/soft hold, force-decel,
+model lane-change start/finish and blended mode exclude the modifier.
+ApproachCoastStrength: lowers the existing positive acceleration ceiling
+after legacy mode/curve limits. A zero ceiling does not guarantee physical
+coasting on every grade. Existing negative ceilings are never relaxed.
+ApproachBrakeMargin: adds up to0.5s speed-dependent soft-reference headroom
+above legacy dynamic/deceleration TF, with no additional margin above a
+combined2.5s target. It does not clip a preexisting baseTF above2.5s. Rise0.1s/s,
+release0.08s/s. These are additional-margin rates, not a bound on the sum of
+all independent legacy TF changes. The separate legacy TF policies can overlap.
+ApproachStopSmooth: up to1.5x both jerk and previous-acceleration-change costs
+only during a mild low-speed well-spaced approach. At strength40 max1.2x.
+Keeps the existing mode/personality base factor; this is a cost preference,
+not an actuator jerk limit or forced brake release. Threat/strong braking
+remove the extra multiplier. DynamicTF can still favor agile departure.
+ApproachTrafficCalm: up to50percent lower positive acceleration ceiling for
+nearby slow traffic below~22km/h. Uses max with approach reduction, not the
+sum. Auto Safe mode and lower legacy acceleration curves can compound it.
+
+Other settings
+Global modes1Eco/.9,2Safe/.8,3Normal/1,4High/1.2 change acceleration limits.
+Eco/Safe also scale comfortBrake and base TF; TF is clipped to configured
+gap range, so a mode name is not a promise of longer following distance.
+Safe and longitudinal personality also affect base jerk costs. High suppresses
+software trafficState. Automatic mode can select Safe/Normal by congestion.
+RadarReactionFactor shapes aLeadTau prediction; it does not directly filter
+the raw aLeadK cue used by this helper in this legacy version. RadarLatFactor
+affects lead selection. radarState distances are processed; legacy leadTwo
+can already have a deliberate distance offset. Keep these settings fixed for
+the first comparison. LateralTorqueFriction and LatMpcJerkCost are steering
+settings, not longitudinal smoothness; this LX3 uses the angle controller.
+StopDistanceCarrot, StoppingAccel/hold, longitudinal PID and actuator delay
+are retained. Plan changes can feed back through legacy deceleration TF;
+unchanged TF policy does not imply all ON/OFF TF values are identical.
+
+Validation
+Actual target Params build succeeded. Exact native acados libraries retained.
+5cases x60cycles verified OFF exact and unchanged physical constraints under
+identical inputs, cost delivery to native, blended/reset paths and secondary
+radar-only display regression. Actual legacy planner checks covered baseline,
+OFF, ON, pedals, lane change, stale/invalid input, long-off and unsupported car.
+4modes x4personalities x3TF scenarios=48 comparisons: OFF exact, ON finite
+solver success, unchanged braking and stop parameters, positive ceiling bound.
+Legacy TF feedback differs by up to~.00194s in this fixed-input test grid;
+initial overly broad TF-equality assertions failed and were corrected, not
+represented as a production TF bug. Private failure logs preserved.
+20stdlib helper tests pass, including rate and close-lead exit checks.
+Actual Claude Fable5.1/high same-session read-only cross-review completed.
+The native tests were executed separately, not by Claude. Rate alignment and
+primary-display correction were adopted; no global mode/PID/radar defaults
+were changed. Existing out-of-range catalogue defaults are identified in the
+private option audit, not silently used to change actual stored settings.
+No complete repository build, generalized Panda suite or road comfort,
+stopping-performance or moving closed-loop qualification is claimed.

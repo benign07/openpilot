@@ -361,7 +361,7 @@ class LongitudinalMpc:
     self.cruise_min_a = min_a
     self.max_a = max_a
 
-  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
+  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, approach_extra_tf=0.0):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -454,6 +454,22 @@ class LongitudinalMpc:
     else:
       raise NotImplementedError(f'Planner mode {self.mode} not recognized in planner update')
 
+    # Comfort target only: preserve physical x_obstacles and all constraint params.
+    self.yref[:,0] = 0.0
+    if mode == 'acc' and not reset_state and approach_extra_tf > 0.0:
+      gap_v = np.maximum(0.0, self.x_sol[:,1] + v_ego - self.x_sol[0,1])
+      preferred = x_obstacles.copy()
+      extra = min(float(np.clip(approach_extra_tf, 0.0, 0.5)), max(0.0, 2.5 - t_follow))
+      for index, lead in enumerate((radarstate.leadOne, radarstate.leadTwo)):
+        if lead.status and lead.radar and lead.radarTrackId >= 0:
+          preferred[:,index] -= gap_v * extra
+      shift = np.maximum(0.0, np.min(x_obstacles, axis=1) - np.min(preferred, axis=1))
+      self.yref[:,0] = shift / (gap_v + 10.0)
+      # desired_distance describes leadOne; do not inflate its display for a
+      # vision-only primary when only the secondary radar lead gets headroom.
+      primary = radarstate.leadOne
+      if primary.status and primary.radar and primary.radarTrackId >= 0:
+        self.desired_distance += float(shift[0])
     self.yref[:,1] = x
     self.yref[:,2] = v
     self.yref[:,3] = a

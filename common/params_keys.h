@@ -290,6 +290,11 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     {"DynamicTFollow", {PERSISTENT, INT, "0"}},
     {"DynamicTFollowLC", {PERSISTENT, INT, "100"}},
+    {"ApproachComfortEnabled", {PERSISTENT, BOOL, "0"}},
+    {"ApproachCoastStrength", {PERSISTENT, INT, "40"}},
+    {"ApproachBrakeMargin", {PERSISTENT, INT, "40"}},
+    {"ApproachStopSmooth", {PERSISTENT, INT, "40"}},
+    {"ApproachTrafficCalm", {PERSISTENT, INT, "40"}},
     {"TFollowDecelBoost", {PERSISTENT, INT, "10"}},
     {"EnableSpeedTF", {PERSISTENT, INT, "0"}},
     {"AChangeCostStarting", {PERSISTENT, INT, "10"}},
@@ -301,6 +306,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     {"AdjustLaneOffset", {PERSISTENT, INT, "0"}},
     {"LaneChangeNeedTorque", {PERSISTENT, INT, "0"}},
+    {"ManualSteerWithBlinker", {PERSISTENT, BOOL, "0"}},
     {"LaneChangeDelay", {PERSISTENT, INT, "0"}},
     {"LaneChangeBsd", {PERSISTENT, INT, "0"}},
     {"LaneLineCheck", {PERSISTENT, INT, "0"}},

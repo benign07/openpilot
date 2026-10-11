@@ -15,6 +15,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
+from openpilot.selfdrive.controls.lib.approach_comfort import ApproachComfort, ApproachSettings, apply_approach_ceiling
 
 
 LON_MPC_STEP = 0.2  # first step is 0.2s
@@ -108,6 +109,10 @@ class LongitudinalPlanner:
     self.v_cruise_kph = 0.0
 
     self.params = Params()
+    self.approach = ApproachComfort(dt)
+    self.approach_settings = ApproachSettings()
+    self.approach_param_time = 1.0
+    self.approach_supported = str(CP.carFingerprint) == 'HYUNDAI_PALISADE_LX3_HEV'
 
   @staticmethod
   def parse_model(model_msg):
@@ -130,6 +135,10 @@ class LongitudinalPlanner:
     return x, v, a, j, throttle_prob
 
   def update(self, sm, carrot):
+    self.approach_param_time += self.dt
+    if self.approach_supported and self.approach_param_time >= 1.0:
+      self.approach_param_time = 0.0
+      self.approach_settings = ApproachSettings.read(self.params)
     self.mpc.mode = 'blended' if sm['selfdriveState'].experimentalMode else 'acc'
 
     if len(sm['carControl'].orientationNED) == 3:
@@ -213,10 +222,28 @@ class LongitudinalPlanner:
     accel_limits_turns[0] = min(accel_limits_turns[0], self.a_desired + 0.05)
     accel_limits_turns[1] = max(accel_limits_turns[1], self.a_desired - 0.05)
 
-    self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality, jerk_factor = carrot.jerk_factor_apply, a_change_cost_starting = carrot.aChangeCostStarting)
+    approach_request = self.approach.update(
+      self.approach_settings, (sm['radarState'].leadOne, sm['radarState'].leadTwo),
+      eligible=(
+        self.approach_supported and self.CP.openpilotLongitudinalControl
+        and self.mpc.mode == 'acc' and not reset_state
+        and not sm['carState'].gasPressed and not sm['carState'].brakePressed
+        and not force_slow_decel and str(sm['modelV2'].meta.laneChangeState) not in ('laneChangeStarting', 'laneChangeFinishing')
+        and sm.valid['radarState'] and sm.alive['radarState']
+        and sm.valid['carState'] and sm.alive['carState']
+        and abs(int(sm.logMonoTime['modelV2']) - int(sm.logMonoTime['radarState'])) <= 200_000_000
+      ),
+      v_ego=v_ego, a_ego=sm['carState'].aEgo,
+      # Use the last applied base gap; MPC refreshes it later in this cycle.
+      base_tf=max(0.3, carrot.t_follow_last), stop_distance=carrot.stop_distance,
+      maximum_accel=accel_limits_turns[1], comfort_brake=carrot.comfort_brake,
+    )
+    accel_limits_turns[1] = apply_approach_ceiling(accel_limits_turns[1], self.a_desired, approach_request)
+
+    self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality, jerk_factor = carrot.jerk_factor_apply * approach_request.jerk_factor, a_change_cost_starting = carrot.aChangeCostStarting)
     self.mpc.set_accel_limits(accel_limits_turns[0], accel_limits_turns[1])
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(carrot, reset_state, sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality)
+    self.mpc.update(carrot, reset_state, sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality, approach_extra_tf=approach_request.extra_tf)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)

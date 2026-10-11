@@ -1,0 +1,46 @@
+{
+  "scope": "Legacy clone longitudinal preferences only; separate native Params deployment required",
+  "base_head": "6a3d7783b50490370e4a58f3f9a9ce683fd94845",
+  "files": {
+    "common/params_keys.h": {
+      "before": "07debde2b9648c3fe97af0077e407fe56babf5bacaf9d97c8b8dd570a3b3003c",
+      "after": "2526940a286f55aaacb549cc3551c803b79df8d9cc2e8314da1de899c2014c43"
+    },
+    "selfdrive/carrot_settings.json": {
+      "before": "b0bbd5acf822fd7a13011bb3b273aa16a2f8a3fd23c3c35d59be84c3e6a473e1",
+      "after": "7a8d207f4563474ef4fdcf91d76f6fb416a87736b34a532b6ed6a6e08993bd1c"
+    },
+    "selfdrive/controls/lib/approach_comfort.py": {
+      "before": null,
+      "after": "51db77c0cf1c3d17f2882ee04e6cbc3c95f823d035d62bf241daaa6fc22ff27b"
+    },
+    "selfdrive/controls/lib/longitudinal_planner.py": {
+      "before": "4125b5eedcdd810f9277ca3eeaedf4b39c1cc89fc489c2fe911ca74f75ce4e53",
+      "after": "8c20c793665022a7c0fb9c80df817fc036386e0752f4b233d120691698a9104d"
+    },
+    "selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py": {
+      "before": "3a78570eca8f6b65b2ee2d05131d6aafbf183723f0712e2403789e6c16d0e891",
+      "after": "0a93348ce7abdd8ed79964129d81a08cdf92b998e6fc6575bfbec9b97432e929"
+    }
+  },
+  "native_params": {
+    "before": "d34fd68010bb0cd3ec7dd1112c928e98fae6a0aa70216f1d8b93d5dd0e2616cc",
+    "after": "75715073d8a200055c4921bcbfd2ca7472747b65e47ea1e8165c4060857795ee",
+    "build_scope": "Target native common/params_pyx.so only; native MPC and Panda unchanged"
+  },
+  "verification": {
+    "disabled_full_planner_exact": true,
+    "costs_passed_to_native_setter_verified": true,
+    "secondary_only_display_unchanged": true,
+    "unsupported_full_planner_exact": true,
+    "native_mpc_unchanged": true,
+    "legacy_tf_policy_unchanged_not_all_feedback_tf_values": true,
+    "mode_tf_combinations": 48,
+    "helper_unit_cases": 20,
+    "native_mpc_cases": 5,
+    "native_cycles_per_case": 60,
+    "road_comfort_qualified": false,
+    "vehicle_installation": "Not installed; fresh preflight observed drive and21.55m/s, aborted before manager stop/live writes",
+    "github_full_build": "Not run for this review overlay; target Params native build and offline native tests are separate evidence"
+  }
+}
