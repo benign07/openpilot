@@ -9,10 +9,38 @@
 
 #include "cereal/messaging/messaging.h"
 #include "common/swaglog.h"
+#include "common/timing.h"
 #include "common/util.h"
 
 const bool PANDAD_MAXOUT = getenv("PANDAD_MAXOUT") != nullptr;
 static_assert(sizeof(lx3_status_t) == LX3_STATUS_SIZE, "paired status layout");
+static_assert(sizeof(spi_diagnostics_t) == SPI_DIAGNOSTICS_SIZE, "optional SPI diagnostic layout");
+
+void Panda::report_spi_mcu_diagnostics() {
+  const double now = millis_since_boot();
+  if (!lx3_guard_ || !spi_mcu_diagnostics_supported_ || now - last_spi_mcu_report_ms_ < 5000.0) return;
+  last_spi_mcu_report_ms_ = now;
+  spi_diagnostics_t s{};
+  const int n = handle->control_read(SPI_DIAGNOSTICS_REQUEST, SPI_DIAGNOSTICS_VERSION, 0,
+    reinterpret_cast<unsigned char*>(&s), sizeof(s), 20);
+  if (n < 0) {
+    LOGW("SPI_MCU_STATS read_failed=%d", n);
+    return;
+  }
+  if (n != static_cast<int>(sizeof(s)) || s.version != SPI_DIAGNOSTICS_VERSION || s.size != sizeof(s) ||
+      s.reserved2 != 0U) {
+    // Older firmware returns an empty response for an unknown request. This
+    // optional diagnostic never changes authority or pandaStates validity.
+    spi_mcu_diagnostics_supported_ = false;
+    LOGW("SPI_MCU_STATS unsupported_size=%d version=%u", n, s.version);
+    return;
+  }
+  LOGW("SPI_MCU_STATS mono_ms=%.0f version=%u last_rx_state=%u last_tx_state=%u legacy=%u header_ok=%u data_ok=%u header_checksum_bad=%u header_sync_bad=%u data_checksum_bad=%u unexpected_rx_state=%u unexpected_tx_state=%u can_backpressure_nack=%u other_nack=%u version_requests=%u bad_length=%u fill11=%u fill13=%u fill14=%u",
+    now, s.version, s.last_unexpected_rx_state, s.last_unexpected_tx_state, s.legacy_checksum_errors, s.header_ok, s.data_ok, s.header_checksum_bad,
+    s.header_sync_bad, s.data_checksum_bad, s.unexpected_rx_state, s.unexpected_tx_state,
+    s.can_backpressure_nack, s.other_nack, s.version_requests, s.bad_length,
+    s.header_fill_11, s.header_fill_13, s.header_fill_14);
+}
 
 Panda::Panda(std::string serial) {
   handle = std::make_unique<PandaSpiHandle>(serial);
@@ -64,6 +92,7 @@ void Panda::set_safety_model(cereal::CarParams::SafetyModel safety_model, uint16
       return;
     }
     lx3_guard_ = true;
+    spi_mcu_diagnostics_supported_ = true;
   }
 }
 
@@ -174,6 +203,7 @@ void Panda::set_ir_pwr(uint16_t ir_pwr) {
 std::optional<health_t> Panda::get_state() {
   health_t health {0};
   int err = handle->control_read(0xd2, 0, 0, (unsigned char*)&health, sizeof(health));
+  if (err == static_cast<int>(sizeof(health))) report_spi_mcu_diagnostics();
   return err >= 0 ? std::make_optional(health) : std::nullopt;
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "spi_declarations.h"
+#include "spi_diagnostics.h"
 #include "crc.h"
 
 #ifdef STM32H7
@@ -15,6 +16,10 @@ uint8_t spi_buf_tx[SPI_BUF_SIZE];
 #endif
 
 uint16_t spi_checksum_error_count = 0;
+static spi_diagnostics_t spi_diagnostics = {
+  .last_unexpected_rx_state = SPI_DIAGNOSTICS_STATE_UNKNOWN,
+  .last_unexpected_tx_state = SPI_DIAGNOSTICS_STATE_UNKNOWN,
+};
 
 #if defined(ENABLE_SPI) || defined(BOOTSTUB)
 static uint8_t spi_state = SPI_STATE_HEADER;
@@ -99,11 +104,31 @@ void spi_rx_done(void) {
   if (memcmp(spi_buf_rx, version_text, 7) == 0) {
     // VERSION is a valid special request without the normal XOR trailer.
     checksum_valid = true;
+    spi_diagnostics_increment(&spi_diagnostics.version_requests);
     response_len = spi_version_packet(spi_buf_tx);
     next_rx_state = SPI_STATE_HEADER_NACK;;
   } else if (spi_state == SPI_STATE_HEADER) {
     checksum_valid = validate_checksum(spi_buf_rx, SPI_HEADER_SIZE);
-    if ((spi_buf_rx[0] == SPI_SYNC_BYTE) && checksum_valid) {
+    if (!checksum_valid) spi_diagnostics_increment(&spi_diagnostics.header_checksum_bad);
+    if (spi_buf_rx[0] != SPI_SYNC_BYTE) spi_diagnostics_increment(&spi_diagnostics.header_sync_bad);
+    // ACK polls and recovery clocks are not normal headers. Count their exact
+    // fill patterns without excusing any checksum/sync failure above.
+    bool fill_11 = true, fill_13 = true, fill_14 = true;
+    for (uint16_t i = 0U; i < SPI_HEADER_SIZE; i++) {
+      fill_11 = fill_11 && (spi_buf_rx[i] == 0x11U);
+      fill_13 = fill_13 && (spi_buf_rx[i] == 0x13U);
+      fill_14 = fill_14 && (spi_buf_rx[i] == 0x14U);
+    }
+    if (fill_11) spi_diagnostics_increment(&spi_diagnostics.header_fill_11);
+    if (fill_13) spi_diagnostics_increment(&spi_diagnostics.header_fill_13);
+    if (fill_14) spi_diagnostics_increment(&spi_diagnostics.header_fill_14);
+    const bool lengths_valid = (spi_data_len_mosi <= (SPI_BUF_SIZE - SPI_HEADER_SIZE - 1U)) &&
+                               (spi_data_len_miso <= (SPI_BUF_SIZE - 4U));
+    if (checksum_valid && (spi_buf_rx[0] == SPI_SYNC_BYTE) && !lengths_valid) {
+      spi_diagnostics_increment(&spi_diagnostics.bad_length);
+    }
+    if ((spi_buf_rx[0] == SPI_SYNC_BYTE) && checksum_valid && lengths_valid) {
+      spi_diagnostics_increment(&spi_diagnostics.header_ok);
       // response: ACK and start receiving data portion
       spi_buf_tx[0] = SPI_HACK;
       next_rx_state = SPI_STATE_HEADER_ACK;
@@ -122,6 +147,7 @@ void spi_rx_done(void) {
     bool response_ack = false;
     checksum_valid = validate_checksum(&(spi_buf_rx[SPI_HEADER_SIZE]), spi_data_len_mosi + 1U);
     if (checksum_valid) {
+      spi_diagnostics_increment(&spi_diagnostics.data_ok);
       if (spi_endpoint == 0U) {
         if (spi_data_len_mosi >= sizeof(ControlPacket_t)) {
           ControlPacket_t ctrl = {0};
@@ -148,6 +174,7 @@ void spi_rx_done(void) {
             comms_can_write(&spi_buf_rx[SPI_HEADER_SIZE], spi_data_len_mosi);
             response_ack = true;
           } else {
+            spi_diagnostics_increment(&spi_diagnostics.can_backpressure_nack);
             response_ack = false;
             print("SPI: CAN NACK\n");
           }
@@ -161,7 +188,11 @@ void spi_rx_done(void) {
       } else {
         print("SPI: unexpected endpoint"); puth(spi_endpoint); print("\n");
       }
+      if (!response_ack && !((spi_endpoint == 3U) && (spi_data_len_mosi > 0U))) {
+        spi_diagnostics_increment(&spi_diagnostics.other_nack);
+      }
     } else {
+      spi_diagnostics_increment(&spi_diagnostics.data_checksum_bad);
       // Checksum was incorrect
       response_ack = false;
       #ifdef DEBUG_SPI
@@ -195,6 +226,8 @@ void spi_rx_done(void) {
       next_rx_state = SPI_STATE_DATA_TX;
     }
   } else {
+    spi_diagnostics_increment(&spi_diagnostics.unexpected_rx_state);
+    spi_diagnostics.last_unexpected_rx_state = spi_state;
     print("SPI: RX unexpected state: "); puth(spi_state); print("\n");
   }
 
@@ -227,6 +260,8 @@ void spi_tx_done(bool reset) {
     spi_state = SPI_STATE_HEADER;
     llspi_mosi_dma(spi_buf_rx, SPI_HEADER_SIZE);
   } else {
+    spi_diagnostics_increment(&spi_diagnostics.unexpected_tx_state);
+    spi_diagnostics.last_unexpected_tx_state = spi_state;
     spi_state = SPI_STATE_HEADER;
     llspi_mosi_dma(spi_buf_rx, SPI_HEADER_SIZE);
     print("SPI: TX unexpected state: "); puth(spi_state); print("\n");

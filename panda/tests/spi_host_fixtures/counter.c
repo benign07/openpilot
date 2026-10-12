@@ -46,5 +46,32 @@ int main(void){
  assert(spi_checksum_error_count==2 && spi_buf_tx[0]==SPI_NACK);
  printf("BAD_DATA_CHECKSUM counter=2 PASS\n");
  spi_checksum_error_count=UINT16_MAX;spi_state=SPI_STATE_HEADER;memcpy(spi_buf_rx,"VERSION",7);spi_rx_done();assert(spi_checksum_error_count==UINT16_MAX);
- printf("COUNTER_SATURATION PASS\n");return 0;
+ printf("COUNTER_SATURATION PASS\n");
+ assert(sizeof(spi_diagnostics_t)==SPI_DIAGNOSTICS_SIZE);
+ assert(spi_diagnostics.version_requests==2 && spi_diagnostics.header_checksum_bad==1 && spi_diagnostics.data_checksum_bad==1);
+ assert(spi_diagnostics.header_sync_bad==0 && spi_diagnostics.unexpected_rx_state==0);
+ // Wrong sync with a valid XOR is its own cause, not a checksum increment.
+ spi_checksum_error_count=0;valid_header();spi_buf_rx[0]^=1;spi_buf_rx[6]^=1;spi_rx_done();
+ assert(spi_checksum_error_count==0 && spi_diagnostics.header_sync_bad==1 && spi_diagnostics.header_checksum_bad==1);
+ // Recovery/ACK filler classifications overlap checksum/sync counts intentionally.
+ const uint8_t fills[]={0x11,0x13,0x14};
+ for(unsigned j=0;j<3;j++){spi_state=SPI_STATE_HEADER;memset(spi_buf_rx,fills[j],SPI_HEADER_SIZE);spi_rx_done();}
+ assert(spi_diagnostics.header_fill_11==1 && spi_diagnostics.header_fill_13==1 && spi_diagnostics.header_fill_14==1);
+ assert(spi_checksum_error_count==3 && spi_diagnostics.header_checksum_bad==4);
+ // Valid CAN backpressure and an unsupported endpoint are not bad checksums.
+ valid_header();spi_buf_rx[1]=3;spi_buf_rx[2]=1;spi_buf_rx[6]=SPI_CHECKSUM_START;
+ for(unsigned i=0;i<6;i++)spi_buf_rx[6]^=spi_buf_rx[i];
+ spi_rx_done();spi_state=SPI_STATE_DATA_RX;spi_buf_rx[7]=0;spi_buf_rx[8]=SPI_CHECKSUM_START;spi_can_tx_ready=false;spi_rx_done();
+ assert(spi_diagnostics.can_backpressure_nack==1 && spi_checksum_error_count==3);
+ spi_buf_rx[1]=0xFE;spi_state=SPI_STATE_DATA_RX;spi_rx_done();
+ assert(spi_diagnostics.other_nack==1 && spi_checksum_error_count==3);
+ spi_state=SPI_STATE_HEADER_ACK;spi_rx_done();
+ assert(spi_diagnostics.unexpected_rx_state==1 && spi_checksum_error_count==4);
+ assert(spi_diagnostics.last_unexpected_rx_state==SPI_STATE_HEADER_ACK);
+ spi_state=SPI_STATE_DATA_RX;spi_tx_done(false);
+ assert(spi_diagnostics.unexpected_tx_state==1 && spi_checksum_error_count==4);
+ assert(spi_diagnostics.last_unexpected_tx_state==SPI_STATE_DATA_RX);
+ spi_diagnostics.header_checksum_bad=UINT32_MAX;valid_header();spi_buf_rx[6]^=1;spi_rx_done();
+ assert(spi_diagnostics.header_checksum_bad==UINT32_MAX);
+ printf("CAUSE_COUNTERS checksum/sync/state/backpressure/other/VERSION/filler/saturation PASS\n");return 0;
 }

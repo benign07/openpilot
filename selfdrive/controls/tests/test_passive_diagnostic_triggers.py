@@ -65,6 +65,53 @@ def test_transport_storm_is_bounded_and_does_not_use_button_quota():
   assert r.trace and r.trace_count-r.diagnostic_trace_count==1
 
 
+def test_transport_storm_cannot_exhaust_steering_fault_capture():
+  r,s=recorder()
+  r.diagnostic_trace_count=r.DIAGNOSTIC_TRACE_MAX_PER_TRIP
+  r.last_diagnostic_trace=699.
+  r.diagnostic_trigger('lane_departure',700_000_000_000,700.,left=True,right=False)
+  assert r.trace and r.steering_trace_count==1 and r.diagnostic_trace_count==9
+  assert events(s,'diagnostic_trace_trigger')[-1]['reason']=='lane_departure'
+  r.close_trace(709.,'test')
+  r.diagnostic_trigger('transport_counter_change',740_000_000_000,740.)
+  assert r.trace is None
+
+
+def test_haptic_request_is_passive_not_echo_or_actuation_proof():
+  r,s=recorder();pulse=bytearray(32);pulse[6]=0x10
+  r.can_frame(128,0x162,pulse,100_000_000_000,100.)
+  assert r.trace is None
+  r.can_frame(0,0x162,pulse,100_100_000_000,100.1,direction='tx_requested')
+  assert r.trace and r.steering_trace_count==1
+  event=events(s,'diagnostic_trace_trigger')[-1]
+  assert event['reason']=='haptic_request' and event['meaning']=='host_bit_request_not_ecu_ack_or_motor_response'
+  r.can_frame(0,0x162,pulse,100_200_000_000,100.2,direction='tx_requested')
+  assert len([x for x in events(s,'diagnostic_trace_trigger') if x['reason']=='haptic_request'])==1
+
+
+def test_steering_windows_are_bounded_separately_from_physical_buttons():
+  r,s=recorder()
+  for i in range(20):
+    now=100+i*40.
+    r.diagnostic_trigger('lane_departure',int(now*1e9),now)
+    if r.trace:r.close_trace(now+9.,'test')
+  assert r.steering_trace_count==8 and r.diagnostic_trace_count==8
+  assert r.trace_count-r.diagnostic_trace_count==0
+  r.diagnostic_trigger('transport_counter_change',901_000_000_000,901.)
+  assert r.trace and r.diagnostic_trace_count==9
+
+
+def test_second_steering_event_can_open_after_ten_seconds_without_transport_delay():
+  r,s=recorder()
+  r.diagnostic_trigger('haptic_request',100_000_000_000,100.)
+  assert r.trace and r.steering_trace_count==1
+  r.close_trace(108.1,'test')
+  r.diagnostic_trigger('oem_fault_edge',109_000_000_000,109.)
+  assert r.trace is None
+  r.diagnostic_trigger('lane_departure',110_000_000_000,110.)
+  assert r.trace and r.steering_trace_count==2
+
+
 def test_counter_decrease_then_recovery_inside_report_interval_cannot_create_false_rate():
   r,s=recorder()
   for now,count in ((100.,1),(100.1,4),(100.2,0),(105.2,9)):

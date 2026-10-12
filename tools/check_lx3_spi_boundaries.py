@@ -32,15 +32,20 @@ def main():
        str(ROOT / 'selfdrive/pandad/tests/spi_host_probe.cc'), '-o', str(exe)], out / 'host-compile.log')
   for case in ('good', 'oversized', 'request', 'recovery', 'nack', 'header_nack', 'checksum'):
     run([str(exe), case], out / ('host-' + case + '.log'))
-  for name in ('counter.c', 'crc.h'):
+  for name in ('counter.c', 'bounds.c', 'crc.h'):
     shutil.copyfile(ROOT / 'panda/tests/spi_host_fixtures' / name, out / name)
-  for name in ('spi.h', 'spi_declarations.h'):
+  for name in ('spi.h', 'spi_declarations.h', 'spi_diagnostics.h'):
     shutil.copyfile(ROOT / 'panda/board/drivers' / name, out / name)
   exe = out / 'spi-counter'
   run([args.cc, '-std=c11', '-O1', '-Wall', '-Wextra', '-fsanitize=undefined',
        '-fno-sanitize-recover=all', '-I' + str(out), str(out / 'counter.c'), '-o', str(exe)], out / 'counter-compile.log')
   run([str(exe)], out / 'counter.log')
-  print('PASS actual host SPI 7 scenarios and MCU VERSION/CRC/saturation fixture; no hardware connection')
+  exe = out / 'spi-bounds'
+  run([args.cc, '-std=c11', '-O1', '-Wall', '-Wextra', '-fsanitize=undefined',
+       '-fno-sanitize-recover=all', '-I' + str(out), str(out / 'bounds.c'), '-o', str(exe)], out / 'bounds-compile.log')
+  for case in ('tx', 'rx'):
+    run([str(exe), case], out / ('bounds-' + case + '.log'))
+  print('PASS actual host SPI 7 scenarios, MCU cause counters and DMA/response bounds; no hardware connection')
 
 
 if __name__ == '__main__':

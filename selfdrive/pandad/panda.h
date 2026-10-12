@@ -12,6 +12,7 @@
 #include "cereal/gen/cpp/car.capnp.h"
 #include "cereal/gen/cpp/log.capnp.h"
 #include "panda/board/health.h"
+#include "panda/board/drivers/spi_diagnostics.h"
 #include "panda/board/can.h"
 #include "selfdrive/pandad/panda_comms.h"
 #include "opendbc_repo/opendbc/safety/lx3_protocol.h"
@@ -51,6 +52,9 @@ private:
   uint64_t lx3_epoch_ = 0;
   uint32_t lx3_sequence_ = 0;
   bool seal_lx3_epoch();
+  void report_spi_mcu_diagnostics();
+  double last_spi_mcu_report_ms_ = 0;
+  bool spi_mcu_diagnostics_supported_ = true;
 
 public:
   Panda(std::string serial);

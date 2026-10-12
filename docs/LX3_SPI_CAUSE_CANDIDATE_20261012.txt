@@ -1,0 +1,38 @@
+LX3 SPI cause diagnostics and bounded request candidate
+
+This candidate adds a read-only 64-byte/version-1 SPI diagnostic response at
+control request 0xb3, param1=1, param2=0. Existing health v16, CAN packet v4,
+CAN-health v5 and LX3 authority v4 layouts and policy remain unchanged.
+Only guarded LX3 uses the optional host poll, at most every five seconds, from
+the existing pandad transport owner. Unsupported replies disable this optional
+poll until the next successful guarded profile configuration; a transient read
+error is reported without changing authority validity.
+This does not guarantee zero diagnostic latency or prove physical link quality.
+
+Separate saturating 32-bit counters distinguish header checksum/sync failure,
+data checksum failure, unexpected RX/TX state, valid CAN backpressure, other
+valid-request NACK, VERSION requests, rejected lengths, successful header/data
+processing, and exact 0x11/0x13/0x14 header fill patterns. Categories can overlap.
+The previous 16-bit aggregate retains its meaning and saturation; do not sum
+the categories or equate host response success with request integrity.
+
+Confirmed defect: an XOR-valid SPI header could advertise a payload beyond the
+RX buffer or a response beyond the TX buffer. Identical inert DMA fixtures
+fail on the previous installed source and pass after rejecting these lengths
+before HEADER_ACK. Maximum legal lengths still pass. This defect has not been
+observed as the cause of the vehicle's aggregate error increase.
+
+Passive steering capture reserves eight bounded windows for host lane departure,
+haptic requests and received OEM fault edges, independently of eight transport
+windows. Physical-button quota remains separate. It records observation, not
+physical ECU identity, ECU acknowledgement, vibration actuation or causation.
+The existing request/source/echo/rejection distinctions and source clock mapping
+remain intact. No new CAN publication, warning-bit masking, actuator parameters,
+MDPS processing, driver-monitor policy or control permissions are introduced.
+
+Known limits: the user's steering CHECK SYSTEM warning and missing perceived
+vibration are unresolved. A received fault flag can be an OEM response induced
+by host behaviour; receiving it first does not exonerate outgoing commands.
+Reproduction/build success is PC evidence, not successful vehicle qualification.
+Native host/H7 changes require their verified paired deployment; a HUD Python
+source update alone cannot install the pair. Installation is a separate step.

@@ -176,6 +176,8 @@ class AutoRecorder:
   BUTTON_TRACE_MAX_FRAMES = 20_000
   BUTTON_TRACE_MAX_PER_TRIP = 24
   DIAGNOSTIC_TRACE_MAX_PER_TRIP = 8
+  STEERING_TRACE_MAX_PER_TRIP = 8
+  STEERING_TRACE_INTERVAL = 10.0
   DIAGNOSTIC_TRACE_INTERVAL = 30.0
 
   def __init__(self, store, metadata):
@@ -202,6 +204,10 @@ class AutoRecorder:
     self.last_host_state = None
     self.last_panda_state = None
     self.diagnostic_trace_count = 0
+    self.steering_trace_count = 0
+    self.last_steering_trace = -math.inf
+    self.last_lane_departure = None
+    self.last_haptic_request = None
     self.last_diagnostic_trace = -math.inf
     self.transport_baseline = None
     self.transport_identity = None
@@ -260,12 +266,19 @@ class AutoRecorder:
     if now - self.last_event.get('diagnostic:' + reason, -math.inf) < 5.0:
       return
     self.last_event['diagnostic:' + reason] = now
-    if (self.trace is None
-        and self.diagnostic_trace_count < self.DIAGNOSTIC_TRACE_MAX_PER_TRIP
-        and now - self.last_diagnostic_trace >= self.DIAGNOSTIC_TRACE_INTERVAL):
+    steering = reason in ('lane_departure', 'haptic_request', 'oem_fault_edge')
+    quota_available = (self.steering_trace_count < self.STEERING_TRACE_MAX_PER_TRIP if steering else
+                      self.diagnostic_trace_count - self.steering_trace_count < self.DIAGNOSTIC_TRACE_MAX_PER_TRIP)
+    last_trace = self.last_steering_trace if steering else self.last_diagnostic_trace
+    interval = self.STEERING_TRACE_INTERVAL if steering else self.DIAGNOSTIC_TRACE_INTERVAL
+    if self.trace is None and quota_available and now - last_trace >= interval:
       self.begin_trace(mono_ns, now, 'diagnostic:' + reason, trigger=reason, trigger_details=details)
       self.diagnostic_trace_count += 1
-      self.last_diagnostic_trace = now
+      if steering:
+        self.steering_trace_count += 1
+        self.last_steering_trace = now
+      else:
+        self.last_diagnostic_trace = now
     # Sustained SPI errors cannot continually extend a window or consume the
     # reserved physical-button window quota. Ordinary bounded samples continue.
     self.store.append({'kind': 'event', 'name': 'diagnostic_trace_trigger', 'mono_ns': mono_ns,
@@ -383,6 +396,9 @@ class AutoRecorder:
       self.last_button = self.last_host_state = self.last_panda_state = None
       self.last_button_edge.clear()
       self.diagnostic_trace_count = 0
+      self.steering_trace_count = 0
+      self.last_steering_trace = -math.inf
+      self.last_lane_departure = self.last_haptic_request = None
       self.last_diagnostic_trace = -math.inf
       self.transport_baseline = self.transport_identity = None
       self.transport_report_time = -math.inf
@@ -412,6 +428,17 @@ class AutoRecorder:
     cs = services.get('carState', {}).get('data', {})
     cc = services.get('carControl', {}).get('data', {})
     sd = services.get('selfdriveState', {}).get('data', {})
+    if fresh(services, 'carControl', now):
+      hud = cc.get('hudControl') or {}
+      left, right = hud.get('leftLaneDepart'), hud.get('rightLaneDepart')
+      if type(left) is bool and type(right) is bool:
+        departure = (left, right)
+        if departure != self.last_lane_departure and any(departure):
+          self.diagnostic_trigger('lane_departure', services['carControl']['mono_ns'], now,
+                                  left=left, right=right, lat_active=cc.get('latActive'),
+                                  audible_alert=hud.get('audibleAlert'),
+                                  meaning='host_departure_detection_not_oem_fault_proof')
+        self.last_lane_departure = departure
     if (self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV' and
         all(fresh(services, key, now) for key in ('carState', 'carControl', 'selfdriveState'))):
       host = {'cruise_available': cs.get('cruiseState', {}).get('available'),
@@ -482,6 +509,13 @@ class AutoRecorder:
       elif bus >= 128:
         direction = 'tx_echo'
     self.button_edges(bus, address, data, mono_ns, now, direction)
+    if address == 0x162 and len(data) == 32 and direction == 'tx_requested':
+      vibrate = bool(data[6] & 0x10)  # DBC 52|1@0, meaning still needs LX3 qualification.
+      if vibrate and self.last_haptic_request is not True:
+        self.diagnostic_trigger('haptic_request', mono_ns, now,
+                                bus=bus,
+                                meaning='host_bit_request_not_ecu_ack_or_motor_response')
+      self.last_haptic_request = vibrate
     key = (direction, bus, address, len(data))
     fault_changed = False
     if address == 0x162 and len(data) == 32 and self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
@@ -631,4 +665,5 @@ class AutoRecorder:
             'button_traces': self.trace_count, 'button_trace_active': self.trace is not None,
             'button_trace_pre_evicted': self.trace_pre_evicted,
             'diagnostic_traces': self.diagnostic_trace_count,
+            'steering_diagnostic_traces': self.steering_trace_count,
             'control_changes': False, 'phone_backup': False}

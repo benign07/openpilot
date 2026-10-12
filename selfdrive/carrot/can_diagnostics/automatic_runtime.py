@@ -17,7 +17,7 @@ FIELDS = {
   'carControl': ('enabled', 'latActive', 'longActive', 'actuators', 'lx3Authority',
                  'manualSteeringScale', 'manualSteeringResume', 'hudControl'),
   'modelV2': ('frameId', 'timestampEof', 'meta'),
-  'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType', 'lx3LongRequest', 'lx3LongRefused', 'lx3RefuseAfterSequence'),
+  'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType', 'alertSound', 'lx3LongRequest', 'lx3LongRefused', 'lx3RefuseAfterSequence'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
   'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels'),
 }

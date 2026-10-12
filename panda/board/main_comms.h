@@ -74,6 +74,21 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
 #endif
 
   switch (req->request) {
+    case SPI_DIAGNOSTICS_REQUEST: {
+      COMPILE_TIME_ASSERT(sizeof(spi_diagnostics_t) == SPI_DIAGNOSTICS_SIZE);
+      COMPILE_TIME_ASSERT(sizeof(spi_diagnostics_t) <= USBPACKET_MAX_SIZE);
+      if ((req->param1 == SPI_DIAGNOSTICS_VERSION) && (req->param2 == 0U)) {
+        ENTER_CRITICAL();
+        spi_diagnostics_t status = spi_diagnostics;
+        status.version = SPI_DIAGNOSTICS_VERSION;
+        status.size = sizeof(status);
+        status.legacy_checksum_errors = spi_checksum_error_count;
+        EXIT_CRITICAL();
+        (void)memcpy(resp, &status, sizeof(status));
+        resp_len = sizeof(status);
+      }
+      break;
+    }
 #ifdef CANFD
     case LX3_STATUS_REQUEST:
     case LX3_STATE_REQUEST: {

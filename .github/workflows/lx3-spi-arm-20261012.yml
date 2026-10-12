@@ -32,6 +32,9 @@ jobs:
           /tmp/lx3-build/bin/python tools/lx3_spi_arm_artifact.py record
           selfdrive/pandad/tests/test_pandad_canprotocol 2>&1 | tee arm-evidence/canprotocol.log
           /tmp/lx3-build/bin/python tools/lx3_spi_hw_type_regression.py
+          for response in -1 0 1 2; do
+            selfdrive/pandad/tests/test_spi_mcu_status "$response" | tee "arm-evidence/mcu-status-$response.log"
+          done
           /tmp/lx3-build/bin/python tools/check_lx3_spi_boundaries.py --cc clang --cxx clang++ --output arm-evidence/spi
       - uses: actions/upload-artifact@v4
         if: always()
@@ -40,3 +43,63 @@ jobs:
           path: |
             arm-evidence
             selfdrive/pandad/pandad
+  h7-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: H7 compiler and signing dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi
+          python -m pip install scons pycryptodome
+      - name: Build actual H7 application
+        working-directory: panda
+        run: |
+          set -o pipefail
+          mkdir -p board/obj
+          scons --minimal -j2 board/obj/panda_h7.bin.signed 2>&1 | tee h7-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-spi-cause-h7
+          path: |
+            panda/h7-build.log
+            panda/board/obj/panda_h7.bin.signed
+            panda/board/obj/version
+  passive-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest aiohttp cryptography requests
+      - name: Actual diagnostic chunks, independent steering windows and HUD compatibility
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_recording_rotation.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=passive.xml 2>&1 | tee passive.log
+      - name: Unchanged production authority and MAIN handoff
+        run: |
+          set -o pipefail
+          for suite in authority_native main_handoff; do
+            gcc -std=gnu11 -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=undefined -fno-sanitize-recover=all -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety opendbc_repo/opendbc/safety/tests/test_lx3_${suite}.c -lm -o /tmp/lx3-${suite}
+            /tmp/lx3-${suite} | tee ${suite}.log
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-spi-cause-passive-${{ matrix.python }}
+          path: |
+            passive.xml
+            passive.log
+            authority_native.log
+            main_handoff.log

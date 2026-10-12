@@ -6,6 +6,7 @@
 #include "selfdrive/pandad/panda.h"
 
 static int response = 1;
+double spi_mcu_fixture_time_ms = 6000;
 static unsigned writes = 0;
 PandaSpiHandle::PandaSpiHandle(std::string serial) { hw_serial = "inert-fixture"; }
 PandaSpiHandle::~PandaSpiHandle() = default;

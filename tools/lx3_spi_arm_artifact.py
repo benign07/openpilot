@@ -58,11 +58,17 @@ def main():
     for p in (ROOT / directory).rglob('*'):
       if p.suffix in ('.cc', '.h', '.cpp') and 'tests' not in p.parts:
         sources[p.relative_to(ROOT).as_posix()] = sha(p.read_bytes())
+  transport_sources = {p: sha((ROOT / p).read_bytes()) for p in
+    ['panda/board/drivers/spi.h', 'panda/board/drivers/spi_diagnostics.h', 'panda/board/main_comms.h']}
+  client_fixture_sources = {p: sha((ROOT / p).read_bytes()) for p in
+    ['selfdrive/pandad/tests/test_spi_mcu_status.cc', 'selfdrive/pandad/tests/test_spi_hw_type.cc',
+     'selfdrive/pandad/tests/spi_hw_type_fixtures/common/timing.h']}
   manifest = {'source_commit':run('git', 'rev-parse', 'HEAD').strip(),
               'machine':'AArch64', 'hardware_define':'__TICI__', 'cpu':'cortex-a57',
               'binary_sha256':sha(binary.read_bytes()), 'binary_bytes':binary.stat().st_size,
               'sdk_sha256':(ROOT / 'tools/lx3_spi_arm_sdk_20261012.sha256').read_text().split()[0],
               'dynamic_dependencies':needed, 'schemas':schemas, 'sources':sources,
+              'paired_transport_sources':transport_sources, 'client_fixture_sources':client_fixture_sources,
               'compiler':run('clang++','--version').splitlines()[0],
               'ABI_requirements_subset_of_original':True, 'actual_HardwareTici_selector_verified':True,
               'vehicle_installed':False, 'vehicle_qualified':False}

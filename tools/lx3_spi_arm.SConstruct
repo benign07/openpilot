@@ -53,10 +53,13 @@ test_panda = test_env.Object('arm-after-panda', 'selfdrive/pandad/panda.cc')
 test_env.Program('selfdrive/pandad/tests/test_spi_hw_type',
                  ['selfdrive/pandad/tests/test_spi_hw_type.cc', test_panda],
                  LIBS=[common, messaging, 'pthread'])
+test_env.Program('selfdrive/pandad/tests/test_spi_mcu_status',
+                 ['selfdrive/pandad/tests/test_spi_mcu_status.cc', test_panda],
+                 LIBS=[common, messaging, 'pthread'])
 if File('arm-before-src/panda.cc').exists():
   before = test_env.Object('arm-before-panda', 'arm-before-src/panda.cc')
   test_env.Program('arm-before-hw-type', ['selfdrive/pandad/tests/test_spi_hw_type.cc', before],
                    LIBS=[common, messaging, 'pthread'])
   Default('arm-before-hw-type')
 Default('selfdrive/pandad/pandad', 'selfdrive/pandad/tests/test_pandad_canprotocol',
-        'selfdrive/pandad/tests/test_spi_hw_type')
+        'selfdrive/pandad/tests/test_spi_hw_type', 'selfdrive/pandad/tests/test_spi_mcu_status')
