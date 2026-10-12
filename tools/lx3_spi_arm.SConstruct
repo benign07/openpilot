@@ -47,13 +47,16 @@ messaging = [socketmaster, msgq, 'capnp', 'kj']
 Export('messaging')
 SConscript('third_party/SConscript')
 SConscript('selfdrive/pandad/SConscript')
-env.Program('selfdrive/pandad/tests/test_spi_hw_type',
-            'selfdrive/pandad/tests/test_spi_hw_type.cc',
-            LIBS=['panda', common, messaging, 'pthread'])
+test_env = env.Clone()
+test_env.Prepend(CPPPATH=['#selfdrive/pandad/tests/spi_hw_type_fixtures'])
+test_panda = test_env.Object('arm-after-panda', 'selfdrive/pandad/panda.cc')
+test_env.Program('selfdrive/pandad/tests/test_spi_hw_type',
+                 ['selfdrive/pandad/tests/test_spi_hw_type.cc', test_panda],
+                 LIBS=[common, messaging, 'pthread'])
 if File('arm-before-panda.cc').exists():
-  before = env.Object('arm-before-panda', 'arm-before-panda.cc')
-  env.Program('arm-before-hw-type', ['selfdrive/pandad/tests/test_spi_hw_type.cc', before],
-              LIBS=[common, messaging, 'pthread'])
+  before = test_env.Object('arm-before-panda', 'arm-before-panda.cc')
+  test_env.Program('arm-before-hw-type', ['selfdrive/pandad/tests/test_spi_hw_type.cc', before],
+                   LIBS=[common, messaging, 'pthread'])
   Default('arm-before-hw-type')
 Default('selfdrive/pandad/pandad', 'selfdrive/pandad/tests/test_pandad_canprotocol',
         'selfdrive/pandad/tests/test_spi_hw_type')

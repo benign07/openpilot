@@ -40,7 +40,7 @@ def main():
   assert set(needed) <= {'libstdc++.so.6', 'libm.so.6', 'libgcc_s.so.1', 'libc.so.6', 'libpthread.so.0', 'libdl.so.2', 'ld-linux-aarch64.so.1'}
   versions = run('readelf', '--version-info', str(binary))
   baseline = json.loads((ROOT / 'tools/lx3_spi_arm_baseline.json').read_text())
-  tags = set(re.findall(r'GLIBC(?:XX)?_[0-9]+(?:\.[0-9]+)+|CXXABI_[0-9]+(?:\.[0-9]+)+', versions))
+  tags = set(re.findall(r'GLIBC(?:XX)?_[0-9]+(?:\.[0-9]+)+|CXXABI_[0-9]+(?:\.[0-9]+)+|GCC_[0-9]+(?:\.[0-9]+)+', versions))
   assert tags <= set(baseline['original_required_tags']), 'new binary requires newer ABI than the verified original'
   for name, digest in baseline['paired_sources'].items():
     assert sha((ROOT / name).read_bytes()) == digest, name
