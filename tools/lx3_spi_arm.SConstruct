@@ -47,4 +47,13 @@ messaging = [socketmaster, msgq, 'capnp', 'kj']
 Export('messaging')
 SConscript('third_party/SConscript')
 SConscript('selfdrive/pandad/SConscript')
-Default('selfdrive/pandad/pandad', 'selfdrive/pandad/tests/test_pandad_canprotocol')
+env.Program('selfdrive/pandad/tests/test_spi_hw_type',
+            'selfdrive/pandad/tests/test_spi_hw_type.cc',
+            LIBS=['panda', common, messaging, 'pthread'])
+if File('arm-before-panda.cc').exists():
+  before = env.Object('arm-before-panda', 'arm-before-panda.cc')
+  env.Program('arm-before-hw-type', ['selfdrive/pandad/tests/test_spi_hw_type.cc', before],
+              LIBS=[common, messaging, 'pthread'])
+  Default('arm-before-hw-type')
+Default('selfdrive/pandad/pandad', 'selfdrive/pandad/tests/test_pandad_canprotocol',
+        'selfdrive/pandad/tests/test_spi_hw_type')

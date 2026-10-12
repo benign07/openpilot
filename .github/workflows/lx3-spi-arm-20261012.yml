@@ -23,12 +23,14 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p arm-evidence
+          git show a381f7d6c7d469d391a8e45121718279bcaf9d61:selfdrive/pandad/panda.cc > arm-before-panda.cc
           /tmp/lx3-build/bin/scons -f tools/lx3_spi_arm.SConstruct -j2 2>&1 | tee arm-evidence/build.log
       - name: Inspect ARM ELF and run CAN transport and SPI boundaries without hardware
         run: |
           set -o pipefail
           /tmp/lx3-build/bin/python tools/lx3_spi_arm_artifact.py record
           selfdrive/pandad/tests/test_pandad_canprotocol 2>&1 | tee arm-evidence/canprotocol.log
+          /tmp/lx3-build/bin/python tools/lx3_spi_hw_type_regression.py
           /tmp/lx3-build/bin/python tools/check_lx3_spi_boundaries.py --cc clang --cxx clang++ --output arm-evidence/spi
       - uses: actions/upload-artifact@v4
         if: always()

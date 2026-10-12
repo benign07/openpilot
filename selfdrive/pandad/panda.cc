@@ -150,7 +150,10 @@ void Panda::set_uart_baud(int uart, int rate) {
 cereal::PandaState::PandaType Panda::get_hw_type() {
   unsigned char hw_query[1] = {0};
 
-  handle->control_read(0xc1, 0, 0, hw_query, 1);
+  const int length = handle->control_read(0xc1, 0, 0, hw_query, sizeof(hw_query));
+  if (length != static_cast<int>(sizeof(hw_query))) {
+    throw std::runtime_error("Panda hardware type SPI read failed or incomplete");
+  }
   return (cereal::PandaState::PandaType)(hw_query[0]);
 }
 

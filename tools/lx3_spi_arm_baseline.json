@@ -1,0 +1,42 @@
+{
+  "original_required_tags": [
+    "CXXABI_1.3",
+    "CXXABI_1.3.11",
+    "CXXABI_1.3.13",
+    "CXXABI_1.3.2",
+    "CXXABI_1.3.3",
+    "CXXABI_1.3.5",
+    "CXXABI_1.3.9",
+    "GLIBCXX_3.4",
+    "GLIBCXX_3.4.11",
+    "GLIBCXX_3.4.14",
+    "GLIBCXX_3.4.15",
+    "GLIBCXX_3.4.18",
+    "GLIBCXX_3.4.19",
+    "GLIBCXX_3.4.20",
+    "GLIBCXX_3.4.21",
+    "GLIBCXX_3.4.22",
+    "GLIBCXX_3.4.26",
+    "GLIBCXX_3.4.29",
+    "GLIBCXX_3.4.30",
+    "GLIBCXX_3.4.32",
+    "GLIBCXX_3.4.9",
+    "GLIBC_2.17",
+    "GLIBC_2.32",
+    "GLIBC_2.33",
+    "GLIBC_2.34",
+    "GLIBC_2.38"
+  ],
+  "paired_sources": {
+    "cereal/services.py": "2c41732c51fc140ecd9ee35ac03e4d50a12c92dd91a214db3135ebf8e40d5692",
+    "cereal/car.capnp": "a77c1109baf93af369637f9a28451907afc54c235262944297166d9b45363be9",
+    "cereal/log.capnp": "c35577df79fb8de8c0ffe93d3964419cf1eb3669a40ad8c1d59f02d14a96b62f",
+    "cereal/custom.capnp": "e7b8065a7f945559a0454d3670224cf13ce91949b4a8077ec2c963a3df629991",
+    "cereal/deprecated.capnp": "2ff0763df1483fd3a7faad9d658fbcac0d5b90fe8e404f6bef9698e1013a1cba",
+    "common/params_keys.h": "62ded6b5c24d890febb44cb178d982e425b14adbaecaf4a308f9ab7bfdf944d7",
+    "selfdrive/pandad/state_schedule.h": "c635df9e54cb871b7d7e6d4ef1e6291c6c5b9e43712f8d9ee729ca8f20f8de00",
+    "selfdrive/pandad/panda_comms.h": "28da56143b6eaa785b448e42eb82821392d74dddae5efa5646db28dd4bd4ef2b",
+    "panda/board/health.h": "4e90425915c2e6599bb5e3601f94ac08e055e2631f6afa1bb06b998207ea416c",
+    "system/hardware/hw.h": "afc36d60417dbaf1683d17f10b32306c1d69f58816a6dad09c8da24484249da7"
+  }
+}
