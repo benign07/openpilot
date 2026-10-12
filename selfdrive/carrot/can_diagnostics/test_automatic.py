@@ -190,7 +190,7 @@ class RecorderTests(unittest.TestCase):
     edges=[r for r in rows if r.get('name')=='panda_state_edge']
     self.assertEqual([r['field'] for r in edges],['lx3_authority_state']*2)
 
-  def test_trace_reports_frames_lost_at_chunk_limit(self):
+  def test_trace_continues_at_chunk_limit(self):
     self.recorder.update(services(), 100)
     self.recorder.can_frame(0, 0x10B, bytes(16), 100_010_000_000, 100.01)
     press = bytearray(16); press[10] = 0x80
@@ -200,8 +200,9 @@ class RecorderTests(unittest.TestCase):
     self.recorder.can_frame(2, 0xCB, bytes(24), 100_050_000_000, 100.05)
     rows = self.rows()
     end = next(row for row in rows if row.get('name') == 'button_trace_end')
-    self.assertEqual(end['dropped_full'], 1)
-    self.assertEqual(len([row for row in rows if row['kind'] == 'button_trace_can' and row['address'] == 0xCB]), 0)
+    self.assertEqual(end['dropped_full'], 0)
+    self.assertTrue(any(row.get('kind') == 'button_trace_can' and row['address'] == 0xCB for row in rows))
+    self.assertEqual(len([row for row in rows if row['kind'] == 'button_trace_can' and row['address'] == 0xCB]), 1)
 
   def test_panda_pulse_capture_rejects_stale_states_and_preserves_other_car_sampling(self):
     self.recorder.update(services(), 100)
@@ -226,7 +227,9 @@ class RecorderTests(unittest.TestCase):
       self.recorder.panda_snapshot([state], mono_ns, mono_ns / 1e9)
     rows = self.rows()
     snapshots = [row for row in rows if row['kind'] == 'panda_snapshot']
-    self.assertLessEqual(len(snapshots), 121)
+    # Ordinary 2 Hz plus two possible bounded 8 s diagnostic windows at 10 Hz.
+    self.assertLessEqual(self.recorder.diagnostic_trace_count, 2)
+    self.assertLessEqual(len(snapshots), 121 + 2 * 8 * 8)
     self.assertGreaterEqual(len(snapshots), 110)
     self.assertGreaterEqual(snapshots[-1]['states'][0]['tx_blocked'], 1190)
 
@@ -303,7 +306,8 @@ class RecorderTests(unittest.TestCase):
       data = ((index % 2) << 219).to_bytes(32, 'little')
       self.recorder.can_frame(2, 0x162, data, int(now * 1e9), now)
     self.assertLess(self.store.size, self.store.chunk_bytes + 1000)
-    self.assertGreater(self.recorder.sampled_out, 900)
+    self.assertGreater(self.recorder.chunk_rotations, 0)
+    self.assertLess(self.store.usage, self.store.quota)
 
   def test_quota_preserves_existing_records(self):
     self.recorder.update(services(), 100)

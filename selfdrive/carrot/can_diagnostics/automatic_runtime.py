@@ -2,6 +2,7 @@
 import hashlib
 from itertools import islice
 from pathlib import Path
+import shutil
 import threading
 import time
 
@@ -29,6 +30,20 @@ PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFol
           'HardwareC3xLite', 'DisableDM', 'SoundVolumeAdjust', 'C3xLiteBuzzerMute', 'C3xLiteHapticNotifications',
           'ApproachComfortEnabled', 'ApproachFlexibleGap', 'ApproachFlexibleGapMin', 'ManualSteerWithBlinker',
           'CruiseStartCurrentSpeed')
+
+
+def recording_storage_status(root, usage=None):
+  """Mirror stock loggerd retention thresholds; never change or bypass them."""
+  try:
+    capacity = usage if usage is not None else shutil.disk_usage(root)
+    minimum_bytes, minimum_percent = 5 * 1024**3, 30
+    required = max(minimum_bytes, (capacity.total * minimum_percent + 99) // 100)
+    return {'status': 'low_space' if capacity.free < required else 'ok',
+            'free_bytes': capacity.free, 'total_bytes': capacity.total,
+            'required_free_bytes': required, 'needed_bytes': max(0, required - capacity.free),
+            'meaning': 'stock_loggerd_may_delete_completed_segments_not_encoder_failure_proof'}
+  except OSError:
+    return {'status': 'unknown', 'meaning': 'filesystem_capacity_unavailable'}
 
 
 def native_clock_offset_ns(clock=time):
@@ -76,6 +91,14 @@ def selected_fields(reader, fields):
   return result
 
 
+def selected_tx_identity(frame):
+  identity = getattr(frame, 'lx3Identity', None)
+  if identity is None or not identity.valid:
+    return None
+  # Intended host identity, not a received MCU admission stamp or ECU ACK.
+  return {key: int(getattr(identity, key)) for key in ('epoch', 'generation', 'axis')}
+
+
 def panda_summary(panda):
   buses = (panda.canState0, panda.canState1, panda.canState2)
   result = {
@@ -121,6 +144,8 @@ class AutomaticController:
       if self.error:
         result.update(state='error', error=self.error, retry_after_seconds=self.retry_after_seconds)
       result['recorder_restart_count'] = self.restart_count
+      if self.recorder:
+        result['recording_retention'] = self.recorder.metadata.get('recording_retention', {'status': 'unknown'})
       return result
 
   def close(self):
@@ -170,6 +195,7 @@ class AutomaticController:
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     metadata = {'boot_id': boot, 'route': None, 'car_fingerprint': None,
                 'rate_hz': 5, 'can_per_key_max_hz': 10, 'panda_max_hz': 20, 'panda_periodic_max_hz': 2,
+                'host_tx_identity_scope': 'sendcan_intent_not_native_admission_or_ecu_ack',
                 'panda_state_changes': 'received_valid_lx3_snapshots_bypass_periodic_limit',
                 'button_trace': {'physical_input': 'bus0/0x10B', 'pre_s': 2, 'post_s': 8,
                                  'max_window_s': 30, 'max_traces_per_trip': 24,
@@ -201,7 +227,7 @@ class AutomaticController:
       self.recorder = AutoRecorder(ChunkStore(self.root), metadata)
       self.error = None
       self.retry_after_seconds = 0
-    last_metadata = last_context = -100
+    last_metadata = last_context = last_storage = -100
     services = {}
     while not self.shutdown.is_set():
       sm.update(0)
@@ -224,6 +250,12 @@ class AutomaticController:
             with car.CarParams.from_bytes(raw) as cp:
               metadata['car_fingerprint'] = cp.carFingerprint
         last_metadata = now
+      if now - last_storage >= 30:
+        metadata['recording_retention'] = recording_storage_status(self.root)
+        with self.lock:
+          if self.recorder.state == 'recording':
+            self.recorder.event('recording_retention', now, **metadata['recording_retention'])
+        last_storage = now
       if now - last_context >= (.05 if self.recorder.trace_active(now) else .2):
         # Read only required fields at the recorded rate. Full carState/deviceState
         # conversion on every CAN drain needlessly copies unrelated payloads.
@@ -250,7 +282,8 @@ class AutomaticController:
                 source_ns = int(event.logMonoTime)
                 self.recorder.can_frame(frame.src, frame.address, bytes(frame.dat),
                                         packet_evidence_time(name, source_ns, native_offset_ns), time.monotonic(),
-                                        'tx_requested' if name == 'sendcan' else 'rx', source_mono_ns=source_ns)
+                                        'tx_requested' if name == 'sendcan' else 'rx', source_mono_ns=source_ns,
+                                        identity=selected_tx_identity(frame) if name == 'sendcan' else None)
       raw = panda_socket.receive(non_blocking=True)
       if raw is not None:
         event = messaging.log_from_bytes(raw)

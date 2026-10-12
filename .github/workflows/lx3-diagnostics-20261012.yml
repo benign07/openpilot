@@ -1,0 +1,99 @@
+name: LX3 recording and SPI boundary validation
+on:
+  push:
+    branches: [review/lx3-diagnostics-20261012]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  passive-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest aiohttp cryptography requests
+      - name: Real recorder chunks, rotation, quota, HTTP and signed updater contracts
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_recording_rotation.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=passive.xml 2>&1 | tee passive.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: passive-${{ matrix.python }}
+          path: |
+            passive.xml
+            passive.log
+  native-boundaries:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Actual SPI source with inert I/O and undefined-behavior checks
+        run: python3 tools/check_lx3_spi_boundaries.py --output spi-evidence
+      - name: Actual unchanged safety policy and physical MAIN handoff
+        run: |
+          set -o pipefail
+          for suite in authority_native main_handoff; do
+            gcc -std=gnu11 -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=undefined -fno-sanitize-recover=all -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety opendbc_repo/opendbc/safety/tests/test_lx3_${suite}.c -lm -o /tmp/lx3-${suite}
+            /tmp/lx3-${suite} | tee spi-evidence/${suite}.log
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spi-native-boundaries
+          path: spi-evidence
+  h7-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: H7 build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi
+          python -m pip install scons pycryptodome
+      - name: Actual H7 development firmware build
+        working-directory: panda
+        run: |
+          set -o pipefail
+          mkdir -p board/obj
+          scons --minimal -j2 board/obj/panda_h7.bin.signed 2>&1 | tee h7-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: h7-development-not-vehicle-qualified
+          path: |
+            panda/h7-build.log
+            panda/board/obj/panda_h7.bin.signed
+            panda/board/obj/version
+  pandad-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Linux native build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+      - run: uv sync --frozen --no-dev --extra testing
+      - name: Build real pandad with paired cereal and Params
+        run: |
+          set -o pipefail
+          uv run --no-sync scons --minimal -j2 selfdrive/pandad/pandad 2>&1 | tee pandad-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pandad-linux-build-not-arm-runtime
+          path: pandad-build.log

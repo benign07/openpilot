@@ -13,6 +13,7 @@
 #include "common/swaglog.h"
 #include "panda/board/comms_definitions.h"
 #include "selfdrive/pandad/panda_comms.h"
+#include "selfdrive/pandad/spi_diagnostics.h"
 
 
 #define SPI_SYNC 0x5AU
@@ -29,6 +30,28 @@ enum SpiError {
 
 const unsigned int SPI_ACK_TIMEOUT = 500; // milliseconds
 const std::string SPI_DEVICE = "/dev/spidev0.0";
+static SpiDiagnostics spi_diagnostics;
+
+static void report_spi_diagnostics() {
+  const auto now = static_cast<uint64_t>(millis_since_boot());
+  if (!spi_diagnostics.report_due(now)) return;
+  LOGW("SPI_HOST_STATS mono_ms=%llu attempts=%llu retries=%llu header_io=%llu header_nack=%llu header_timeout=%llu data_io=%llu data_nack=%llu data_timeout=%llu read_io=%llu bad_length=%llu bad_checksum=%llu recovery_failed=%llu failed=%llu success=%llu",
+       static_cast<unsigned long long>(now),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::ATTEMPTS)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::RETRIES)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::HEADER_IO)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::HEADER_NACK)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::HEADER_TIMEOUT)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::DATA_IO)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::DATA_NACK)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::DATA_TIMEOUT)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::READ_IO)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::BAD_LENGTH)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::BAD_CHECKSUM)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::RECOVERY_FAILED)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::TRANSFER_FAILED)),
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::SUCCESS)));
+}
 
 class LockEx {
 public:
@@ -208,8 +231,10 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
   int timeout_count = 0;
   bool timed_out = false;
   double start_time = millis_since_boot();
+  unsigned attempts = 0;
 
   do {
+    if (attempts++ > 0U) spi_diagnostics.count(SpiStage::RETRIES);
     ret = spi_transfer(endpoint, tx_data, tx_len, rx_data, max_rx_len, timeout);
 
     if (ret < 0) {
@@ -229,11 +254,13 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
         }
       }
     }
-  } while (ret < 0 && connected && !timed_out);
+  } while (ret < 0 && !timed_out && spi_within_budget(start_time, millis_since_boot(), spi_retry_budget_ms(timeout), connected));
 
   if (ret < 0) {
+    spi_diagnostics.count(SpiStage::TRANSFER_FAILED);
     SPILOG(LOGE, "transfer failed, after %d tries, %.2fms", timeout_count, millis_since_boot() - start_time);
   }
+  report_spi_diagnostics();
 
   return ret;
 }
@@ -253,8 +280,11 @@ int PandaSpiHandle::wait_for_ack(uint8_t ack, uint8_t tx, unsigned int timeout, 
   memset(tx_buf, tx, length);
 
   while (true) {
+    if (!connected) return -1;
     int ret = lltransfer(transfer);
     if (ret < 0) {
+      if (ack == SPI_HACK) spi_diagnostics.count(SpiStage::HEADER_IO);
+      if (ack == SPI_DACK) spi_diagnostics.count(SpiStage::DATA_IO);
       SPILOG(LOGE, "SPI: failed to send ACK request");
       return ret;
     }
@@ -262,12 +292,16 @@ int PandaSpiHandle::wait_for_ack(uint8_t ack, uint8_t tx, unsigned int timeout, 
     if (rx_buf[0] == ack) {
       break;
     } else if (rx_buf[0] == SPI_NACK) {
+      if (ack == SPI_HACK) spi_diagnostics.count(SpiStage::HEADER_NACK);
+      if (ack == SPI_DACK) spi_diagnostics.count(SpiStage::DATA_NACK);
       SPILOG(LOGD, "SPI: got NACK, waiting for 0x%x", ack);
       return SpiError::NACK;
     }
 
     // handle timeout
     if (millis_since_boot() - start_millis > timeout) {
+      if (ack == SPI_HACK) spi_diagnostics.count(SpiStage::HEADER_TIMEOUT);
+      if (ack == SPI_DACK) spi_diagnostics.count(SpiStage::DATA_TIMEOUT);
       SPILOG(LOGW, "SPI: timed out waiting for ACK, waiting for 0x%x", ack);
       return SpiError::ACK_TIMEOUT;
     }
@@ -320,6 +354,7 @@ int PandaSpiHandle::spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx
   assert(max_rx_len < SPI_BUF_SIZE);
 
   xfer_count++;
+  spi_diagnostics.count(SpiStage::ATTEMPTS);
   header = {
     .sync = SPI_SYNC,
     .endpoint = endpoint,
@@ -338,6 +373,7 @@ int PandaSpiHandle::spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx
   transfer.len = sizeof(header) + 1;
   ret = lltransfer(transfer);
   if (ret < 0) {
+    spi_diagnostics.count(SpiStage::HEADER_IO);
     SPILOG(LOGE, "SPI: failed to send header");
     goto fail;
   }
@@ -357,6 +393,7 @@ int PandaSpiHandle::spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx
   ret = lltransfer(transfer);
   if (ret < 0) {
     SPILOG(LOGE, "SPI: failed to send data");
+    spi_diagnostics.count(SpiStage::DATA_IO);
     goto fail;
   }
 
@@ -367,9 +404,10 @@ int PandaSpiHandle::spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx
   }
 
   // Read data
-  rx_data_len = *(uint16_t *)(rx_buf+1);
-  if (rx_data_len >= SPI_BUF_SIZE) {
-    SPILOG(LOGE, "SPI: RX data len larger than buf size %d", rx_data_len);
+  rx_data_len = uint16_t(rx_buf[1]) | (uint16_t(rx_buf[2]) << 8U);
+  if ((rx_data_len > max_rx_len) || (rx_data_len > SPI_BUF_SIZE - 4U)) {
+    spi_diagnostics.count(SpiStage::BAD_LENGTH);
+    SPILOG(LOGE, "SPI: RX length exceeds request or response buffer %d / %d", rx_data_len, max_rx_len);
     goto fail;
   }
 
@@ -378,9 +416,11 @@ int PandaSpiHandle::spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx
   ret = lltransfer(transfer);
   if (ret < 0) {
     SPILOG(LOGE, "SPI: failed to read rx data");
+    spi_diagnostics.count(SpiStage::READ_IO);
     goto fail;
   }
   if (!check_checksum(rx_buf, rx_data_len + 4)) {
+    spi_diagnostics.count(SpiStage::BAD_CHECKSUM);
     SPILOG(LOGE, "SPI: bad checksum");
     goto fail;
   }
@@ -388,6 +428,7 @@ int PandaSpiHandle::spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx
   if (rx_data != NULL) {
     memcpy(rx_data, rx_buf + 3, rx_data_len);
   }
+  spi_diagnostics.count(SpiStage::SUCCESS);
 
   return rx_data_len;
 
@@ -395,13 +436,15 @@ fail:
   // ensure slave is in a consistent state
   // and ready for the next transfer
   int nack_cnt = 0;
-  while (nack_cnt < 3) {
+  const double recovery_started = millis_since_boot();
+  while (nack_cnt < 3 && spi_within_budget(recovery_started, millis_since_boot(), 100U, connected)) {
     if (wait_for_ack(SPI_NACK, 0x14, 1, SPI_BUF_SIZE/2) == 0) {
       nack_cnt += 1;
     } else {
       nack_cnt = 0;
     }
   }
+  if (nack_cnt < 3) spi_diagnostics.count(SpiStage::RECOVERY_FAILED);
 
   if (ret >= 0) ret = -1;
   return ret;

@@ -39,6 +39,7 @@ class ChunkStore:
     self.seconds, self.chunk_bytes = seconds, chunk_bytes
     self.stream = None
     self.error = None
+    self.dropped_no_stream = 0
     self.root.mkdir(parents=True, exist_ok=True)
     self.recover()
     self.usage = sum(p.stat().st_size for p in self.root.iterdir() if p.is_file())
@@ -108,7 +109,8 @@ class ChunkStore:
 
   def append(self, row, now):
     if not self.stream:
-      return
+      self.dropped_no_stream += 1
+      return False
     data = (json.dumps(clean(row), separators=(',', ':'), ensure_ascii=False, allow_nan=False) + '\n').encode()
     self.stream.write(data)
     self.size += len(data)
@@ -117,6 +119,7 @@ class ChunkStore:
       self.stream.flush()
       os.fsync(self.stream.fileno())
       self.last_flush = now
+    return True
 
   def full(self, now):
     return self.stream is not None and (now - self.started >= self.seconds or self.size >= self.chunk_bytes)
@@ -185,6 +188,10 @@ class AutoRecorder:
     self.can_last, self.faults = {}, {}
     self.last_panda_sample = -math.inf
     self.sampled_out = self.stale_packets = 0
+    self.stale_can_frames = self.stale_panda_snapshots = 0
+    self.storage_dropped = 0
+    self.chunk_rotations = 0
+    self.max_chunk_rotation_ms = 0.0
     self.state = 'waiting_for_ignition'
     self.trace_pre = deque(maxlen=3000)
     self.trace = None
@@ -209,10 +216,11 @@ class AutoRecorder:
     return self.trace is not None and int(now * 1e9) <= self.trace['until_ns']
 
   @staticmethod
-  def can_row(mono_ns, direction, bus, address, data, source_mono_ns=None):
+  def can_row(mono_ns, direction, bus, address, data, source_mono_ns=None, identity=None):
     return {'mono_ns': mono_ns, 'direction': direction, 'bus': bus,
             'address': address, 'dlc': len(data), 'data': data.hex(),
-            **({'source_log_mono_ns': source_mono_ns} if source_mono_ns is not None else {})}
+            **({'source_log_mono_ns': source_mono_ns} if source_mono_ns is not None else {}),
+            **({'host_tx_identity': identity} if identity else {})}
 
   def close_trace(self, now, reason):
     if self.trace is not None:
@@ -220,7 +228,9 @@ class AutoRecorder:
                          'trace_id': self.trace['id'], 'reason': reason,
                          'frames': self.trace['frames'], 'truncated': self.trace['truncated'],
                          'dropped_full': self.trace['dropped_full'],
-                         'stale_packets_delta': self.stale_packets - self.trace['stale_start']}, now)
+                         'stale_packets_delta': self.stale_packets - self.trace['stale_start'],
+                         'stale_can_frames_delta': self.stale_can_frames - self.trace['stale_can_start'],
+                         'stale_panda_snapshots_delta': self.stale_panda_snapshots - self.trace['stale_panda_start']}, now)
       self.trace = None
 
   def begin_trace(self, mono_ns, now, label, **details):
@@ -228,25 +238,28 @@ class AutoRecorder:
     self.trace = {'id': uuid.uuid4().hex, 'start_ns': mono_ns,
                   'until_ns': mono_ns + self.BUTTON_TRACE_POST_NS,
                   'frames': 0, 'truncated': False, 'dropped_full': 0,
-                  'stale_start': self.stale_packets}
+                  'stale_start': self.stale_packets, 'stale_can_start': self.stale_can_frames,
+                  'stale_panda_start': self.stale_panda_snapshots}
     # Retain the existing chunk/reader contract for all bounded trace windows.
     self.store.append({'kind': 'event', 'name': 'button_trace_start', 'mono_ns': mono_ns,
                        'trace_id': self.trace['id'], 'button': label,
                        'pre_ns': self.BUTTON_TRACE_PRE_NS, 'post_ns': self.BUTTON_TRACE_POST_NS,
                        **details}, now)
-    for pre_ns, direction, bus, address, data, source_mono_ns in self.trace_pre:
+    for pre_ns, direction, bus, address, data, source_mono_ns, identity in self.trace_pre:
       if mono_ns - self.BUTTON_TRACE_PRE_NS <= pre_ns < mono_ns:
-        self.append_trace_frame(self.can_row(pre_ns, direction, bus, address, data, source_mono_ns), now)
+        self.append_trace_frame(self.can_row(pre_ns, direction, bus, address, data, source_mono_ns, identity), now)
 
   def diagnostic_trigger(self, reason, mono_ns, now, **details):
     if self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV' or self.state != 'recording':
+      return
+    if not self.rotate_full_chunk(now):
       return
     if self.trace is not None and not self.trace_active(now):
       self.close_trace(now, 'window_elapsed')
     if now - self.last_event.get('diagnostic:' + reason, -math.inf) < 5.0:
       return
     self.last_event['diagnostic:' + reason] = now
-    if (self.trace is None and not self.store.full(now)
+    if (self.trace is None
         and self.diagnostic_trace_count < self.DIAGNOSTIC_TRACE_MAX_PER_TRIP
         and now - self.last_diagnostic_trace >= self.DIAGNOSTIC_TRACE_INTERVAL):
       self.begin_trace(mono_ns, now, 'diagnostic:' + reason, trigger=reason, trigger_details=details)
@@ -308,7 +321,7 @@ class AutoRecorder:
   def append_trace_frame(self, row, now):
     if self.trace is None or self.trace['truncated']:
       return
-    if self.store.full(now):
+    if not self.rotate_full_chunk(now):
       self.trace['dropped_full'] += 1
       return
     if self.trace['frames'] >= self.BUTTON_TRACE_MAX_FRAMES:
@@ -317,8 +330,28 @@ class AutoRecorder:
                          'mono_ns': int(now * 1e9), 'trace_id': self.trace['id'],
                          'reason': 'frame_limit'}, now)
       return
-    self.store.append({'kind': 'button_trace_can', 'trace_id': self.trace['id'], **row}, now)
-    self.trace['frames'] += 1
+    if self.store.append({'kind': 'button_trace_can', 'trace_id': self.trace['id'], **row}, now) is False:
+      self.trace['dropped_full'] += 1
+      self.storage_dropped += 1
+    else:
+      self.trace['frames'] += 1
+
+  def chunk_metadata(self, now):
+    return {**self.metadata, 'trip_id': self.trip, 'mono_ns': int(now * 1e9),
+            'utc_ns': time.time_ns(), 'capture': 'sampled_evidence',
+            'full_can_source': 'rlog_not_copied_by_this_recorder'}
+
+  def rotate_full_chunk(self, now):
+    if not self.store.full(now):
+      return True
+    started = time.monotonic()
+    self.store.seal('rotation')
+    ready = self.store.begin(self.chunk_metadata(now), now)
+    self.chunk_rotations += 1
+    self.max_chunk_rotation_ms = max(self.max_chunk_rotation_ms, (time.monotonic() - started) * 1000)
+    if not ready:
+      self.state = self.store.error
+    return ready
 
   def event(self, name, now, **details):
     if now - self.last_event.get(name, -math.inf) < 1:
@@ -356,13 +389,11 @@ class AutoRecorder:
       self.transport_seen = set()
       self.transport_gaps = set()
       self.last_observer_tick = None
+      self.chunk_rotations = 0
+      self.max_chunk_rotation_ms = 0.0
     if self.trace is not None and not self.trace_active(now):
       self.close_trace(now, 'window_elapsed')
-    if self.store.full(now):
-      self.store.seal('rotation')
-    if not self.store.begin({**self.metadata, 'trip_id': self.trip, 'mono_ns': int(now * 1e9),
-                             'utc_ns': time.time_ns(), 'capture': 'sampled_evidence',
-                             'full_can_source': 'rlog_not_copied_by_this_recorder'}, now):
+    if not self.rotate_full_chunk(now) or not self.store.begin(self.chunk_metadata(now), now):
       self.state = self.store.error
       return
     self.state = 'recording'
@@ -372,6 +403,8 @@ class AutoRecorder:
     sample = {'kind': 'sample', 'mono_ns': int(now * 1e9), 'mode': mode, 'services': services,
               'trace_id': self.trace['id'] if self.trace_active(now) else None,
               'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
+              'stale_can_frames': self.stale_can_frames, 'stale_panda_snapshots': self.stale_panda_snapshots,
+              'storage_dropped': self.storage_dropped, 'dropped_no_stream': self.store.dropped_no_stream,
               'route': self.metadata.get('route')}
     self.store.append(sample, now)
     cs = services.get('carState', {}).get('data', {})
@@ -419,19 +452,21 @@ class AutoRecorder:
         self.event('lead_flicker_candidate', now, classification='target_change_or_dropout_unconfirmed')
     self.previous, self.last_sample = current, now
 
-  def can_frame(self, bus, address, data, mono_ns, now, direction='rx', source_mono_ns=None):
+  def can_frame(self, bus, address, data, mono_ns, now, direction='rx', source_mono_ns=None, identity=None):
     if (self.state != 'recording' or address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64 or
         (address in self.LX3_ONLY_ADDRESSES and self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV')):
       return
-    if self.store.full(now):
-      # Rotate on the next context update; a burst must not bypass the chunk bound.
-      if (self.trace_active(now) and address in self.TRACE_ADDRESSES and
-          0 <= now - mono_ns / 1e9 <= .5):
-        self.trace['dropped_full'] += 1
-      self.sampled_out += 1
-      return
     if not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
+      self.stale_can_frames += 1
+      return
+    # Continue a bounded trace across chunks instead of dropping the rest of
+    # this receive burst until the next context tick. Quota/free-space checks
+    # still apply, and their failures remain explicit loss, not success.
+    if not self.rotate_full_chunk(now):
+      if self.trace_active(now) and address in self.TRACE_ADDRESSES:
+        self.trace['dropped_full'] += 1
+      self.storage_dropped += 1
       return
     if direction == 'rx':
       if bus >= 192:
@@ -458,10 +493,10 @@ class AutoRecorder:
       self.faults[key] = value
     if address in self.TRACE_ADDRESSES:
       if self.trace_active(now):
-        self.append_trace_frame(self.can_row(mono_ns, direction, bus, address, data, source_mono_ns), now)
+        self.append_trace_frame(self.can_row(mono_ns, direction, bus, address, data, source_mono_ns, identity), now)
       if len(self.trace_pre) == self.trace_pre.maxlen:
         self.trace_pre_evicted += 1
-      self.trace_pre.append((mono_ns, direction, bus, address, data, source_mono_ns))
+      self.trace_pre.append((mono_ns, direction, bus, address, data, source_mono_ns, identity))
       while self.trace_pre and mono_ns - self.trace_pre[0][0] > self.BUTTON_TRACE_PRE_NS:
         self.trace_pre.popleft()
     if key not in self.can_last and len(self.can_last) >= 128:
@@ -471,13 +506,16 @@ class AutoRecorder:
       self.sampled_out += 1
       return
     self.can_last[key] = now
-    self.store.append({'kind': 'can_sample', **self.can_row(mono_ns, direction, bus, address, data, source_mono_ns)}, now)
+    self.store.append({'kind': 'can_sample', **self.can_row(mono_ns, direction, bus, address, data, source_mono_ns, identity)}, now)
 
   def panda_snapshot(self, states, mono_ns, now, source_mono_ns=None):
     if self.state != 'recording' or not states:
       return
     if not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
+      self.stale_panda_snapshots += 1
+      return
+    if not self.rotate_full_chunk(now):
       return
     current = states[0]
     fields = ('controls_allowed', 'rx_checks_invalid', 'rx_overflow', 'tx_overflow',
@@ -493,9 +531,6 @@ class AutoRecorder:
     if now - self.last_panda_sample < (.1 if self.trace_active(now) else .5) and not lx3_edge:
       if self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
         self.transport_observation(current, mono_ns, now)
-      return
-    if self.store.full(now):
-      self.sampled_out += 1
       return
     self.last_panda_sample = now
     self.store.append({'kind': 'panda_snapshot', 'mono_ns': mono_ns, 'states': states[:4],
@@ -577,6 +612,9 @@ class AutoRecorder:
   def status(self):
     return {'state': self.state, 'trip_id': self.trip, 'bytes': self.store.usage, 'quota': self.store.quota,
             'error': self.store.error, 'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
+            'stale_can_frames': self.stale_can_frames, 'stale_panda_snapshots': self.stale_panda_snapshots,
+            'storage_dropped': self.storage_dropped, 'dropped_no_stream': self.store.dropped_no_stream,
+            'chunk_rotations': self.chunk_rotations, 'max_chunk_rotation_ms': self.max_chunk_rotation_ms,
             'button_traces': self.trace_count, 'button_trace_active': self.trace is not None,
             'button_trace_pre_evicted': self.trace_pre_evicted,
             'diagnostic_traces': self.diagnostic_trace_count,

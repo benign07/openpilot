@@ -97,6 +97,8 @@ void spi_rx_done(void) {
   spi_data_len_miso = (spi_buf_rx[5] << 8) | spi_buf_rx[4];
 
   if (memcmp(spi_buf_rx, version_text, 7) == 0) {
+    // VERSION is a valid special request without the normal XOR trailer.
+    checksum_valid = true;
     response_len = spi_version_packet(spi_buf_tx);
     next_rx_state = SPI_STATE_HEADER_NACK;;
   } else if (spi_state == SPI_STATE_HEADER) {
