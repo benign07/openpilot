@@ -13,14 +13,41 @@ FIELDS = {
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'latEnabled',
                'steerFaultTemporary', 'steerFaultPermanent', 'buttonEvents', 'lx3Authority', 'lx3SteeringLimited'),
-  'carControl': ('enabled', 'latActive', 'longActive', 'actuators', 'lx3Authority'),
+  'carControl': ('enabled', 'latActive', 'longActive', 'actuators', 'lx3Authority',
+                 'manualSteeringScale', 'manualSteeringResume', 'hudControl'),
+  'modelV2': ('frameId', 'timestampEof', 'meta'),
   'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType', 'lx3LongRequest', 'lx3LongRefused', 'lx3RefuseAfterSequence'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
   'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels'),
 }
+# These installed publishers use Python cereal.messaging.new_message,
+# including modeld.py. This tags the envelope, not timestamps inside payloads.
+SERVICE_CLOCKS = {name: 'monotonic' for name in FIELDS}
 PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFollowGap1', 'TFollowGap2',
           'TFollowGap3', 'TFollowGap4', 'LaneChangeNeedTorque', 'AlwaysLateral', 'TurnSpeedControlMode',
-          'ModelTurnSpeedFactor', 'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar')
+          'ModelTurnSpeedFactor', 'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar',
+          'HardwareC3xLite', 'DisableDM', 'SoundVolumeAdjust', 'C3xLiteBuzzerMute', 'C3xLiteHapticNotifications',
+          'ApproachComfortEnabled', 'ApproachFlexibleGap', 'ApproachFlexibleGapMin', 'ManualSteerWithBlinker',
+          'CruiseStartCurrentSpeed')
+
+
+def native_clock_offset_ns(clock=time):
+  """Installed C++ CAN/pandaStates use BOOTTIME; Python sendcan uses MONOTONIC.
+
+  Keep evidence on the collector's monotonic axis and retain each native raw
+  logMonoTime. Re-read after suspend instead of assuming both clocks coincide.
+  """
+  boot = getattr(clock, 'CLOCK_BOOTTIME', None)
+  if boot is None:
+    return 0
+  before = clock.monotonic_ns()
+  native = clock.clock_gettime_ns(boot)
+  after = clock.monotonic_ns()
+  return max(0, native - (before + after) // 2)
+
+
+def packet_evidence_time(stream, source_mono_ns, native_offset_ns):
+  return source_mono_ns - native_offset_ns if stream in ('can', 'pandaStates') else source_mono_ns
 
 
 def read_param(params, key):
@@ -149,10 +176,22 @@ class AutomaticController:
                                  'max_frames_per_trace': 20000, 'can_source': 'selected_unthrottled',
                                  'host_context_max_hz': 20, 'panda_max_hz': 20, 'panda_periodic_max_hz': 10},
                 'physical_ecu_origin': 'not_inferred_from_bus'}
+    metadata['diagnostic_trace'] = {'triggers': ['oem_fault_edge', 'panda_authority_edge',
+                                                'transport_counter_change', 'observer_gap'],
+                                    'max_extra_traces_per_trip': 8, 'min_new_window_interval_s': 30,
+                                    'spi_scope': 'existing_health_aggregate_only_not_stage_reasons',
+                                    'echo_scope': 'panda_tx_confirmation_not_receiving_ecu_ack'}
+    metadata['clock_contract'] = {'version': 2, 'evidence': 'host_monotonic',
+                                 'native_raw': 'source_log_mono_ns',
+                                 'normalized_native_streams': ['can', 'pandaStates'],
+                                 'nested_service_timestamps': 'producer_logMonoTime_unchanged_source_clock',
+                                 'sendcan': 'python_monotonic_unchanged'}
+    metadata['native_clock_offset_ns'] = native_clock_offset_ns()
     repo = Path(__file__).resolve().parents[3]
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
                'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
-               'opendbc_repo/opendbc/car/hyundai/radar_interface.py')
+               'opendbc_repo/opendbc/car/hyundai/radar_interface.py', 'selfdrive/controls/controlsd.py',
+               'selfdrive/carrot/manual_steering.py', 'cereal/car.capnp')
     metadata['source_hashes'] = {rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest()
                                for rel in sources if (repo / rel).is_file()}
     dbc = repo / 'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc'
@@ -167,6 +206,15 @@ class AutomaticController:
     while not self.shutdown.is_set():
       sm.update(0)
       now = time.monotonic()
+      native_offset_ns = native_clock_offset_ns()
+      with self.lock:
+        if abs(native_offset_ns - metadata['native_clock_offset_ns']) > 2_000_000:
+          before = metadata['native_clock_offset_ns']
+          metadata['native_clock_offset_ns'] = native_offset_ns
+          if self.recorder.state == 'recording':
+            self.recorder.event('native_clock_offset_changed', now, before_ns=before, after_ns=native_offset_ns,
+                                meaning='clock_mapping_changed_not_producer_outage_proof')
+        self.recorder.observer_tick(now)
       if now - last_metadata >= 5:
         metadata['route'] = read_param(params, 'CurrentRoute') or None
         metadata['settings'] = {key: read_param(params, key) for key in PARAMS}
@@ -181,6 +229,8 @@ class AutomaticController:
         # conversion on every CAN drain needlessly copies unrelated payloads.
         for name, fields in FIELDS.items():
           services[name] = {'mono_ns': int(sm.logMonoTime[name]), 'valid': bool(sm.valid[name]),
+                            'source_clock': SERVICE_CLOCKS[name],
+                            'alive': bool(sm.alive[name]),
                             'data': selected_fields(sm[name], fields)}
         last_context = now
       with self.lock:
@@ -197,13 +247,17 @@ class AutomaticController:
           with self.lock:
             for frame in getattr(event, name):
               if frame.address in self.recorder.ADDRESSES:
-                self.recorder.can_frame(frame.src, frame.address, bytes(frame.dat), event.logMonoTime,
-                                        time.monotonic(), 'tx_requested' if name == 'sendcan' else 'rx')
+                source_ns = int(event.logMonoTime)
+                self.recorder.can_frame(frame.src, frame.address, bytes(frame.dat),
+                                        packet_evidence_time(name, source_ns, native_offset_ns), time.monotonic(),
+                                        'tx_requested' if name == 'sendcan' else 'rx', source_mono_ns=source_ns)
       raw = panda_socket.receive(non_blocking=True)
       if raw is not None:
         event = messaging.log_from_bytes(raw)
         if event.valid and event.which() == 'pandaStates':
           with self.lock:
+            source_ns = int(event.logMonoTime)
             self.recorder.panda_snapshot([panda_summary(p) for p in islice(event.pandaStates, 4)],
-                                         event.logMonoTime, time.monotonic())
+                                         packet_evidence_time('pandaStates', source_ns, native_offset_ns),
+                                         time.monotonic(), source_mono_ns=source_ns)
       self.shutdown.wait(.05)

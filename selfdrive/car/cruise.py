@@ -182,6 +182,7 @@ class VCruiseCarrot:
     self._cruise_speed_unit = 10
     self._cruise_speed_unit_basic = 1
     self._cruise_button_mode = 2
+    self._start_current_speed = self.params.get_bool('CruiseStartCurrentSpeed')
     self._cancel_button_mode = 0
     self._lfa_button_mode = 0
     self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
@@ -280,6 +281,7 @@ class VCruiseCarrot:
       self._cruise_speed_unit_basic = self.params.get_int("CruiseSpeedUnitBasic")
       self._paddle_mode = self.params.get_int("PaddleMode")
       self._cruise_button_mode = self.params.get_int("CruiseButtonMode")
+      self._start_current_speed = self.params.get_bool('CruiseStartCurrentSpeed')
       self._cancel_button_mode = self.params.get_int("CancelButtonMode")
       self._lfa_button_mode = self.params.get_int("LfaButtonMode")
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
@@ -370,7 +372,14 @@ class VCruiseCarrot:
     self._cancel_timer = max(0, self._cancel_timer - 1)
 
     #self.events = []
-    self.v_ego_kph_set = int(CS.vEgoCluster * CV.MS_TO_KPH + 0.5)
+    # Preserve normal legacy button/auto-cruise speed calculations. The new
+    # plausibility-filtered value belongs only to the accepted engagement edge.
+    cluster_kph = CS.vEgoCluster * CV.MS_TO_KPH
+    if self.lx3_authority and self._start_current_speed and not math.isfinite(cluster_kph):
+      measured_kph = CS.vEgo * CV.MS_TO_KPH
+      self.v_ego_kph_set = int(max(0., measured_kph) + .5) if math.isfinite(measured_kph) else 0
+    else:
+      self.v_ego_kph_set = int(cluster_kph + .5)
     self._activate_cruise = 0
     self._prepare_brake_gas(CS, CC)
     if CC.enabled:
@@ -406,6 +415,20 @@ class VCruiseCarrot:
       #if self.cruise_state_available_last: # 최초 한번이라도 cruiseState.available이 True였다면
       #  self._lat_enabled = False
 
+    # Use the current CAN state at the accepted engagement edge, rather than
+    # the earlier press or CarD's previous-state initialize callback. An LFA
+    # grant or normal stop/go while still enabled must not reset the set speed.
+    start_speed_kph = self._current_start_speed(CS) if self.lx3_authority and self._start_current_speed else None
+    if (self.lx3_authority and self._start_current_speed and self.CP.openpilotLongitudinalControl
+        and not self.CP.pcmCruise and CC.enabled and not self.enabled_last
+        and CS.canValid and not CS.canTimeout and start_speed_kph is not None):
+      self.v_cruise_kph = float(np.clip(int(start_speed_kph + .5), self._cruise_speed_min, self._cruise_speed_max))
+      self.v_cruise_cluster_kph = self.v_cruise_kph
+      self._v_cruise_kph_at_brake = 0
+      self.carrot_cruise_active = False
+      self._pause_auto_speed_up = True  # Same initial speed intent as SET.
+      self._add_log(f'{self.v_cruise_kph:.0f} Cruise start at current speed')
+
     self.cruise_state_available_last = CS.cruiseState.available
     self.enabled_last = CC.enabled
     if self.lx3_authority:
@@ -430,6 +453,16 @@ class VCruiseCarrot:
       if self._cruise_cancel_state:
         self.lx3_auto_until = 0
       reconcile_lateral(self, CS, self.params.get_bool('AlwaysLateral'), time.monotonic_ns())
+
+  @staticmethod
+  def _current_start_speed(CS):
+    # A missing/stale cluster-speed sample must not select 5 km/h at highway
+    # speed. Prefer a plausible cluster indication, otherwise measured wheels.
+    measured, cluster = CS.vEgo * CV.MS_TO_KPH, CS.vEgoCluster * CV.MS_TO_KPH
+    if not math.isfinite(measured) or measured < 0:
+      return None
+    plausible = math.isfinite(cluster) and cluster >= 0 and abs(cluster-measured) <= max(5., measured*.12)
+    return max(measured, cluster) if plausible else measured
 
   def initialize_v_cruise(self, CS, experimental_mode: bool) -> None:
     return

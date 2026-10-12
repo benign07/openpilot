@@ -15,6 +15,7 @@
 #include "common/swaglog.h"
 #include "common/timing.h"
 #include "common/util.h"
+#include "selfdrive/pandad/state_schedule.h"
 #include "system/hardware/hw.h"
 
 #define MAX_IR_PANDA_VAL 50
@@ -394,18 +395,21 @@ void pandad_run(Panda *panda) {
   PandaSafety panda_safety(panda);
   bool engaged = false;
   bool is_onroad = false;
+  PandaStateSchedule schedule;
 
   // Main loop: receive CAN data and process states
   while (!do_exit && check_connected(panda)) {
     can_recv(panda, &pm);
+    const bool guarded = panda->lx3_guarded();
+    schedule.set_guarded(guarded);
 
     // Process peripheral state at 20 Hz
-    if (rk.frame() % 5 == 0) {
+    if (schedule.peripheral(rk.frame(), nanos_since_boot())) {
       process_peripheral_state(panda, &pm, no_fan_control);
     }
 
     // Process panda state at 10 Hz
-    if (rk.frame() % 10 == 0) {
+    if (schedule.state(rk.frame(), nanos_since_boot())) {
       sm.update(0);
       engaged = sm.allAliveAndValid({"selfdriveState"}) && sm["selfdriveState"].getSelfdriveState().getEnabled();
       is_onroad = params.getBool("IsOnroad");
@@ -420,18 +424,20 @@ void pandad_run(Panda *panda) {
     }
 
     // Send out peripheralState at 2Hz
-    if (rk.frame() % 50 == 0) {
+    if (schedule.publish(rk.frame(), nanos_since_boot())) {
       send_peripheral_state(panda, &pm);
     }
 
     // Forward logs from panda to cloudlog if available
-    std::string log = panda->serial_read();
-    if (!log.empty()) {
-      if (log.find("Register 0x") != std::string::npos) {
-        // Log register divergent faults as errors
-        LOGE("%s", log.c_str());
-      } else {
-        LOGD("%s", log.c_str());
+    if (!guarded || schedule.serial(rk.frame(), nanos_since_boot())) {
+      std::string log = panda->serial_read();
+      if (!log.empty()) {
+        if (log.find("Register 0x") != std::string::npos) {
+          // Log register divergent faults as errors
+          LOGE("%s", log.c_str());
+        } else {
+          LOGD("%s", log.c_str());
+        }
       }
     }
 

@@ -697,7 +697,7 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control,
 
 def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
                          disp_angle, left_lane_warning, right_lane_warning,
-                         enable_corner_radar, stopping, canfd_debug):
+                         enable_corner_radar, stopping, canfd_debug, notification_vibrate=False):
   ret = []
 
   md = CS.modelV2
@@ -901,6 +901,10 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
 
         if (left_lane_warning and not CS.out.leftBlinker) or (right_lane_warning and not CS.out.rightBlinker):
           values["VIBRATE"] = 1
+        if notification_vibrate:
+          from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+          if uses_lx3_authority(CP):
+            values['VIBRATE'] = 1
 
         if canfd_debug > 0:
           values["FAULT_LSS"] = 0

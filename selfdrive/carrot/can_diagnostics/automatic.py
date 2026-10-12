@@ -172,6 +172,8 @@ class AutoRecorder:
   BUTTON_TRACE_MAX_NS = 30_000_000_000
   BUTTON_TRACE_MAX_FRAMES = 20_000
   BUTTON_TRACE_MAX_PER_TRIP = 24
+  DIAGNOSTIC_TRACE_MAX_PER_TRIP = 8
+  DIAGNOSTIC_TRACE_INTERVAL = 30.0
 
   def __init__(self, store, metadata):
     self.store, self.metadata = store, metadata
@@ -192,14 +194,25 @@ class AutoRecorder:
     self.last_button_edge = {}
     self.last_host_state = None
     self.last_panda_state = None
+    self.diagnostic_trace_count = 0
+    self.last_diagnostic_trace = -math.inf
+    self.transport_baseline = None
+    self.transport_identity = None
+    self.transport_report_time = -math.inf
+    self.transport_previous = {}
+    self.transport_discontinuous = False
+    self.transport_seen = set()
+    self.transport_gaps = set()
+    self.last_observer_tick = None
 
   def trace_active(self, now):
     return self.trace is not None and int(now * 1e9) <= self.trace['until_ns']
 
   @staticmethod
-  def can_row(mono_ns, direction, bus, address, data):
+  def can_row(mono_ns, direction, bus, address, data, source_mono_ns=None):
     return {'mono_ns': mono_ns, 'direction': direction, 'bus': bus,
-            'address': address, 'dlc': len(data), 'data': data.hex()}
+            'address': address, 'dlc': len(data), 'data': data.hex(),
+            **({'source_log_mono_ns': source_mono_ns} if source_mono_ns is not None else {})}
 
   def close_trace(self, now, reason):
     if self.trace is not None:
@@ -209,6 +222,50 @@ class AutoRecorder:
                          'dropped_full': self.trace['dropped_full'],
                          'stale_packets_delta': self.stale_packets - self.trace['stale_start']}, now)
       self.trace = None
+
+  def begin_trace(self, mono_ns, now, label, **details):
+    self.trace_count += 1
+    self.trace = {'id': uuid.uuid4().hex, 'start_ns': mono_ns,
+                  'until_ns': mono_ns + self.BUTTON_TRACE_POST_NS,
+                  'frames': 0, 'truncated': False, 'dropped_full': 0,
+                  'stale_start': self.stale_packets}
+    # Retain the existing chunk/reader contract for all bounded trace windows.
+    self.store.append({'kind': 'event', 'name': 'button_trace_start', 'mono_ns': mono_ns,
+                       'trace_id': self.trace['id'], 'button': label,
+                       'pre_ns': self.BUTTON_TRACE_PRE_NS, 'post_ns': self.BUTTON_TRACE_POST_NS,
+                       **details}, now)
+    for pre_ns, direction, bus, address, data, source_mono_ns in self.trace_pre:
+      if mono_ns - self.BUTTON_TRACE_PRE_NS <= pre_ns < mono_ns:
+        self.append_trace_frame(self.can_row(pre_ns, direction, bus, address, data, source_mono_ns), now)
+
+  def diagnostic_trigger(self, reason, mono_ns, now, **details):
+    if self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV' or self.state != 'recording':
+      return
+    if self.trace is not None and not self.trace_active(now):
+      self.close_trace(now, 'window_elapsed')
+    if now - self.last_event.get('diagnostic:' + reason, -math.inf) < 5.0:
+      return
+    self.last_event['diagnostic:' + reason] = now
+    if (self.trace is None and not self.store.full(now)
+        and self.diagnostic_trace_count < self.DIAGNOSTIC_TRACE_MAX_PER_TRIP
+        and now - self.last_diagnostic_trace >= self.DIAGNOSTIC_TRACE_INTERVAL):
+      self.begin_trace(mono_ns, now, 'diagnostic:' + reason, trigger=reason, trigger_details=details)
+      self.diagnostic_trace_count += 1
+      self.last_diagnostic_trace = now
+    # Sustained SPI errors cannot continually extend a window or consume the
+    # reserved physical-button window quota. Ordinary bounded samples continue.
+    self.store.append({'kind': 'event', 'name': 'diagnostic_trace_trigger', 'mono_ns': mono_ns,
+                       'observed_mono_ns': int(now * 1e9), 'reason': reason,
+                       'trace_id': self.trace['id'] if self.trace_active(now) else None,
+                       'classification': 'observation_not_causal_diagnosis', **details}, now)
+
+  def observer_tick(self, now):
+    before = self.last_observer_tick
+    self.last_observer_tick = now
+    if before is not None and now - before > .3:
+      self.diagnostic_trigger('observer_gap', int(now * 1e9), now,
+                              elapsed_s=now-before, meaning='collector_gap_not_producer_outage_proof',
+                              pre_window_may_be_sparse_due_to_collector_gap=True)
 
   def button_edges(self, bus, address, data, mono_ns, now, direction):
     if (self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV' or
@@ -238,19 +295,8 @@ class AutoRecorder:
         self.close_trace(now, 'window_elapsed')
       if self.trace is not None and mono_ns > self.trace['start_ns'] + self.BUTTON_TRACE_MAX_NS:
         self.close_trace(now, 'maximum_window')
-      if self.trace is None and self.trace_count < self.BUTTON_TRACE_MAX_PER_TRIP:
-        self.trace_count += 1
-        self.trace = {'id': uuid.uuid4().hex, 'start_ns': mono_ns,
-                      'until_ns': mono_ns + self.BUTTON_TRACE_POST_NS,
-                      'frames': 0, 'truncated': False, 'dropped_full': 0,
-                      'stale_start': self.stale_packets}
-        self.store.append({'kind': 'event', 'name': 'button_trace_start', 'mono_ns': mono_ns,
-                           'trace_id': self.trace['id'], 'button': button,
-                           'pre_ns': self.BUTTON_TRACE_PRE_NS,
-                           'post_ns': self.BUTTON_TRACE_POST_NS}, now)
-        for pre_ns, pre_direction, pre_bus, pre_address, pre_data in self.trace_pre:
-          if mono_ns - self.BUTTON_TRACE_PRE_NS <= pre_ns < mono_ns:
-            self.append_trace_frame(self.can_row(pre_ns, pre_direction, pre_bus, pre_address, pre_data), now)
+      if self.trace is None and self.trace_count - self.diagnostic_trace_count < self.BUTTON_TRACE_MAX_PER_TRIP:
+        self.begin_trace(mono_ns, now, button)
       if self.trace is not None:
         self.trace['until_ns'] = min(self.trace['start_ns'] + self.BUTTON_TRACE_MAX_NS,
                                      mono_ns + self.BUTTON_TRACE_POST_NS)
@@ -301,6 +347,15 @@ class AutoRecorder:
       self.trace_count = self.trace_pre_evicted = 0
       self.last_button = self.last_host_state = self.last_panda_state = None
       self.last_button_edge.clear()
+      self.diagnostic_trace_count = 0
+      self.last_diagnostic_trace = -math.inf
+      self.transport_baseline = self.transport_identity = None
+      self.transport_report_time = -math.inf
+      self.transport_previous = {}
+      self.transport_discontinuous = False
+      self.transport_seen = set()
+      self.transport_gaps = set()
+      self.last_observer_tick = None
     if self.trace is not None and not self.trace_active(now):
       self.close_trace(now, 'window_elapsed')
     if self.store.full(now):
@@ -364,7 +419,7 @@ class AutoRecorder:
         self.event('lead_flicker_candidate', now, classification='target_change_or_dropout_unconfirmed')
     self.previous, self.last_sample = current, now
 
-  def can_frame(self, bus, address, data, mono_ns, now, direction='rx'):
+  def can_frame(self, bus, address, data, mono_ns, now, direction='rx', source_mono_ns=None):
     if (self.state != 'recording' or address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64 or
         (address in self.LX3_ONLY_ADDRESSES and self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV')):
       return
@@ -384,18 +439,7 @@ class AutoRecorder:
       elif bus >= 128:
         direction = 'tx_echo'
     self.button_edges(bus, address, data, mono_ns, now, direction)
-    if address in self.TRACE_ADDRESSES:
-      if self.trace_active(now):
-        self.append_trace_frame(self.can_row(mono_ns, direction, bus, address, data), now)
-      if len(self.trace_pre) == self.trace_pre.maxlen:
-        self.trace_pre_evicted += 1
-      self.trace_pre.append((mono_ns, direction, bus, address, data))
-      while self.trace_pre and mono_ns - self.trace_pre[0][0] > self.BUTTON_TRACE_PRE_NS:
-        self.trace_pre.popleft()
     key = (direction, bus, address, len(data))
-    if key not in self.can_last and len(self.can_last) >= 128:
-      self.sampled_out += 1
-      return
     fault_changed = False
     if address == 0x162 and len(data) == 32 and self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
       bits = int.from_bytes(data, 'little')
@@ -403,18 +447,33 @@ class AutoRecorder:
       before = self.faults.get(key)
       fault_changed = value != before
       if fault_changed:
+        # TX echo/request observations are not evidence that the OEM ECU
+        # originated a fault. Only a physical RX observation opens this window.
+        if direction == 'rx' and ((before is not None and value != before) or any(value)):
+          self.diagnostic_trigger('oem_fault_edge', mono_ns, now, bus=bus, before=before, after=value)
         self.store.append({'kind': 'event', 'name': 'oem_fault_observation', 'mono_ns': mono_ns,
                            'direction': direction, 'bus': bus, 'before': before, 'after': value,
                            'trace_id': self.trace['id'] if self.trace_active(now) else None,
                            'semantic_status': 'dbc_definition_not_causal_diagnosis'}, now)
       self.faults[key] = value
+    if address in self.TRACE_ADDRESSES:
+      if self.trace_active(now):
+        self.append_trace_frame(self.can_row(mono_ns, direction, bus, address, data, source_mono_ns), now)
+      if len(self.trace_pre) == self.trace_pre.maxlen:
+        self.trace_pre_evicted += 1
+      self.trace_pre.append((mono_ns, direction, bus, address, data, source_mono_ns))
+      while self.trace_pre and mono_ns - self.trace_pre[0][0] > self.BUTTON_TRACE_PRE_NS:
+        self.trace_pre.popleft()
+    if key not in self.can_last and len(self.can_last) >= 128:
+      self.sampled_out += 1
+      return
     if now - self.can_last.get(key, -math.inf) < .1 and not fault_changed:
       self.sampled_out += 1
       return
     self.can_last[key] = now
-    self.store.append({'kind': 'can_sample', **self.can_row(mono_ns, direction, bus, address, data)}, now)
+    self.store.append({'kind': 'can_sample', **self.can_row(mono_ns, direction, bus, address, data, source_mono_ns)}, now)
 
-  def panda_snapshot(self, states, mono_ns, now):
+  def panda_snapshot(self, states, mono_ns, now, source_mono_ns=None):
     if self.state != 'recording' or not states:
       return
     if not 0 <= now - mono_ns / 1e9 <= .5:
@@ -432,21 +491,83 @@ class AutoRecorder:
     # configuration changes even when a short pulse falls between periodic samples.
     lx3_edge = self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV' and changed
     if now - self.last_panda_sample < (.1 if self.trace_active(now) else .5) and not lx3_edge:
+      if self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
+        self.transport_observation(current, mono_ns, now)
       return
     if self.store.full(now):
       self.sampled_out += 1
       return
     self.last_panda_sample = now
     self.store.append({'kind': 'panda_snapshot', 'mono_ns': mono_ns, 'states': states[:4],
+                       **({'source_log_mono_ns': source_mono_ns} if source_mono_ns is not None else {}),
                        'trace_id': self.trace['id'] if self.trace_active(now) else None}, now)
+    edge_details = {}
     if self.last_panda_state is not None:
       for field in fields:
         before, after = self.last_panda_state.get(field), current.get(field)
         if before != after:
+          edge_details[field] = {'before': before, 'after': after}
           self.store.append({'kind': 'event', 'name': 'panda_state_edge', 'mono_ns': mono_ns,
                              'field': field, 'before': before, 'after': after,
                              'trace_id': self.trace['id'] if self.trace_active(now) else None}, now)
     self.last_panda_state = current.copy()
+    # Preserve the first state/cause before copying the pre-window, which may
+    # exhaust a small chunk. Full-rate evidence must not displace its trigger.
+    if lx3_edge:
+      self.diagnostic_trigger('panda_authority_edge', mono_ns, now, changes=edge_details)
+    if self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
+      self.transport_observation(current, mono_ns, now)
+
+  def transport_observation(self, current, mono_ns, now):
+    identity = (current.get('safety_model'), current.get('safety_param'),
+                (current.get('lx3_authority_state') or {}).get('epoch'))
+    counters = {key: current[key] for key in ('spi_checksum_errors', 'rx_overflow', 'tx_overflow', 'tx_blocked')
+                if isinstance(current.get(key), int) and current[key] >= 0}
+    if self.transport_baseline is None or identity != self.transport_identity:
+      self.transport_identity, self.transport_baseline = identity, counters
+      self.transport_previous = counters
+      self.transport_discontinuous = False
+      self.transport_seen = set(counters)
+      self.transport_gaps = set()
+      self.transport_report_time = now
+      self.store.append({'kind': 'event', 'name': 'transport_counter_baseline', 'mono_ns': mono_ns,
+                         'boot_id': self.metadata.get('boot_id'), 'identity': identity, 'counters': counters,
+                         'spi_saturated': counters.get('spi_checksum_errors') == 65535}, now)
+      return
+    if any(after < self.transport_previous.get(key, after) for key, after in counters.items()):
+      self.transport_discontinuous = True
+    self.transport_previous = counters
+    self.transport_gaps.update(self.transport_seen - set(counters))
+    if counters == self.transport_baseline and not self.transport_gaps:
+      return
+    # An initial increase opens a bounded window immediately. Subsequent
+    # summaries aggregate five seconds instead of creating per-packet records.
+    elapsed = now - self.transport_report_time
+    if elapsed < 5.0 and now - self.last_event.get('diagnostic:transport_counter_change', -math.inf) < 5.0:
+      return
+    changes = {}
+    for key in self.transport_baseline.keys() | counters.keys():
+      after = counters.get(key)
+      before = self.transport_baseline.get(key)
+      if before == after and key not in self.transport_gaps:
+        continue
+      if after is None or before is None or key in self.transport_gaps:
+        status = 'counter_missing' if after is None else ('counter_returned' if key in self.transport_seen else 'counter_first_observed')
+        changes[key] = {'before': before, 'after': after, 'status': status, 'delta': None, 'rate_per_s': None}
+        continue
+      saturated = key == 'spi_checksum_errors' and (before == 65535 or after == 65535)
+      discontinuous = self.transport_discontinuous or after < before
+      status = 'decreased_reset_or_wrap' if discontinuous else ('saturated_lower_bound' if saturated else 'increased')
+      changes[key] = {'before': before, 'after': after, 'status': status,
+                      'delta': after-before if after >= before and not discontinuous else None,
+                      'rate_per_s': (after-before)/elapsed if after > before and not saturated and not discontinuous and elapsed >= 1.0 else None}
+    if changes:
+      self.diagnostic_trigger('transport_counter_change', mono_ns, now, elapsed_s=elapsed, changes=changes,
+                              spi_meaning='aggregate_counter_not_proof_of_can_corruption_or_queue_lag')
+    self.transport_baseline, self.transport_report_time = counters, now
+    self.transport_discontinuous = False
+    self.transport_seen.update(counters)
+    self.transport_gaps.clear()
 
   def close(self):
     self.close_trace(time.monotonic(), 'server_shutdown')
@@ -458,4 +579,5 @@ class AutoRecorder:
             'error': self.store.error, 'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
             'button_traces': self.trace_count, 'button_trace_active': self.trace is not None,
             'button_trace_pre_evicted': self.trace_pre_evicted,
+            'diagnostic_traces': self.diagnostic_trace_count,
             'control_changes': False, 'phone_backup': False}

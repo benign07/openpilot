@@ -7,6 +7,8 @@ from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS, HyundaiExtFlags
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+from opendbc.car.hyundai.manual_steering import ManualSteeringCeiling
+from opendbc.car.hyundai.lx3_haptic_notifications import HapticNotifications
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.vehicle_model import VehicleModel
 
@@ -70,7 +72,7 @@ def apply_steer_angle_limits_physics(desired_sw_deg: float,
                                      wheelbase_m: float,
                                      steer_ratio: float,
                                      steer_sw_max_deg: float,
-                                     model_v2=None, limit_target_first=False) -> float:
+                                     model_v2=None, limit_target_first=False, rate_scale=1.0) -> float:
   max_lat_accel = 8.5   # m/s^2
   max_lat_jerk  = 4.0   # m/s^3
   y_std_1s = 0.1
@@ -105,6 +107,9 @@ def apply_steer_angle_limits_physics(desired_sw_deg: float,
     max_drw_per_tick_deg,
     max_sw_rate_deg_per_tick / steer_ratio
   )
+  # LX3 acquisition may start with the car off-centre. Reduce only the
+  # steering-angle slew during the first 0.8 s; keep the stock limits below.
+  max_drw_per_tick_deg *= float(np.clip(rate_scale, 0.0, 1.0))
 
   # --- rate limit ---
   if limit_target_first:
@@ -158,6 +163,10 @@ class CarController(CarControllerBase):
     self.apply_angle_last = 0
     self.lx3_angle_active_last = False
     self.lx3_angle_limited = False
+    self.lx3_engagement_s = 0.0
+    self.manual_steering_ceiling = ManualSteeringCeiling()
+    self.haptic_notifications = HapticNotifications()
+    self.haptic_notifications_enabled = False
     self.lkas_max_torque = 0
     self.angle_max_torque = 250
     self.steering_pressed_prev = False
@@ -216,6 +225,7 @@ class CarController(CarControllerBase):
         
       self.soft_hold_mode = 1 if params.get_int("AutoCruiseControl") > 1 else 2
       self.hapticFeedbackWhenSpeedCamera = int(params.get_int("HapticFeedbackWhenSpeedCamera"))
+      self.haptic_notifications_enabled = params.get_int('HardwareC3xLite') > 0 and params.get_bool('C3xLiteHapticNotifications')
 
       self.button_spam1 = params.get_int("CruiseButtonTest1")
       self.button_spam2 = params.get_int("CruiseButtonTest2")
@@ -238,8 +248,16 @@ class CarController(CarControllerBase):
     
     angle_control = self.CP.flags & HyundaiFlags.ANGLE_CONTROL
     lx3_guard = uses_lx3_authority(self.CP)
+    notification_vibrate = self.haptic_notifications.update(
+      hud_control.audibleAlert, frame=self.frame,
+      eligible=(lx3_guard and self.haptic_notifications_enabled and CS.out.canValid and not CS.out.canTimeout
+                and (CC.latActive or CC.longActive) and not (CS.out.leftBlinker or CS.out.rightBlinker)),
+    )
     lat_active = CC.latActive
     self.lx3_angle_limited = False
+    if lx3_guard and angle_control and self.manual_steering_ceiling.fading and CC.manualSteeringScale >= 1.0:
+      # Reacquire from the measured wheel angle after the manual handoff.
+      lat_active = False
     if lx3_guard and lat_active and not self.lx3_angle_active_last:
       bound = min(self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                   float(np.degrees(np.arctan(8.5 * self.CP.wheelbase / max(CS.out.vEgoRaw, 1.0) ** 2))) * self.CP.steerRatio)
@@ -250,6 +268,12 @@ class CarController(CarControllerBase):
       lat_active = not self.lx3_angle_limited
       self.apply_angle_last = CS.out.steeringAngleDeg
     self.lx3_angle_waiting = self.lx3_angle_limited
+    if lx3_guard and angle_control and lat_active:
+      self.lx3_engagement_s = min(0.8, self.lx3_engagement_s + DT_CTRL)
+      engagement_rate_scale = 0.5 + 0.5 * self.lx3_engagement_s / 0.8
+    else:
+      self.lx3_engagement_s = 0.0
+      engagement_rate_scale = 1.0
 
     # steering torque
     new_torque = int(round(actuators.torque * self.params.STEER_MAX))
@@ -274,6 +298,7 @@ class CarController(CarControllerBase):
       self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
       CS.modelV2,
       limit_target_first=lx3_guard,
+      rate_scale=engagement_rate_scale,
     )
 
     
@@ -363,6 +388,13 @@ class CarController(CarControllerBase):
         self.full_recovery_frames = 0
         self.repeated_override_count = 0
 
+    steering_authority = self.lkas_max_torque
+    if lx3_guard and angle_control:
+      steering_authority = self.manual_steering_ceiling.update(
+        steering_authority, CC.manualSteeringScale, lat_active, resuming=getattr(CC, 'manualSteeringResume', False))
+      if self.manual_steering_ceiling.fading and round(steering_authority) < 1:
+        lat_active = False
+
     if not lat_active:
       apply_torque = 0
       self.lkas_max_torque = 0
@@ -374,6 +406,9 @@ class CarController(CarControllerBase):
       self.driver_torque_filtered = 0.0
       self.driver_torque_filtered_prev = 0.0
 
+    if not lat_active:
+      steering_authority = 0.0
+      self.lx3_engagement_s = 0.0
     self.steering_pressed_prev = CS.out.steeringPressed if lat_active else False
 
     if not lat_active:
@@ -448,9 +483,9 @@ class CarController(CarControllerBase):
 
       # steering control
       if camera_scc:
-        can_sends.extend(hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, apply_steer_req, apply_torque, CS, apply_angle, self.lkas_max_torque, angle_control))
+        can_sends.extend(hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, apply_steer_req, apply_torque, CS, apply_angle, steering_authority, angle_control))
       else:
-        can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, self.lkas_max_torque, angle_control))
+        can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, steering_authority, angle_control))
 
       # prevent LFA from activating on HDA2 by sending "no lane lines detected" to ADAS ECU
       # v24: LX3_HEV(camera_scc_params==3, HDA2+camera_scc 동시)에서도 stock LFA suppress
@@ -475,7 +510,7 @@ class CarController(CarControllerBase):
         self.hyundai_jerk.check_carrot_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
 
         if True: #not camera_scc:
-          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar, stopping, self.canfd_debug))
+          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar, stopping, self.canfd_debug, notification_vibrate=notification_vibrate))
           if hda2:
             can_sends.extend(hyundaicanfd.create_adrv_messages(self.CP, self.packer, self.CAN, self.frame))
           else:
@@ -551,7 +586,7 @@ class CarController(CarControllerBase):
 
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
-    new_actuators.torqueOutputCan = apply_torque
+    new_actuators.torqueOutputCan = steering_authority if angle_control else apply_torque
     new_actuators.steeringAngleDeg = float(apply_angle)
     new_actuators.lx3AngleLimited = self.lx3_angle_limited
     new_actuators.accel = accel

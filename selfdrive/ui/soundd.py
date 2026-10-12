@@ -264,6 +264,10 @@ class Soundd:
 
 
 def main():
+  if Params().get_int("HardwareC3xLite") > 0:
+    from openpilot.selfdrive.controls.beep import Beepd
+    Beepd().beepd_thread(check_selfdrive_timeout_alert)
+    return
   s = Soundd()
   s.soundd_thread()
 

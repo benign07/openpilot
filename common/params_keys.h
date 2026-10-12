@@ -224,6 +224,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"StopDistanceCarrot", {PERSISTENT, INT, "550"}},
     {"JLeadFactor3", {PERSISTENT, INT, "0"}},
     {"CruiseButtonMode", {PERSISTENT, INT, "0"}},
+    {"CruiseStartCurrentSpeed", {PERSISTENT, BOOL, "1"}},
     {"CancelButtonMode", {PERSISTENT, INT, "0"}},
     {"LfaButtonMode", {PERSISTENT, INT, "0"}},
     {"CruiseButtonTest1", {PERSISTENT, INT, "8"}},
@@ -290,6 +291,13 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     {"DynamicTFollow", {PERSISTENT, INT, "0"}},
     {"DynamicTFollowLC", {PERSISTENT, INT, "100"}},
+    {"ApproachComfortEnabled", {PERSISTENT, BOOL, "0"}},
+    {"ApproachFlexibleGap", {PERSISTENT, BOOL, "0"}},
+    {"ApproachFlexibleGapMin", {PERSISTENT, INT, "70"}},
+    {"ApproachCoastStrength", {PERSISTENT, INT, "40"}},
+    {"ApproachBrakeMargin", {PERSISTENT, INT, "40"}},
+    {"ApproachStopSmooth", {PERSISTENT, INT, "40"}},
+    {"ApproachTrafficCalm", {PERSISTENT, INT, "40"}},
     {"TFollowDecelBoost", {PERSISTENT, INT, "10"}},
     {"EnableSpeedTF", {PERSISTENT, INT, "0"}},
     {"AChangeCostStarting", {PERSISTENT, INT, "10"}},
@@ -301,6 +309,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     {"AdjustLaneOffset", {PERSISTENT, INT, "0"}},
     {"LaneChangeNeedTorque", {PERSISTENT, INT, "0"}},
+    {"ManualSteerWithBlinker", {PERSISTENT, BOOL, "0"}},
     {"LaneChangeDelay", {PERSISTENT, INT, "0"}},
     {"LaneChangeBsd", {PERSISTENT, INT, "0"}},
     {"LaneLineCheck", {PERSISTENT, INT, "0"}},
@@ -358,5 +367,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"NNFFModelName", {CLEAR_ON_OFFROAD_TRANSITION, STRING}},
 
     {"HardwareC3xLite", {PERSISTENT, INT, "0"}},
+    {"C3xLiteBuzzerMute", {PERSISTENT, BOOL, "0"}},
+    {"C3xLiteHapticNotifications", {PERSISTENT, BOOL, "0"}},
     {"ShareData", {PERSISTENT, INT, "0"}},
 };

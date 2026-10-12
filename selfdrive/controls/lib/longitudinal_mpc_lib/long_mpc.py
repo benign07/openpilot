@@ -11,6 +11,7 @@ from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 # from openpilot.selfdrive.carrot.carrot_functions import CarrotPlanner
 from openpilot.selfdrive.carrot.carrot_functions import XState
+from openpilot.selfdrive.controls.lib.flexible_gap import FlexibleGap, FlexibleGapSettings, MIN_FLEX_TF
 
 if __name__ == '__main__':  # generating code
   from openpilot.third_party.acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -250,6 +251,7 @@ class LongitudinalMpc:
 
 
   def reset(self):
+    self.flex_gap = FlexibleGap(self.dt)
     # self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.solver.reset()
     # self.solver.options_set('print_level', 2)
@@ -361,7 +363,8 @@ class LongitudinalMpc:
     self.cruise_min_a = min_a
     self.max_a = max_a
 
-  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
+  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, approach_extra_tf=0.0,
+             flex_gap_settings=FlexibleGapSettings(), flex_gap_eligible=False, observed_a_ego=0.0):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -386,6 +389,19 @@ class LongitudinalMpc:
       v_cruise, stop_x, mode = carrot.v_cruise, carrot.stop_dist, carrot.mode
       desired_distance = desired_follow_distance(v_ego, lead_v_0, comfort_brake, stop_distance, t_follow)
       t_follow = carrot.dynamic_t_follow(t_follow, radarstate.leadOne, desired_distance, self.prev_a)
+
+    nominal_tf = getattr(carrot, 'flex_gap_nominal_tf', 0.0)
+    reduce_tf = self.flex_gap.update(
+      flex_gap_settings, (radarstate.leadOne, radarstate.leadTwo),
+      eligible=(flex_gap_eligible and mode == 'acc' and not reset_state
+                and abs(t_follow - nominal_tf) < 0.005),
+      v_ego=v_ego, a_ego=observed_a_ego, base_tf=t_follow,
+      stop_distance=stop_distance, comfort_brake=comfort_brake,
+    )
+    if reduce_tf > 0.0:
+      # Never accelerate deliberately toward the relaxed reference. Preserve
+      # the existing feasible initial acceleration floor and negative bounds.
+      self.max_a = min(self.max_a, max(0.0, a_ego - 0.05))
 
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
@@ -454,6 +470,32 @@ class LongitudinalMpc:
     else:
       raise NotImplementedError(f'Planner mode {self.mode} not recognized in planner update')
 
+    # Comfort target only: preserve physical x_obstacles and all constraint params.
+    self.yref[:,0] = 0.0
+    if mode == 'acc' and not reset_state and (approach_extra_tf > 0.0 or reduce_tf > 0.0):
+      gap_v = np.maximum(0.0, self.x_sol[:,1] + v_ego - self.x_sol[0,1])
+      preferred = x_obstacles.copy()
+      extra = min(float(np.clip(approach_extra_tf, 0.0, 0.5)), max(0.0, 2.5 - t_follow))
+      for index, lead in enumerate((radarstate.leadOne, radarstate.leadTwo)):
+        if lead.status and lead.radar and lead.radarTrackId >= 0:
+          preferred[:,index] -= gap_v * extra
+          if index == 0 and reduce_tf > 0.0:
+            # Only the primary's comfort reference is relaxed: legacy radard
+            # may move leadTwo up to 8 m closer. The original obstacle and
+            # asymmetric danger cost stay intact. Leave 5% headroom outside
+            # that cost boundary at the current predicted speeds.
+            full_distance = get_safe_obstacle_distance(gap_v, t_follow, comfort_brake, stop_distance)
+            reduction = np.minimum(gap_v * reduce_tf,
+                                   np.maximum(0.0, (1.0 - LEAD_DANGER_FACTOR - 0.05) * full_distance))
+            reduction = np.minimum(reduction, gap_v * max(0.0, t_follow - MIN_FLEX_TF))
+            preferred[:,index] += reduction
+      shift = np.min(x_obstacles, axis=1) - np.min(preferred, axis=1)
+      self.yref[:,0] = shift / (gap_v + 10.0)
+      # desired_distance describes leadOne; do not inflate its display for a
+      # vision-only primary when only the secondary radar lead gets headroom.
+      primary = radarstate.leadOne
+      if primary.status and primary.radar and primary.radarTrackId >= 0:
+        self.desired_distance += float(shift[0])
     self.yref[:,1] = x
     self.yref[:,2] = v
     self.yref[:,3] = a

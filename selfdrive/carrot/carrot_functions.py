@@ -282,6 +282,8 @@ class CarrotPlanner:
   def get_T_FOLLOW(self, personality=log.LongitudinalPersonality.standard, v_ego=0.0, a_ego=0.0):
     tf_base = self._get_base_t_follow(personality, v_ego)
     tf_target = self._apply_speed_t_follow_scale(tf_base, v_ego)
+    # Remember the unboosted request without running the stateful getter twice.
+    self.flex_gap_nominal_tf = self._clip_t_follow(tf_target * self.mySafeFactor)
     tf_adjusted = self._apply_decel_hold_and_boost_t_follow(tf_target, a_ego)
     tf_safe = float(tf_adjusted * self.mySafeFactor)
     tf_final = self._clip_t_follow(tf_safe)

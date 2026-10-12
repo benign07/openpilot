@@ -20,6 +20,7 @@
               "zh": "起步动作",
               "params": [
                 "AlwaysLateral",
+                "CruiseStartCurrentSpeed",
                 "AutoEngage",
                 "DisableMinSteerSpeed"
               ]
@@ -130,6 +131,7 @@
               "zh": "变道 (自动转向)",
               "params": [
                 "LaneChangeNeedTorque",
+                "ManualSteerWithBlinker",
                 "LaneChangeDelay",
                 "LaneChangeBsd",
                 "LaneLineCheck",
@@ -336,7 +338,14 @@
                 "DynamicTFollow",
                 "DynamicTFollowLC",
                 "EnableSpeedTF",
-                "TFollowDecelBoost"
+                "TFollowDecelBoost",
+                "ApproachComfortEnabled",
+                "ApproachCoastStrength",
+                "ApproachBrakeMargin",
+                "ApproachStopSmooth",
+                "ApproachTrafficCalm",
+                "ApproachFlexibleGap",
+                "ApproachFlexibleGapMin"
               ]
             },
             {
@@ -559,9 +568,28 @@
           "ko": "사운드",
           "en": "Sound",
           "zh": "声音",
-          "params": [
-            "SoundVolumeAdjust",
-            "SoundVolumeAdjustEngage"
+          "groups": [
+            {
+              "id": "SYS_SOUND_VOLUME",
+              "ko": "스피커 음량",
+              "en": "Speaker volume",
+              "zh": "扬声器音量",
+              "params": [
+                "SoundVolumeAdjust",
+                "SoundVolumeAdjustEngage"
+              ]
+            },
+            {
+              "id": "SYS_C3XLITE",
+              "ko": "C3xlite",
+              "en": "C3xlite",
+              "zh": "C3xlite",
+              "params": [
+                "HardwareC3xLite",
+                "C3xLiteBuzzerMute",
+                "C3xLiteHapticNotifications"
+              ]
+            }
           ]
         },
         {
@@ -1410,6 +1438,22 @@
       "unit": 1
     },
     {
+      "group": "시작",
+      "name": "CruiseStartCurrentSpeed",
+      "title": "크루즈 시작·재개 시 현재 속도",
+      "descr": "LX3 오파 속도제어를 새로 켤 때 이전 설정속도 대신 그 순간의 계기판 기준 속도로 시작합니다. 기본 켜짐. 0: 기존 RES 동작, 1: 현재 속도. 정지 중에는 기존 최소 설정속도(5km/h)를 유지하며, 이미 켜진 크루즈의 정지·출발이나 LFA만 켜기는 속도를 재설정하지 않습니다. 시작 이후 속도 버튼·내비 제한·감속 제어는 정상 작동합니다. 순정 크루즈 속도를 강제로 바꾸는 기능은 아닙니다. 계기판 속도가 차륜 속도와 크게 다르거나 비정상이면 차륜 속도를 사용합니다.",
+      "egroup": "START",
+      "etitle": "Start cruise at current speed",
+      "edescr": "LX3 openpilot speed control starts each new engagement at the current cluster speed instead of the saved RES target. Default ON. Keeps the existing 5 km/h minimum; ongoing stop/go and LFA-only activation do not reset the target. Normal speed buttons and navigation limits still apply. Does not change OEM-controlled cruise.",
+      "cgroup": "启动设置",
+      "ctitle": "巡航启动时使用当前速度",
+      "cdescr": "LX3 openpilot每次重新启用速度控制时使用当前仪表速度，不恢复旧目标。默认开启。保留原有5公里/小时最低设定；已启用的走停及单独LFA不重设速度。不改变原厂巡航。",
+      "min": 0,
+      "max": 1,
+      "default": 1,
+      "unit": 1
+    },
+    {
       "group": "버튼설정",
       "name": "CancelButtonMode",
       "title": "캔슬버튼작동모드(0)",
@@ -2224,6 +2268,23 @@
       "max": 1,
       "default": 0,
       "unit": 1
+    },
+    {
+      "group": "조향일반",
+      "name": "ManualSteerWithBlinker",
+      "title": "깜빡이 사용 중 수동조향",
+      "descr": "LX3에서 자동차선변경을 끈 경우(-1), 한쪽 깜빡이를 켜면 기존 조향보조를 약1초에 걸쳐 줄이고 수동 조향으로 전환합니다. 속도제어는 별도로 유지합니다. 깜빡이가 꺼지고 조향입력 없음·조향각15도 미만·정상CAN이1초 유지되면 기존 복귀 조건을 따릅니다. 깜빡이를 끈 뒤 사용자가 다시 켜서 Panda의 새 횡/종 요청 승인이 확인되면 불필요한 대기 없이 첫 프레임부터 약1초 동안 부드럽게 복귀합니다. 깜빡이가 켜진 동안이나 단순 속도/고장 복구만으로는 수동 전환을 취소하지 않습니다. 기존 제어권한·각도·토크 제한은 유지하며, 취소/고장으로 인한 중단은 지연하지 않습니다.",
+      "egroup": "LAT",
+      "etitle": "Manual steering while signalling",
+      "edescr": "LX3 only, with automatic lane change OFF (-1). A single blinker fades existing steering assistance over about1second; longitudinal control remains separate. Ordinary return retains the existing one-second clear conditions. After blinkers are OFF, a newly accepted native lateral/longitudinal request can start a smooth one-second handback on its first permitted frame, including driver steering coexistence. Blinker-on, speed edges or fault recovery alone cannot cancel manual handoff. Existing authority, angle and torque limits remain; cancellation/fault stops are immediate.",
+      "cgroup": "转向",
+      "ctitle": "打灯时手动转向",
+      "cdescr": "仅LX3且自动变道关闭(-1)：单侧转向灯使现有转向辅助约1秒内平顺减弱，速度控制独立。关闭转向灯后，新获得批准的横向或纵向请求可立即开始约1秒的平顺恢复。仅速度变化或故障恢复不能取消手动接管。保留现有控制权限、角度及扭矩限制；取消和故障停止不延迟。",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "unit": 1,
+      "control": "toggle"
     },
     {
       "group": "조향일반",
@@ -3104,7 +3165,167 @@
       "max": 1,
       "default": 0,
       "unit": 1
+    },
+    {
+      "group": "차량간격",
+      "name": "ApproachComfortEnabled",
+      "title": "앞차 접근·정차 편안함",
+      "descr": "LX3 오파 종방향 제어 전용입니다. 켜면 아래 네 설정을 적용합니다. 끄면 기존 당근 계산으로 돌아갑니다. 가속·브레이크 페달 개입, 제어 비활성, 차선변경, 실험모드, 오래되거나 잘못된 레이더에서는 적용하지 않습니다. 약 1초 주기로 반영됩니다. 정지 간격은 기존 StopDistanceCarrot 설정을 사용합니다.",
+      "egroup": "CRUISE",
+      "etitle": "Lead approach comfort",
+      "edescr": "LX3 openpilot longitudinal control only. Enables the four preferences below; OFF restores existing Carrot calculations. Not applied during pedal override, inactive control, lane changes, experimental mode or stale/invalid radar. Refreshes about once per second. The existing StopDistanceCarrot remains the standstill gap.",
+      "cgroup": "跟车距离",
+      "ctitle": "Lead approach comfort",
+      "cdescr": "LX3 openpilot longitudinal control only. Enables the four preferences below; OFF restores existing Carrot calculations. Not applied during pedal override, inactive control, lane changes, experimental mode or stale/invalid radar. Refreshes about once per second. The existing StopDistanceCarrot remains the standstill gap.",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "unit": 1,
+      "control": "toggle"
+    },
+    {
+      "group": "차량간격",
+      "name": "ApproachCoastStrength",
+      "title": "앞차 감속 시 가속 억제",
+      "descr": "앞차 접근·정차 편안함을 켜야 적용됩니다. 앞차가 느리거나 감속하고 약 4초 예측 범위 안에서 접근하면 양의 가속 상한을 낮춥니다. 높을수록 가속을 더 줄입니다. 0은 추가 억제 없음, 100은 조건이 충분할 때 가속 상한 0까지 낮춥니다. 경사·차종에 따라 실제 타력주행과 다를 수 있습니다. 기존의 더 강한 감속은 완화하지 않습니다.",
+      "egroup": "CRUISE",
+      "etitle": "Anticipatory acceleration reduction",
+      "edescr": "Requires Lead approach comfort. Reduces the positive acceleration ceiling when a slower/braking lead is being approached within a roughly four-second prediction window. Higher reduces acceleration more. 0 adds no reduction; 100 can reach a zero acceleration ceiling. This is not guaranteed physical coasting on every grade/powertrain. Never relaxes existing stronger braking.",
+      "cgroup": "跟车距离",
+      "ctitle": "Anticipatory acceleration reduction",
+      "cdescr": "Requires Lead approach comfort. Reduces the positive acceleration ceiling when a slower/braking lead is being approached within a roughly four-second prediction window. Higher reduces acceleration more. 0 adds no reduction; 100 can reach a zero acceleration ceiling. This is not guaranteed physical coasting on every grade/powertrain. Never relaxes existing stronger braking.",
+      "min": 0,
+      "max": 100,
+      "default": 40,
+      "unit": 5
+    },
+    {
+      "group": "차량간격",
+      "name": "ApproachBrakeMargin",
+      "title": "고속 접근 감속 여유",
+      "descr": "앞차 접근·정차 편안함을 켜야 적용됩니다. 기존 차간거리·동적 TF·감속 TF를 계산한 뒤 접근 중 계획 목표에 속도별 여유를 더합니다. 최대 설정에서 약 90km/h 이상은 최대 0.5초이며 저속으로 갈수록 작아집니다. 기존 TF와 합쳐 2.5초를 넘는 추가 여유는 만들지 않습니다. 기존 동적·감속 TF와 효과가 겹칠 수 있습니다. 물리 장애물·제동 한계·정지 간격은 유지합니다. 적용 여유는 서서히 해제됩니다.",
+      "egroup": "CRUISE",
+      "etitle": "High-speed approach headroom",
+      "edescr": "Requires Lead approach comfort. Adds a speed-dependent planning margin above the existing following target, including dynamic and deceleration TF. Up to 0.5 seconds at about 90 km/h at maximum, tapering at low speed; adds no margin beyond a combined 2.5-second target. Effects can overlap existing TF adjustments. Physical obstacles, braking bounds and standstill gap remain unchanged. Applied margin releases gradually.",
+      "cgroup": "跟车距离",
+      "ctitle": "High-speed approach headroom",
+      "cdescr": "仅在启用前车接近舒适模式时生效。在原有跟车目标（含动态与减速TF）之上增加规划余量。最大设置在约90km/h时最多增加0.5秒，低速时递减；不会在原TF加余量超过2.5秒时继续增加。可能与原TF调节叠加。物理障碍、制动边界及停车间距不变，余量逐步释放。",
+      "min": 0,
+      "max": 100,
+      "default": 40,
+      "unit": 5
+    },
+    {
+      "group": "차량간격",
+      "name": "ApproachStopSmooth",
+      "title": "저속 정차 매끄러움",
+      "descr": "앞차 접근·정차 편안함을 켜야 적용됩니다. 저속에서 앞차와 여유가 있고 약한 감속 중일 때 기존 jerk 및 이전 가속도와의 변화 비용에 배율을 곱합니다. 주행모드·차간거리 성향이 정한 기본 반응은 유지하며 높을수록 변화가 완만한 계획을 선호합니다. 급접근·가까운 앞차·강한 감속에서는 추가 배율을 해제합니다. 브레이크 강제 해제·제동 한계·정지유지 변경은 없습니다. 0은 추가 비용 없음입니다.",
+      "egroup": "CRUISE",
+      "etitle": "Low-speed stopping smoothness",
+      "edescr": "Requires Lead approach comfort. Multiplies the existing jerk and previous-acceleration-change costs during a mild low-speed approach with sufficient clearance. Retains the base mode/personality response. Close/rapidly closing leads or stronger braking remove the extra multiplier. Does not force brake release or change braking bounds/standstill hold. 0 adds no cost.",
+      "cgroup": "跟车距离",
+      "ctitle": "Low-speed stopping smoothness",
+      "cdescr": "仅在启用前车接近舒适模式时生效。在低速、余量充足且轻微减速时，对原有jerk和相对上一加速度的变化代价乘以额外倍率。保留驾驶模式与跟车性格的基础响应。近距离、快速接近或强制动时取消额外倍率。不强制松刹车，不改变制动边界或停车保持。0不增加代价。",
+      "min": 0,
+      "max": 100,
+      "default": 40,
+      "unit": 5
+    },
+    {
+      "group": "차량간격",
+      "name": "ApproachTrafficCalm",
+      "title": "정체 추종 차분함",
+      "descr": "앞차 접근·정차 편안함을 켜야 적용됩니다. 약 22km/h 이하에서 가까운 저속 앞차를 따라갈 때 양의 가속 상한을 완만히 낮춥니다. 높을수록 재가속을 차분하게 하며 최대 설정에서 상한을 최대 절반 줄입니다. 기존 가속 억제와 강한 쪽을 사용합니다. 출발 허용·정지유지·차간거리 버튼은 기존 동작을 유지합니다. 0은 추가 억제 없음입니다.",
+      "egroup": "CRUISE",
+      "etitle": "Stop-go acceleration calmness",
+      "edescr": "Requires Lead approach comfort. Progressively reduces the positive acceleration ceiling when following a nearby slow lead below about 22 km/h. Higher calms reacceleration, reducing the ceiling by up to half at maximum. Uses the stronger of this and anticipatory reduction. Existing starting permission, standstill hold and gap buttons are unchanged. 0 adds no reduction.",
+      "cgroup": "跟车距离",
+      "ctitle": "Stop-go acceleration calmness",
+      "cdescr": "Requires Lead approach comfort. Progressively reduces the positive acceleration ceiling when following a nearby slow lead below about 22 km/h. Higher calms reacceleration, reducing the ceiling by up to half at maximum. Uses the stronger of this and anticipatory reduction. Existing starting permission, standstill hold and gap buttons are unchanged. 0 adds no reduction.",
+      "min": 0,
+      "max": 100,
+      "default": 40,
+      "unit": 5
+    },
+    {
+      "group": "C3xlite",
+      "name": "HardwareC3xLite",
+      "title": "C3xlite 부저 출력 사용",
+      "descr": "C3xlite 기기의 GPIO 부저 출력을 사용합니다. 일반 스피커 기기는 끄세요. 출력 방식 변경은 재시작 후 적용됩니다. 운전자 감시 설정은 변경하지 않습니다.",
+      "egroup": "C3xlite",
+      "etitle": "C3xlite 부저 출력 사용",
+      "edescr": "C3xlite 기기의 GPIO 부저 출력을 사용합니다. 일반 스피커 기기는 끄세요. 출력 방식 변경은 재시작 후 적용됩니다. 운전자 감시 설정은 변경하지 않습니다.",
+      "cgroup": "C3xlite",
+      "ctitle": "C3xlite 부저 출력 사용",
+      "cdescr": "C3xlite 기기의 GPIO 부저 출력을 사용합니다. 일반 스피커 기기는 끄세요. 출력 방식 변경은 재시작 후 적용됩니다. 운전자 감시 설정은 변경하지 않습니다.",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "unit": 1
+    },
+    {
+      "group": "C3xlite",
+      "name": "C3xLiteBuzzerMute",
+      "title": "↳ 일반 부저음 끄기",
+      "descr": "C3xlite의 GPIO 부저는 켜기/끄기 출력입니다. 작동 시작·일반 안내·내비 회전·후진·정차 알림만 끕니다. 해제·거절·운전자 인계·긴급·사각지대·카운트다운 경고는 유지하며, 기존 음량값이0이어도 이 경고들은 남습니다. 기존의 전체 무음과 동작이 다릅니다. C3xlite 하드웨어 모드는 재시작이 필요하고 이 무음 스위치는 약0.5초마다 반영합니다.",
+      "egroup": "C3xlite",
+      "etitle": "↳ 일반 부저음 끄기",
+      "edescr": "C3xlite binary GPIO buzzer: mute routine engage, navigation, reverse and stopping cues. Disengage/refusal/takeover/urgent/blind-spot/countdown warnings remain audible even when volume is0. This changes the old all-sounds mute behavior. Master hardware mode requires restart; routine mute refreshes within about0.5s.",
+      "cgroup": "C3xlite",
+      "ctitle": "↳ 일반 부저음 끄기",
+      "cdescr": "C3xlite蜂鸣器只支持开关输出。本选项关闭普通接通、导航、倒车及停车提示；保留解除、拒绝、接管、紧急、盲区和倒计时警示，音量为0时也保留。硬件模式需要重启，普通静音约0.5秒刷新。",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "unit": 1
+    },
+    {
+      "group": "C3xlite",
+      "name": "C3xLiteHapticNotifications",
+      "title": "↳ 일반 알림을 핸들 진동으로 (시험)",
+      "descr": "LX3 실험 옵션·기본 꺼짐. 기존0x162 VIBRATE 신호로 일반 알림 때 짧은 진동을 요청합니다. 실제 핸들 진동 지원은 아직 미확인입니다. 제어가 비활성이거나 깜빡이가 켜져 있으면 요청하지 않습니다. 중요한 경고음·운전자 감시·MDPS 응답·조향토크를 바꾸지 않습니다.",
+      "egroup": "C3xlite",
+      "etitle": "↳ 일반 알림을 핸들 진동으로 (시험)",
+      "edescr": "Experimental LX3 option, default OFF. Request a short routine notification through the existing0x162 VIBRATE signal. Physical steering-wheel haptics are unverified. No request with inactive control or blinkers on. Does not replace critical acoustic alerts or alter driver monitoring, MDPS responses or steering torque.",
+      "cgroup": "C3xlite",
+      "ctitle": "↳ 일반 알림을 핸들 진동으로 (시험)",
+      "cdescr": "LX3实验选项，默认关闭。通过现有0x162 VIBRATE信号请求短暂普通提示。实际方向盘震动尚未验证。控制未启用或转向灯亮时不请求。不替代重要声音警示，不改变驾驶员监测、MDPS响应或转向扭矩。",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "unit": 1
+    },
+    {
+      "group": "차량간격",
+      "name": "ApproachFlexibleGap",
+      "title": "안정 접근 시 간격 유연화 (시험)",
+      "descr": "앞차 접근·정차 편안함을 켜야 LX3 일반 ACC에 적용됩니다. 같은 레이더 앞차가 3초 이상 완만하게 접근하면 시간거리 목표를 서서히 줄입니다. 정차거리·제동거리·급감속 대응은 유지합니다. 최소 1.25초 및 MPC 위험영역 밖에서만 허용하므로 현재 0.7~1.15초 설정에서는 더 줄이지 않습니다. 끼어들기·급감속·인식 이상 시 기본 거리 기준으로 즉시 복귀합니다. 실제 거리가 즉시 늘어나는 뜻은 아닙니다. 기본 끔, 실차 검증 전. 안정적인 레이더 앞차 두 대를 모두 확인하므로 카메라 전용 보조 대상이 있거나 신호가 흔들리면 비활성으로 돌아갑니다. 현재 기록 재생에서는 실제 완화가 한 번도 발생하지 않아 유용성과 부드러움은 미검증입니다.",
+      "egroup": "차량간격",
+      "etitle": "안정 접근 시 간격 유연화 (시험)",
+      "edescr": "Experimental, default OFF. Gradually relax only the moving timegap component, down to the selected ratio, during confirmed gentle stable radar closing. Retains braking/standstill terms and native MPC danger constraints; restores the reference on risk, not physical distance instantly. Minimum nominal TF1.25s means existing shorter gaps get no reduction. An uncertain vision-only secondary cancels it. Recorded observation replay had zero activations; usefulness and closed-loop comfort remain unverified.",
+      "cgroup": "차량간격",
+      "ctitle": "안정 접근 시 간격 유연화 (시험)",
+      "cdescr": "实验功能，默认关闭。仅在雷达目标稳定且缓慢接近时逐渐缩短移动时距部分，保留制动和静止间距及原有MPC约束。风险时恢复目标距离，实际距离不会立即恢复。最低标称时距1.25秒，现有更短设定不会缩减。记录回放中未激活，实车效果尚未验证。",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "unit": 1
+    },
+    {
+      "group": "차량간격",
+      "name": "ApproachFlexibleGapMin",
+      "title": "↳ 유연화 최소 시간거리 비율 (%)",
+      "descr": "70~100%, 기본 70%. 기존 설정의 이동 시간거리 부분에 대한 최대 완화량입니다. 정차 간격과 속도차 제동 여유는 줄이지 않습니다. 1.25초 및 기존 MPC 위험경계+여유가 우선하므로 실제로 70%까지 줄지 않을 수 있습니다. 100은 추가 완화 없음. 간격을 줄이기 위한 계획 가속은 억제합니다.",
+      "egroup": "차량간격",
+      "etitle": "↳ 유연화 최소 시간거리 비율 (%)",
+      "edescr": "70~100%, 기본 70%. 기존 설정의 이동 시간거리 부분에 대한 최대 완화량입니다. 정차 간격과 속도차 제동 여유는 줄이지 않습니다. 1.25초 및 기존 MPC 위험경계+여유가 우선하므로 실제로 70%까지 줄지 않을 수 있습니다. 100은 추가 완화 없음. 간격을 줄이기 위한 계획 가속은 억제합니다.",
+      "cgroup": "차량간격",
+      "ctitle": "↳ 유연화 최소 시간거리 비율 (%)",
+      "cdescr": "70~100%, 기본 70%. 기존 설정의 이동 시간거리 부분에 대한 최대 완화량입니다. 정차 간격과 속도차 제동 여유는 줄이지 않습니다. 1.25초 및 기존 MPC 위험경계+여유가 우선하므로 실제로 70%까지 줄지 않을 수 있습니다. 100은 추가 완화 없음. 간격을 줄이기 위한 계획 가속은 억제합니다.",
+      "min": 70,
+      "max": 100,
+      "default": 70,
+      "unit": 5
     }
-
   ]
 }

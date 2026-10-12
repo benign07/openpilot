@@ -137,8 +137,12 @@ class Controls:
         refuse_after=self.sm['selfdriveState'].lx3RefuseAfterSequence)
       # Permission persists across low-speed/driver-coexistence intervals;
       # actual actuator output still follows stock speed and suspension rules.
-      CC.latActive = self.carrot_controls.lat_suspend_control(CS, lat_allowed and not standstill)
+      CC.latActive = self.carrot_controls.lat_suspend_control(
+        CS, lat_allowed and not standstill, explicit_resume_supported=hasattr(CC, 'manualSteeringResume'))
       CC.longActive = CC.longActive and long_allowed
+    CC.manualSteeringScale = self.carrot_controls.manual_steering.scale
+    if hasattr(CC, 'manualSteeringResume'):
+      CC.manualSteeringResume = self.carrot_controls.manual_steering.resuming
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
@@ -257,6 +261,8 @@ class Controls:
     hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead
     hudControl.leadDistanceBars = self.sm['selfdriveState'].personality.raw + 1
     hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual
+    if uses_lx3_authority(self.CP):
+      hudControl.audibleAlert = self.sm['selfdriveState'].alertSound
 
     radarState = self.sm['radarState']
     leadOne = radarState.leadOne
