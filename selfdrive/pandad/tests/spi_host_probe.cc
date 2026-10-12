@@ -14,7 +14,7 @@
 #include <cstdio>
 #include "linux/spi/spidev.h"
 
-enum class Scenario { GOOD, OVERSIZED, ABOVE_REQUEST, RECOVERY_STUCK, HEADER_NACK, BAD_CHECKSUM };
+enum class Scenario { GOOD, OVERSIZED, ABOVE_REQUEST, RECOVERY_STUCK, DATA_BACKPRESSURE, HEADER_NACK, BAD_CHECKSUM };
 static Scenario scenario = Scenario::GOOD;
 static double fake_ms = 0;
 static unsigned calls = 0;
@@ -22,6 +22,7 @@ static bool excessive_read = false;
 static unsigned response_length = 12;
 static unsigned request_max = 12;
 static unsigned flow_nacks = 0;
+static unsigned header_nacks = 0;
 namespace util {
 int safe_ioctl(int, unsigned long request, void *argument, const char *) {
   if (request != SPI_IOC_MESSAGE(1)) return 0;
@@ -35,9 +36,9 @@ int safe_ioctl(int, unsigned long request, void *argument, const char *) {
     response_length = request_max;
     if (scenario == Scenario::RECOVERY_STUCK) return -1;
   } else if (tx[0] == 0x11 && transfer->len == 1) {
-    rx[0] = 0x79;
+    rx[0] = scenario == Scenario::HEADER_NACK && header_nacks++ < 4U ? 0x1F : 0x79;
   } else if (tx[0] == 0x13 && transfer->len == 3) {
-    if (scenario == Scenario::HEADER_NACK && flow_nacks++ < 12U) {
+    if (scenario == Scenario::DATA_BACKPRESSURE && flow_nacks++ < 12U) {
       rx[0] = 0x1F;
       return static_cast<int>(transfer->len);
     }
@@ -68,14 +69,15 @@ int main(int argc, char **argv) {
     calls = 0; fake_ms = 0; excessive_read = false;
     std::string test = argc > 1 ? argv[1] : "good";
     scenario = test == "oversized" ? Scenario::OVERSIZED : test == "request" ? Scenario::ABOVE_REQUEST :
-               test == "recovery" ? Scenario::RECOVERY_STUCK : test == "nack" ? Scenario::HEADER_NACK :
+               test == "recovery" ? Scenario::RECOVERY_STUCK : test == "nack" ? Scenario::DATA_BACKPRESSURE :
+               test == "header_nack" ? Scenario::HEADER_NACK :
                test == "checksum" ? Scenario::BAD_CHECKSUM : Scenario::GOOD;
     unsigned char buffer[16]; std::memset(buffer, 0xCC, sizeof(buffer));
-    int result = scenario == Scenario::HEADER_NACK ? panda.bulk_write(3, buffer, sizeof(buffer), 1) :
+    int result = scenario == Scenario::DATA_BACKPRESSURE ? panda.bulk_write(3, buffer, sizeof(buffer), 1) :
                  panda.control_read(0x42, 0, 0, buffer, sizeof(buffer), 1);
-    if (scenario == Scenario::HEADER_NACK) {
+    if (scenario == Scenario::DATA_BACKPRESSURE) {
       assert(result == 0 && panda.comms_healthy && flow_nacks >= 12U && fake_ms > 120);
-    } else if (scenario == Scenario::GOOD) {
+    } else if (scenario == Scenario::GOOD || scenario == Scenario::HEADER_NACK) {
       assert(result == 16 && buffer[0] == 0);
     } else {
       assert(result < 0 && !excessive_read && calls < 500);
@@ -87,6 +89,7 @@ int main(int argc, char **argv) {
     if (test == "oversized" || test == "request") assert(spi_diagnostics.get(SpiStage::BAD_LENGTH) > 0);
     if (test == "recovery") assert(spi_diagnostics.get(SpiStage::RECOVERY_FAILED) > 0);
     if (test == "nack") assert(spi_diagnostics.get(SpiStage::DATA_NACK) >= 12U);
+    if (test == "header_nack") assert(spi_diagnostics.get(SpiStage::HEADER_NACK) >= 4U);
     if (test == "checksum") assert(spi_diagnostics.get(SpiStage::BAD_CHECKSUM) > 0);
     SpiDiagnostics report;
     assert(!report.report_due(4999) && report.report_due(5000));

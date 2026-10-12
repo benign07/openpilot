@@ -30,7 +30,7 @@ def main():
        '-I' + str(fixtures), '-I' + str(ROOT),
        '-DSPI_PRODUCTION_SOURCE="' + source.as_posix() + '"', '-DEXPECT_SPI_DIAGNOSTICS',
        str(ROOT / 'selfdrive/pandad/tests/spi_host_probe.cc'), '-o', str(exe)], out / 'host-compile.log')
-  for case in ('good', 'oversized', 'request', 'recovery', 'nack', 'checksum'):
+  for case in ('good', 'oversized', 'request', 'recovery', 'nack', 'header_nack', 'checksum'):
     run([str(exe), case], out / ('host-' + case + '.log'))
   for name in ('counter.c', 'crc.h'):
     shutil.copyfile(ROOT / 'panda/tests/spi_host_fixtures' / name, out / name)
@@ -40,7 +40,7 @@ def main():
   run([args.cc, '-std=c11', '-O1', '-Wall', '-Wextra', '-fsanitize=undefined',
        '-fno-sanitize-recover=all', '-I' + str(out), str(out / 'counter.c'), '-o', str(exe)], out / 'counter-compile.log')
   run([str(exe)], out / 'counter.log')
-  print('PASS actual host SPI 6 scenarios and MCU VERSION/CRC/saturation fixture; no hardware connection')
+  print('PASS actual host SPI 7 scenarios and MCU VERSION/CRC/saturation fixture; no hardware connection')
 
 
 if __name__ == '__main__':

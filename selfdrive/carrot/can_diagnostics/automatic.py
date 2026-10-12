@@ -253,6 +253,7 @@ class AutoRecorder:
     if self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV' or self.state != 'recording':
       return
     if not self.rotate_full_chunk(now):
+      self.storage_dropped += 1
       return
     if self.trace is not None and not self.trace_active(now):
       self.close_trace(now, 'window_elapsed')

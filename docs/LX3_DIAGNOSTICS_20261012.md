@@ -23,6 +23,12 @@ non-NACK failures can now return a negative result; existing health reads return
 an empty optional on failure, not a valid zero-filled health record. No sticky
 transport-health override was added. Before native deployment, verify the
 installed host/MCU health struct sizes and paired support-file hashes.
+The existing startup capability check can select NO_OUTPUT if its status read
+fails; its existing "capability missing" message also covers transport failure.
+This candidate does not bypass that check or add automatic permission retries.
+Verify startup on hardware; a failed startup remains unusable until corrected.
+The paired `state_schedule.h` is copied unchanged from the prior installed-build
+support. Its hash, like `panda.cc`, must be checked before native deployment.
 
 The existing MDPS handling, driver coexistence, safety authority and angle/torque
 limits are preserved. The OEM steering warning and the measured SPI error rate

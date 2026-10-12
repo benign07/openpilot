@@ -169,3 +169,14 @@ def test_panda_rotation_quota_failure_is_counted(tmp_path):
   recorder.panda_snapshot([{}], 100_000_000_000, 100.)
   assert recorder.storage_dropped == 1
   recorder.close()
+
+
+def test_diagnostic_trigger_rotation_failure_is_counted(tmp_path):
+  recorder, store = make_recorder(tmp_path, quota=70000)
+  recorder.close_trace(100., 'test')
+  while not store.full(100.):
+    store.append({'kind': 'padding', 'data': 'x' * 100}, 100.)
+  store.usage = store.quota
+  recorder.diagnostic_trigger('test_storage', 100_000_000_000, 100.)
+  assert recorder.storage_dropped == 1 and recorder.trace is None
+  recorder.close()
