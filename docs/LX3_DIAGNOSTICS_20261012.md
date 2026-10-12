@@ -8,7 +8,8 @@ onto the verified `lx3-integrated-20261011-01` runtime.
 The passive Python update fixes rotation loss, preserves sendcan identity,
 separates collector loss sources, and reports low recording retention space.
 The native SPI update validates response lengths before reading/copying,
-avoids an unaligned length load, bounds failure recovery/retries, and emits
+avoids an unaligned length load, bounds failure recovery and non-NACK failure
+retries, and emits
 five-second host stage totals without adding Panda connections or transfers.
 The firmware change stops counting a valid VERSION response as a checksum error.
 It preserves bad-header/data checksum rejection and the health wire layout.
@@ -17,6 +18,11 @@ Native and firmware changes require their own build and verified parked
 deployment. A HUD source bundle contains only the two passive Python files.
 GitHub publication, device installation, and road qualification are distinct.
 No changed native/firmware component has been installed by preparing this branch.
+Normal CAN TX NACK backpressure retains stock retries. Previously endless
+non-NACK failures can now return a negative result; existing health reads return
+an empty optional on failure, not a valid zero-filled health record. No sticky
+transport-health override was added. Before native deployment, verify the
+installed host/MCU health struct sizes and paired support-file hashes.
 
 The existing MDPS handling, driver coexistence, safety authority and angle/torque
 limits are preserved. The OEM steering warning and the measured SPI error rate

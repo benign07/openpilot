@@ -231,13 +231,18 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
   int timeout_count = 0;
   bool timed_out = false;
   double start_time = millis_since_boot();
+  double failure_time_ms = 0;
   unsigned attempts = 0;
 
   do {
     if (attempts++ > 0U) spi_diagnostics.count(SpiStage::RETRIES);
+    const double attempt_started = millis_since_boot();
     ret = spi_transfer(endpoint, tx_data, tx_len, rx_data, max_rx_len, timeout);
 
     if (ret < 0) {
+      // NACK is also normal CAN TX backpressure. Preserve its existing retry
+      // behaviour; only charge actual non-NACK failures to the new budget.
+      if (ret != SpiError::NACK) failure_time_ms += std::max(0.0, millis_since_boot() - attempt_started);
       timed_out = (timeout != 0) && (timeout_count > 5);
       timeout_count += ret == SpiError::ACK_TIMEOUT;
 
@@ -254,7 +259,7 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
         }
       }
     }
-  } while (ret < 0 && !timed_out && spi_within_budget(start_time, millis_since_boot(), spi_retry_budget_ms(timeout), connected));
+  } while (ret < 0 && !timed_out && spi_within_budget(0, failure_time_ms, spi_retry_budget_ms(timeout), connected));
 
   if (ret < 0) {
     spi_diagnostics.count(SpiStage::TRANSFER_FAILED);

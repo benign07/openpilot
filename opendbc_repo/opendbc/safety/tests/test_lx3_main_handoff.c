@@ -22,12 +22,15 @@ int main(void) {
   }
   assert(lx3_auth.allowed == 0U && lx3_auth.reason == LX3_REASON_CANCEL);
   assert(!lx3_native_final_tx(&active, &stamp));
+  assert(lx3_limit_rejections[1] == 0U);
   active = cb(2U, 250U, 0);
   for (unsigned i = 0; i < 3; i++) {
     assert(!send(&active, generation));
     assert(lx3_auth.allowed == 0U && lx3_auth.reason == LX3_REASON_CANCEL);
     assert(lx3_limit_rejections[0] == 0U);
   }
+  assert(!lx3_native_final_tx(&active, &stamp));
+  assert(lx3_limit_rejections[1] == 0U);
   CANPacket_t scc = packet(0x1A0, 0U, 32U);
   scc.data[8] = 1U << 4U; hyundai_canfd_update_checksum(&scc);
   assert(!send(&scc, generation));

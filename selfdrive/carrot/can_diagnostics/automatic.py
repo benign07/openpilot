@@ -323,6 +323,7 @@ class AutoRecorder:
       return
     if not self.rotate_full_chunk(now):
       self.trace['dropped_full'] += 1
+      self.storage_dropped += 1
       return
     if self.trace['frames'] >= self.BUTTON_TRACE_MAX_FRAMES:
       self.trace['truncated'] = True
@@ -453,8 +454,14 @@ class AutoRecorder:
     self.previous, self.last_sample = current, now
 
   def can_frame(self, bus, address, data, mono_ns, now, direction='rx', source_mono_ns=None, identity=None):
-    if (self.state != 'recording' or address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64 or
+    if (address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64 or
         (address in self.LX3_ONLY_ADDRESSES and self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV')):
+      return
+    if self.state != 'recording':
+      if self.state == 'storage_full_preserving_records' and 0 <= now - mono_ns / 1e9 <= .5:
+        self.storage_dropped += 1
+        if self.trace_active(now) and address in self.TRACE_ADDRESSES:
+          self.trace['dropped_full'] += 1
       return
     if not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
@@ -509,13 +516,18 @@ class AutoRecorder:
     self.store.append({'kind': 'can_sample', **self.can_row(mono_ns, direction, bus, address, data, source_mono_ns, identity)}, now)
 
   def panda_snapshot(self, states, mono_ns, now, source_mono_ns=None):
-    if self.state != 'recording' or not states:
+    if not states:
+      return
+    if self.state != 'recording':
+      if self.state == 'storage_full_preserving_records' and 0 <= now - mono_ns / 1e9 <= .5:
+        self.storage_dropped += 1
       return
     if not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
       self.stale_panda_snapshots += 1
       return
     if not self.rotate_full_chunk(now):
+      self.storage_dropped += 1
       return
     current = states[0]
     fields = ('controls_allowed', 'rx_checks_invalid', 'rx_overflow', 'tx_overflow',

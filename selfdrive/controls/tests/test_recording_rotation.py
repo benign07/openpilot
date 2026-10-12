@@ -134,3 +134,38 @@ def test_append_without_stream_is_explicit_loss(tmp_path):
   store = ChunkStore(tmp_path, reserve=0)
   assert store.append({'kind': 'event'}, 100.) is False
   assert store.dropped_no_stream == 1
+
+
+def test_quota_state_counts_continuing_fresh_selected_observations(tmp_path):
+  recorder, store = make_recorder(tmp_path, quota=70000)
+  for index in range(800):
+    now = 100. + index * .001
+    recorder.can_frame(2, 0xCB, bytes(24), int(now * 1e9), now)
+  assert recorder.state == 'storage_full_preserving_records'
+  before = recorder.storage_dropped
+  recorder.can_frame(2, 0xCB, bytes(24), 101_000_000_000, 101.)
+  recorder.panda_snapshot([{}], 101_000_000_000, 101.)
+  assert recorder.storage_dropped == before + 2
+  recorder.can_frame(2, 0xCB, bytes(24), 99_000_000_000, 101.)
+  assert recorder.storage_dropped == before + 2
+  recorder.close()
+
+
+def test_prebuffer_rotation_quota_failure_is_counted(tmp_path):
+  recorder, store = make_recorder(tmp_path, quota=70000)
+  while not store.full(100.):
+    store.append({'kind': 'padding', 'data': 'x' * 100}, 100.)
+  store.usage = store.quota
+  recorder.append_trace_frame(recorder.can_row(100_000_000_000, 'rx', 2, 0xCB, bytes(24)), 100.)
+  assert recorder.storage_dropped == 1 and recorder.trace['dropped_full'] == 1
+  recorder.close()
+
+
+def test_panda_rotation_quota_failure_is_counted(tmp_path):
+  recorder, store = make_recorder(tmp_path, quota=70000)
+  while not store.full(100.):
+    store.append({'kind': 'padding', 'data': 'x' * 100}, 100.)
+  store.usage = store.quota
+  recorder.panda_snapshot([{}], 100_000_000_000, 100.)
+  assert recorder.storage_dropped == 1
+  recorder.close()
