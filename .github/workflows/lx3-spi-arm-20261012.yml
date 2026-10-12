@@ -23,6 +23,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p arm-evidence
+          git fetch --depth=1 origin a381f7d6c7d469d391a8e45121718279bcaf9d61
           git show a381f7d6c7d469d391a8e45121718279bcaf9d61:selfdrive/pandad/panda.cc > arm-before-panda.cc
           /tmp/lx3-build/bin/scons -f tools/lx3_spi_arm.SConstruct -j2 2>&1 | tee arm-evidence/build.log
       - name: Inspect ARM ELF and run CAN transport and SPI boundaries without hardware
