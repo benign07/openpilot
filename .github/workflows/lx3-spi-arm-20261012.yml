@@ -1,0 +1,39 @@
+name: LX3 paired ARM SPI test build
+on:
+  push:
+    branches: [review/lx3-spi-arm-20261012]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  arm-device-build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: ARM compiler and original SCons build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang python3-venv
+          python3 -m venv /tmp/lx3-build
+          /tmp/lx3-build/bin/pip install scons Cython numpy
+      - name: Verify sealed original ARM SDK
+        run: /tmp/lx3-build/bin/python tools/lx3_spi_arm_artifact.py sdk
+      - name: Build TICI pandad and production CAN protocol tests
+        run: |
+          set -o pipefail
+          mkdir -p arm-evidence
+          /tmp/lx3-build/bin/scons -f tools/lx3_spi_arm.SConstruct -j2 2>&1 | tee arm-evidence/build.log
+      - name: Inspect ARM ELF and run CAN transport and SPI boundaries without hardware
+        run: |
+          set -o pipefail
+          /tmp/lx3-build/bin/python tools/lx3_spi_arm_artifact.py record
+          selfdrive/pandad/tests/test_pandad_canprotocol 2>&1 | tee arm-evidence/canprotocol.log
+          /tmp/lx3-build/bin/python tools/check_lx3_spi_boundaries.py --cc clang --cxx clang++ --output arm-evidence/spi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-paired-arm-spi-test-build
+          path: |
+            arm-evidence
+            selfdrive/pandad/pandad
