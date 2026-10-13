@@ -12,7 +12,8 @@ sha = lambda data: hashlib.sha256(data).hexdigest()
 
 
 def objects():
-  return {p.relative_to(ROOT).as_posix(): sha(p.read_bytes()) for p in ROOT.rglob('*.o') if 'arm-sdk' not in p.parts}
+  return {p.relative_to(ROOT).as_posix(): sha(p.read_bytes()) for p in ROOT.rglob('*')
+          if p.suffix in ('.o', '.os') and 'arm-sdk' not in p.parts}
 
 
 def build(name):
@@ -26,8 +27,12 @@ def main():
   paths = ['selfdrive/pandad', 'panda', 'common', 'cereal', 'system/hardware', 'msgq_repo', 'third_party/json11']
   changed = subprocess.check_output(['git', 'diff', '--name-only', BASELINE, 'HEAD', '--', *paths], cwd=ROOT).decode().splitlines()
   assert all(p in CHANGED or p.startswith('selfdrive/pandad/tests/') for p in changed), changed
-  def clean():
-    assert not subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all', '--', *paths], cwd=ROOT)
+  def clean(built=False):
+    status = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all', '--', *paths], cwd=ROOT).decode().splitlines()
+    generated = {'selfdrive/pandad/tests/test_spi_hw_type', 'selfdrive/pandad/tests/test_spi_mcu_status'}
+    for line in status:
+      assert built and line[:3] == '?? ' and line[3:] in generated, status
+      assert 'AArch64' in subprocess.check_output(['readelf', '-h', line[3:]], cwd=ROOT).decode()
   clean()
   saved = {p: (ROOT / p).read_bytes() for p in CHANGED}
   try:
@@ -39,7 +44,7 @@ def main():
   finally:
     for p, data in saved.items():
       (ROOT / p).write_bytes(data)
-  clean()
+  clean(built=True)
   build('build.log')
   after = objects()
   assert before.keys() == after.keys() and before
