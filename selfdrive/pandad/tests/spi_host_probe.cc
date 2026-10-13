@@ -16,7 +16,8 @@
 #include "linux/spi/spidev.h"
 
 enum class Scenario { GOOD, OVERSIZED, ABOVE_REQUEST, RECOVERY_STUCK, DATA_BACKPRESSURE, HEADER_NACK, BAD_CHECKSUM,
-                      HEADER_STUCK, CONTROL_DATA_STUCK, CAN_HEADER_STUCK, MIXED_NACK, DISCONNECT_BACKPRESSURE };
+                      HEADER_STUCK, CONTROL_DATA_STUCK, CAN_HEADER_STUCK, MIXED_NACK, DISCONNECT_BACKPRESSURE,
+                      BOUNDARY_OK, BOUNDARY_FAIL };
 static Scenario scenario = Scenario::GOOD;
 static double fake_ms = 0;
 static unsigned calls = 0;
@@ -28,6 +29,9 @@ static unsigned header_nacks = 0;
 static std::function<void()> on_transfer;
 static constexpr unsigned CALL_LIMIT = 20000;
 static constexpr unsigned BACKPRESSURE_NACKS = 100;
+static constexpr double IO_MS = 0.25;
+// Header + ACK poll + three recovery fills, followed by the clamped 2ms sleep.
+static constexpr double MAX_HEADER_CHARGE_MS = 5 * IO_MS + 2.0;
 namespace util {
 int safe_ioctl(int, unsigned long request, void *argument, const char *) {
   if (request != SPI_IOC_MESSAGE(1)) return 0;
@@ -36,7 +40,7 @@ int safe_ioctl(int, unsigned long request, void *argument, const char *) {
   auto *rx = reinterpret_cast<uint8_t *>(transfer->rx_buf);
   // Inert transfer time, not a claim about real device timing. Advancing the
   // separate usleep stub also tests charged backoff, which the old fixture hid.
-  fake_ms += 0.2;
+  fake_ms += IO_MS;
   if (++calls > CALL_LIMIT) throw std::runtime_error("unbounded SPI recovery/retry");
   if (on_transfer) on_transfer();
   if (tx[0] == 0x5A && transfer->len == 7) {
@@ -47,10 +51,13 @@ int safe_ioctl(int, unsigned long request, void *argument, const char *) {
     const bool stuck = scenario == Scenario::HEADER_STUCK || scenario == Scenario::CAN_HEADER_STUCK;
     const bool short_header = scenario == Scenario::HEADER_NACK && header_nacks++ < 4U;
     const bool mixed_header = scenario == Scenario::MIXED_NACK && flow_nacks >= BACKPRESSURE_NACKS && header_nacks++ < 2U;
-    rx[0] = stuck || short_header || mixed_header ? 0x1F : 0x79;
+    const bool threshold_header = (scenario == Scenario::BOUNDARY_OK || scenario == Scenario::BOUNDARY_FAIL) &&
+      flow_nacks >= 210U && header_nacks++ < (scenario == Scenario::BOUNDARY_OK ? 36U : 37U);
+    rx[0] = stuck || short_header || mixed_header || threshold_header ? 0x1F : 0x79;
   } else if (tx[0] == 0x13 && transfer->len == 3) {
     if (scenario == Scenario::CONTROL_DATA_STUCK || scenario == Scenario::DISCONNECT_BACKPRESSURE ||
-        ((scenario == Scenario::DATA_BACKPRESSURE || scenario == Scenario::MIXED_NACK) && flow_nacks++ < BACKPRESSURE_NACKS)) {
+        ((scenario == Scenario::DATA_BACKPRESSURE || scenario == Scenario::MIXED_NACK) && flow_nacks++ < BACKPRESSURE_NACKS) ||
+        ((scenario == Scenario::BOUNDARY_OK || scenario == Scenario::BOUNDARY_FAIL) && flow_nacks++ < 210U)) {
       rx[0] = 0x1F;
       return static_cast<int>(transfer->len);
     }
@@ -88,15 +95,18 @@ int main(int argc, char **argv) {
                test == "can_header_stuck" ? Scenario::CAN_HEADER_STUCK :
                test == "mixed_nack" ? Scenario::MIXED_NACK :
                test == "disconnect_backpressure" ? Scenario::DISCONNECT_BACKPRESSURE :
+               test == "boundary_ok" ? Scenario::BOUNDARY_OK : test == "boundary_fail" ? Scenario::BOUNDARY_FAIL :
                test == "checksum" ? Scenario::BAD_CHECKSUM : Scenario::GOOD;
+    // Explicitly simulated: production SPI has no writer clearing connected.
     if (scenario == Scenario::DISCONNECT_BACKPRESSURE) on_transfer = [&panda]() { if (calls >= 80U) panda.connected = false; };
     unsigned char buffer[16]; std::memset(buffer, 0xCC, sizeof(buffer));
     const bool can_write = scenario == Scenario::DATA_BACKPRESSURE || scenario == Scenario::CAN_HEADER_STUCK ||
-                           scenario == Scenario::MIXED_NACK || scenario == Scenario::DISCONNECT_BACKPRESSURE;
+                           scenario == Scenario::MIXED_NACK || scenario == Scenario::DISCONNECT_BACKPRESSURE ||
+                           scenario == Scenario::BOUNDARY_OK || scenario == Scenario::BOUNDARY_FAIL;
     const unsigned timeout = 1U;
     int result = can_write ? panda.bulk_write(3, buffer, sizeof(buffer), timeout) :
                             panda.control_read(0x42, 0, 0, buffer, sizeof(buffer), timeout);
-    if (scenario == Scenario::DATA_BACKPRESSURE || scenario == Scenario::MIXED_NACK) {
+    if (scenario == Scenario::DATA_BACKPRESSURE || scenario == Scenario::MIXED_NACK || scenario == Scenario::BOUNDARY_OK) {
       assert(result == 0 && panda.comms_healthy && flow_nacks >= BACKPRESSURE_NACKS && fake_ms > 120);
     } else if (scenario == Scenario::GOOD || scenario == Scenario::HEADER_NACK) {
       assert(result == 16 && buffer[0] == 0);
@@ -106,10 +116,15 @@ int main(int argc, char **argv) {
       assert(panda.comms_healthy == !can_write);
       if (scenario == Scenario::HEADER_STUCK || scenario == Scenario::CONTROL_DATA_STUCK || scenario == Scenario::CAN_HEADER_STUCK) {
         assert(result == SpiError::NACK);  // Private header classification never escapes.
-        assert(fake_ms >= 120 && fake_ms < 125);  // Includes NACK backoff sleep.
+        assert(fake_ms >= 120 && fake_ms < 120 + MAX_HEADER_CHARGE_MS);
+        assert(spi_diagnostics.budget_permille_max() >= 1000);
+      }
+      if (scenario == Scenario::BOUNDARY_FAIL) {
+        assert(result == SpiError::NACK && header_nacks == 37U);
       }
       on_transfer = {}; panda.connected = true; scenario = Scenario::GOOD; calls = 0;
       assert(panda.control_read(0x42, 0, 0, buffer, sizeof(buffer), 1) == 16);
+      assert(panda.comms_healthy == !can_write);  // Existing sticky bulk failure remains visible.
     }
 #ifdef EXPECT_SPI_DIAGNOSTICS
     if (test == "oversized" || test == "request") assert(spi_diagnostics.get(SpiStage::BAD_LENGTH) > 0);

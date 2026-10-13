@@ -27,21 +27,21 @@ def main():
   fixtures = ROOT / 'selfdrive/pandad/tests/spi_host_fixtures'
   source = ROOT / 'selfdrive/pandad/spi.cc'
   exe = out / 'spi-host'
-  run([args.cxx, '-std=c++17', '-O1', '-g', '-pthread', '-Wall', '-Wextra',
+  run([args.cxx, '-std=c++17', '-O2', '-g', '-pthread', '-Wall', '-Wextra',
        '-fsanitize=undefined', '-fno-sanitize-recover=all',
        '-I' + str(fixtures), '-I' + str(ROOT),
        '-DSPI_PRODUCTION_SOURCE="' + source.as_posix() + '"', '-DEXPECT_SPI_DIAGNOSTICS',
        str(ROOT / 'selfdrive/pandad/tests/spi_host_probe.cc'), '-o', str(exe)], out / 'host-compile.log')
   cases = ('good', 'oversized', 'request', 'recovery', 'nack', 'header_nack', 'checksum',
            'header_stuck', 'control_data_stuck', 'can_header_stuck', 'mixed_nack', 'disconnect_backpressure')
-  for case in cases:
+  for case in (*cases, 'boundary_ok', 'boundary_fail'):
     run([str(exe), case], out / ('host-' + case + '.log'))
   # Use the SAME fixture against the exact previously installed production driver.
   baseline = '32ff4a1101fc522ce43d44e0989cd52862abc203'
   old_source = out / 'exact-before-spi.cc'
   old_source.write_bytes(subprocess.check_output(['git', 'show', baseline + ':selfdrive/pandad/spi.cc'], cwd=ROOT))
   old_exe = out / 'spi-host-before'
-  run([args.cxx, '-std=c++17', '-O1', '-g', '-pthread', '-Wall', '-Wextra',
+  run([args.cxx, '-std=c++17', '-O2', '-g', '-pthread', '-Wall', '-Wextra',
        '-fsanitize=undefined', '-fno-sanitize-recover=all',
        '-I' + str(fixtures), '-I' + str(ROOT),
        '-DSPI_PRODUCTION_SOURCE="' + old_source.as_posix() + '"', '-DEXPECT_SPI_DIAGNOSTICS',
@@ -61,22 +61,22 @@ def main():
     'baseline': baseline, 'before_source_sha256': hashlib.sha256(old_source.read_bytes()).hexdigest(),
     'after_source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
     'same_probe_sha256': hashlib.sha256((ROOT / 'selfdrive/pandad/tests/spi_host_probe.cc').read_bytes()).hexdigest(),
-    'before_returncodes': before, 'after_passed': list(cases),
+    'before_returncodes': before, 'after_passed': [*cases, 'boundary_ok', 'boundary_fail'],
     'scope': 'Actual host production driver with inert IO and simulated timing; UBSAN; no hardware.'}, indent=2), encoding='utf-8')
   for name in ('counter.c', 'bounds.c', 'crc.h'):
     shutil.copyfile(ROOT / 'panda/tests/spi_host_fixtures' / name, out / name)
   for name in ('spi.h', 'spi_declarations.h', 'spi_diagnostics.h'):
     shutil.copyfile(ROOT / 'panda/board/drivers' / name, out / name)
   exe = out / 'spi-counter'
-  run([args.cc, '-std=c11', '-O1', '-Wall', '-Wextra', '-fsanitize=undefined',
+  run([args.cc, '-std=c11', '-O2', '-Wall', '-Wextra', '-fsanitize=undefined',
        '-fno-sanitize-recover=all', '-I' + str(out), str(out / 'counter.c'), '-o', str(exe)], out / 'counter-compile.log')
   run([str(exe)], out / 'counter.log')
   exe = out / 'spi-bounds'
-  run([args.cc, '-std=c11', '-O1', '-Wall', '-Wextra', '-fsanitize=undefined',
+  run([args.cc, '-std=c11', '-O2', '-Wall', '-Wextra', '-fsanitize=undefined',
        '-fno-sanitize-recover=all', '-I' + str(out), str(out / 'bounds.c'), '-o', str(exe)], out / 'bounds-compile.log')
   for case in ('tx', 'rx'):
     run([str(exe), case], out / ('bounds-' + case + '.log'))
-  print('PASS actual host SPI 12 scenarios; exact baseline 3 specific unbounded failures; MCU cause counters and DMA/response bounds; no hardware connection')
+  print('PASS actual host SPI 14 scenarios; exact baseline 3 specific unbounded failures; MCU cause counters and DMA/response bounds; no hardware connection')
 
 
 if __name__ == '__main__':

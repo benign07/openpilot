@@ -36,7 +36,7 @@ static SpiDiagnostics spi_diagnostics;
 static void report_spi_diagnostics() {
   const auto now = static_cast<uint64_t>(millis_since_boot());
   if (!spi_diagnostics.report_due(now)) return;
-  LOGW("SPI_HOST_STATS mono_ms=%llu attempts=%llu retries=%llu header_io=%llu header_nack=%llu header_timeout=%llu data_io=%llu data_nack=%llu data_timeout=%llu read_io=%llu bad_length=%llu bad_checksum=%llu recovery_failed=%llu failed=%llu success=%llu",
+  LOGW("SPI_HOST_STATS mono_ms=%llu attempts=%llu retries=%llu header_io=%llu header_nack=%llu header_timeout=%llu data_io=%llu data_nack=%llu data_timeout=%llu read_io=%llu bad_length=%llu bad_checksum=%llu recovery_failed=%llu failed=%llu success=%llu max_call_attempts=%llu max_charged_us=%llu max_budget_permille=%llu",
        static_cast<unsigned long long>(now),
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::ATTEMPTS)),
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::RETRIES)),
@@ -51,7 +51,10 @@ static void report_spi_diagnostics() {
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::BAD_CHECKSUM)),
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::RECOVERY_FAILED)),
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::TRANSFER_FAILED)),
-       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::SUCCESS)));
+       static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::SUCCESS)),
+       static_cast<unsigned long long>(spi_diagnostics.call_attempts_max()),
+       static_cast<unsigned long long>(spi_diagnostics.charged_us_max()),
+       static_cast<unsigned long long>(spi_diagnostics.budget_permille_max()));
 }
 
 class LockEx {
@@ -251,8 +254,7 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
       std::this_thread::yield();
 
       if (ret == SpiError::NACK || ret == SpiError::HEADER_NACK) {
-        // prevent busy waiting while the panda is NACK'ing
-        // due to full TX buffers
+        // NACK backoff (only endpoint-3 data may be TX backpressure).
         nack_count += 1;
         if (nack_count > 3) {
           SPILOG(LOGD, "NACK sleep %d", nack_count);
@@ -269,6 +271,7 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
     spi_diagnostics.count(SpiStage::TRANSFER_FAILED);
     SPILOG(LOGE, "transfer failed, after %d tries, %.2fms", timeout_count, millis_since_boot() - start_time);
   }
+  spi_diagnostics.observe_call(attempts, static_cast<uint64_t>(std::ceil(failure_time_ms * 1000.0)), spi_retry_budget_ms(timeout));
   report_spi_diagnostics();
 
   if (ret == SpiError::HEADER_NACK) ret = SpiError::NACK;

@@ -28,7 +28,7 @@ jobs:
           git fetch --depth=1 origin e09364d4606eaa9bf1b2c854901950483ecc78c2
           git diff --exit-code e09364d4606eaa9bf1b2c854901950483ecc78c2 HEAD -- panda opendbc_repo selfdrive/controls selfdrive/carrot selfdrive/monitoring selfdrive/selfdrived cereal system/manager
           git show a381f7d6c7d469d391a8e45121718279bcaf9d61:selfdrive/pandad/panda.cc > arm-before-src/panda.cc
-          /tmp/lx3-build/bin/scons -f tools/lx3_spi_arm.SConstruct -j2 2>&1 | tee arm-evidence/build.log
+          /tmp/lx3-build/bin/python tools/lx3_spi_object_compare.py
       - name: Inspect ARM ELF and run CAN transport and SPI boundaries without hardware
         run: |
           set -o pipefail

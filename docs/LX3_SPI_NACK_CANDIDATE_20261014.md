@@ -28,8 +28,8 @@ readback, MCU heartbeat/watchdog revocation and host safety-config mismatch
 checks. Some write return values remain ignored; this is not a new atomic
 control-write guarantee. No monitoring or authority policy is added.
 
-Tests compile the actual driver, with inert syscalls and simulated 0.2 ms I/O
-plus backoff time. Twelve situations cover normal traffic, length/checksum
+Tests compile the actual driver, with inert syscalls and simulated 0.25 ms I/O
+plus backoff time. Fourteen situations cover normal traffic, length/checksum
 rejection, recovery, short and persistent NACK, mixed queue/header rejection,
 legacy CAN backpressure beyond the failure budget, and simulated disconnect.
 The same probe on the exact baseline must show three specific unbounded-loop
@@ -47,3 +47,17 @@ Do not combine this binary trial with the separate optional-haptic-OFF
 experiment: that experiment uses the current binaries and one existing
 setting only. LSS/pulse/engagement timing remains confounded; a single clean
 drive does not establish cause or resolution.
+
+Diagnostic-only per-call high-water marks expose maximum attempts, charged
+microseconds and the maximum charged-budget fraction in per mille. These
+cumulative atomic maxima do not alter retry decisions or any CAN/health ABI.
+A bulk failure keeps the existing sticky unhealthy state until handle restart;
+a successful later control read does not clear it. This candidate therefore
+changes availability under a long header-NACK burst. Aggregate retry counters
+from the old policy cannot prove such bursts absent. The parked pre-drive
+observation must reject any final failure, invalid CAN/health or a recorded
+charged-budget high-water mark at/above 250 per mille; passing that screening
+is not whole-vehicle qualification. Kernel blocking and future bursts remain
+limitations. The late boundary pair uses 210 exempt queue NACKs, then 36/37
+header NACKs at clamped backoff: respectively success/budget failure with the
+specified simulated timing, not a real-hardware NACK-count threshold.
