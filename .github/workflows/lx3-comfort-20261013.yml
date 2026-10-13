@@ -1,0 +1,67 @@
+name: LX3 approach comfort and diagnostic contracts
+on:
+  push:
+    branches: [review/lx3-comfort-diagnostics-20261013]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  passive-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest aiohttp cryptography requests
+      - name: Real recorder, storage and signed HUD updater contracts
+        run: |
+          set -o pipefail
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_recording_rotation.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=passive.xml 2>&1 | tee passive.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: passive-${{ matrix.python }}
+          path: |
+            passive.xml
+            passive.log
+  native-comfort:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+      - run: uv sync --frozen --no-dev --extra testing
+      - name: Build actual longitudinal Acados solver and runtime bindings
+        run: |
+          set -o pipefail
+          uv run --no-sync scons --minimal -j2 common/params_pyx.so msgq_repo/msgq/ipc_pyx.so selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so 2>&1 | tee native-build.log
+      - name: Production helper and MPC wiring regressions
+        run: |
+          set -o pipefail
+          uv run --no-sync python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_preview.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_approach_composition.py selfdrive/controls/tests/test_lite_buzzer.py selfdrive/controls/tests/test_lx3_notification_resume.py -q --junitxml=comfort.xml 2>&1 | tee comfort.log
+      - name: Linked numerical solver with stock modes and synthetic plant
+        run: |
+          set -o pipefail
+          uv run --no-sync python tools/check_lx3_approach_native.py --output native-comfort.json 2>&1 | tee native-comfort.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-comfort-not-vehicle-qualified
+          path: |
+            native-build.log
+            comfort.xml
+            comfort.log
+            native-comfort.json
+            native-comfort.log

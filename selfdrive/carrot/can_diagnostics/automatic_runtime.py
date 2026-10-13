@@ -19,7 +19,9 @@ FIELDS = {
   'modelV2': ('frameId', 'timestampEof', 'meta'),
   'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType', 'alertSound', 'lx3LongRequest', 'lx3LongRefused', 'lx3RefuseAfterSequence'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
-  'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels'),
+  'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels',
+                       'jerks', 'tFollow', 'desiredDistance', 'myDrivingMode'),
+  'carrotMan': ('leftSec', 'desiredSpeed'),
 }
 # These installed publishers use Python cereal.messaging.new_message,
 # including modeld.py. This tags the envelope, not timestamps inside payloads.
@@ -28,7 +30,9 @@ PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFol
           'TFollowGap3', 'TFollowGap4', 'LaneChangeNeedTorque', 'AlwaysLateral', 'TurnSpeedControlMode',
           'ModelTurnSpeedFactor', 'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar',
           'HardwareC3xLite', 'DisableDM', 'SoundVolumeAdjust', 'C3xLiteBuzzerMute', 'C3xLiteHapticNotifications',
-          'ApproachComfortEnabled', 'ApproachFlexibleGap', 'ApproachFlexibleGapMin', 'ManualSteerWithBlinker',
+          'ApproachComfortEnabled', 'ApproachCoastStrength', 'ApproachBrakeMargin', 'ApproachStopSmooth',
+          'ApproachTrafficCalm', 'ApproachFlexibleGap', 'ApproachFlexibleGapMin',
+          'EnableSpeedTF', 'TFollowDecelBoost', 'DynamicTFollow', 'DynamicTFollowLC', 'StopDistanceCarrot', 'ManualSteerWithBlinker',
           'CruiseStartCurrentSpeed')
 
 
@@ -77,7 +81,7 @@ def selected_fields(reader, fields):
     value = getattr(reader, key, None)
     if key in ('gearShifter', 'state', 'longitudinalPlanSource') and value is not None:
       value = str(value)
-    elif key in ('speeds', 'accels') and value is not None:
+    elif key in ('speeds', 'accels', 'jerks') and value is not None:
       value = list(value)
     elif key == 'errors' and value is not None:
       value = [str(error) for error in value]
@@ -217,7 +221,10 @@ class AutomaticController:
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
                'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
                'opendbc_repo/opendbc/car/hyundai/radar_interface.py', 'selfdrive/controls/controlsd.py',
-               'selfdrive/carrot/manual_steering.py', 'cereal/car.capnp')
+               'selfdrive/carrot/manual_steering.py', 'cereal/car.capnp',
+               'selfdrive/carrot/carrot_functions.py', 'selfdrive/controls/lib/approach_comfort.py',
+               'selfdrive/controls/lib/flexible_gap.py', 'selfdrive/controls/lib/longitudinal_planner.py',
+               'selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py', 'selfdrive/controls/beep.py')
     metadata['source_hashes'] = {rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest()
                                for rel in sources if (repo / rel).is_file()}
     dbc = repo / 'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc'

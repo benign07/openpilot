@@ -12,6 +12,7 @@ from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 # from openpilot.selfdrive.carrot.carrot_functions import CarrotPlanner
 from openpilot.selfdrive.carrot.carrot_functions import XState
 from openpilot.selfdrive.controls.lib.flexible_gap import FlexibleGap, FlexibleGapSettings, MIN_FLEX_TF
+from openpilot.selfdrive.controls.lib.approach_comfort import additional_approach_tf
 
 if __name__ == '__main__':  # generating code
   from openpilot.third_party.acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -364,7 +365,7 @@ class LongitudinalMpc:
     self.max_a = max_a
 
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, approach_extra_tf=0.0,
-             flex_gap_settings=FlexibleGapSettings(), flex_gap_eligible=False, observed_a_ego=0.0):
+             flex_gap_settings=FlexibleGapSettings(), flex_gap_eligible=False, observed_a_ego=0.0, flex_gap_gentle_stop=False):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -391,12 +392,13 @@ class LongitudinalMpc:
       t_follow = carrot.dynamic_t_follow(t_follow, radarstate.leadOne, desired_distance, self.prev_a)
 
     nominal_tf = getattr(carrot, 'flex_gap_nominal_tf', 0.0)
+    gentle_stop = flex_gap_gentle_stop and 1.0 <= v_ego < 6.0 and -0.8 < observed_a_ego < -0.1
     reduce_tf = self.flex_gap.update(
       flex_gap_settings, (radarstate.leadOne, radarstate.leadTwo),
       eligible=(flex_gap_eligible and mode == 'acc' and not reset_state
-                and abs(t_follow - nominal_tf) < 0.005),
-      v_ego=v_ego, a_ego=observed_a_ego, base_tf=t_follow,
-      stop_distance=stop_distance, comfort_brake=comfort_brake,
+                and (t_follow >= nominal_tf - 0.005 if gentle_stop else abs(t_follow - nominal_tf) < 0.005)),
+      v_ego=v_ego, a_ego=observed_a_ego, base_tf=min(t_follow, nominal_tf) if gentle_stop else t_follow,
+      stop_distance=stop_distance, comfort_brake=comfort_brake, gentle_stop=gentle_stop,
     )
     if reduce_tf > 0.0:
       # Never accelerate deliberately toward the relaxed reference. Preserve
@@ -475,7 +477,7 @@ class LongitudinalMpc:
     if mode == 'acc' and not reset_state and (approach_extra_tf > 0.0 or reduce_tf > 0.0):
       gap_v = np.maximum(0.0, self.x_sol[:,1] + v_ego - self.x_sol[0,1])
       preferred = x_obstacles.copy()
-      extra = min(float(np.clip(approach_extra_tf, 0.0, 0.5)), max(0.0, 2.5 - t_follow))
+      extra = additional_approach_tf(t_follow, nominal_tf, approach_extra_tf)
       for index, lead in enumerate((radarstate.leadOne, radarstate.leadTwo)):
         if lead.status and lead.radar and lead.radarTrackId >= 0:
           preferred[:,index] -= gap_v * extra
@@ -487,7 +489,13 @@ class LongitudinalMpc:
             full_distance = get_safe_obstacle_distance(gap_v, t_follow, comfort_brake, stop_distance)
             reduction = np.minimum(gap_v * reduce_tf,
                                    np.maximum(0.0, (1.0 - LEAD_DANGER_FACTOR - 0.05) * full_distance))
-            reduction = np.minimum(reduction, gap_v * max(0.0, t_follow - MIN_FLEX_TF))
+            if gentle_stop:
+              # Relax only the nominal moving term, leaving stock decel/dynamic
+              # headroom, absolute stop distance and braking equivalence intact.
+              limit_tf = min(t_follow, nominal_tf) * (1.0 - max(70, min(100, flex_gap_settings.minimum_ratio)) / 100.0)
+              reduction = np.where(gap_v < 6.0, np.minimum(reduction, gap_v * limit_tf), 0.0)
+            else:
+              reduction = np.minimum(reduction, gap_v * max(0.0, t_follow - MIN_FLEX_TF))
             preferred[:,index] += reduction
       shift = np.min(x_obstacles, axis=1) - np.min(preferred, axis=1)
       self.yref[:,0] = shift / (gap_v + 10.0)

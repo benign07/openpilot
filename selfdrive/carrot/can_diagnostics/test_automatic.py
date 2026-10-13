@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from .automatic import AutoRecorder, ChunkStore, control_mode
 from .button_trace_report import summarize as summarize_button_traces
 from .automatic_routes import register
-from .automatic_runtime import AutomaticController, panda_summary, read_param, selected_fields
+from .automatic_runtime import AutomaticController, FIELDS, PARAMS, panda_summary, read_param, selected_fields
 from tools.can_auto_sync import analyze, download
 
 
@@ -28,6 +28,20 @@ def services(now=100, started=True, lat=False, long=False):
 
 
 class RuntimeTests(unittest.TestCase):
+  def test_approach_and_countdown_evidence_is_json_serializable(self):
+    plan = SimpleNamespace(jerks=(0.1, -0.2), tFollow=0.8, desiredDistance=9.5, myDrivingMode=3)
+    row = selected_fields(plan, FIELDS['longitudinalPlan'])
+    self.assertEqual(json.loads(json.dumps(row))['jerks'], [0.1, -0.2])
+    self.assertEqual(row['tFollow'], 0.8)
+    self.assertEqual(row['desiredDistance'], 9.5)
+    self.assertEqual(selected_fields(SimpleNamespace(leftSec=7, desiredSpeed=30), FIELDS['carrotMan']),
+                     {'leftSec': 7, 'desiredSpeed': 30})
+    # Older publishers can omit the new optional evidence without breaking a chunk.
+    self.assertEqual(json.loads(json.dumps(selected_fields(SimpleNamespace(), FIELDS['carrotMan']))),
+                     {'leftSec': None, 'desiredSpeed': None})
+    self.assertIn('ApproachBrakeMargin', PARAMS)
+    self.assertIn('TFollowDecelBoost', PARAMS)
+
   def test_transient_worker_error_retries_without_losing_service(self):
     class Shutdown:
       def __init__(self, controller): self.controller = controller

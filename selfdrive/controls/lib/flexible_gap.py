@@ -1,7 +1,9 @@
 """Opt-in comfort reference, never a replacement for the MPC danger constraint.
 
 70% refers to the moving time-gap component, not braking/standstill distance.
-The 1.25 s floor is the stock aggressive time gap, not a safety certification.
+The cruising branch retains its 1.25 s floor. The opt-in mild-stop branch
+uses only a fraction of the owner's nominal moving gap. Neither branch
+reduces the absolute standstill/braking terms or certifies road safety.
 """
 from dataclasses import dataclass
 import math
@@ -29,14 +31,22 @@ class FlexibleGap:
     self.previous = {}
     self.stable_time = 0.0
     self.reduction = 0.0
+    self.gentle_stop = False
 
-  def update(self, settings, leads, *, eligible, v_ego, a_ego, base_tf, stop_distance, comfort_brake):
+  def update(self, settings, leads, *, eligible, v_ego, a_ego, base_tf, stop_distance, comfort_brake, gentle_stop=False):
     leads = tuple(leads)
+    if bool(gentle_stop) != self.gentle_stop:
+      self.reset()
+      self.gentle_stop = bool(gentle_stop)
+    ratio = max(70, min(100, settings.minimum_ratio)) / 100.0
+    floor_tf = base_tf * ratio if gentle_stop else MIN_FLEX_TF
+    speed_ok = 1.0 <= v_ego < 6.0 if gentle_stop else v_ego >= 5.0
+    accel_ok = -0.8 < a_ego < -0.1 if gentle_stop else -0.2 <= a_ego <= 0.1
     values = (v_ego, a_ego, base_tf, stop_distance, comfort_brake)
     if (not settings.enabled or settings.minimum_ratio >= 100 or not eligible
         or not all(math.isfinite(x) for x in values)
-        or v_ego < 5.0 or not -0.2 <= a_ego <= 0.1
-        or base_tf <= MIN_FLEX_TF or stop_distance < 0.0 or comfort_brake <= 0.0
+        or not speed_ok or not accel_ok
+        or base_tf <= max(0.0, floor_tf) or stop_distance < 0.0 or comfort_brake <= 0.0
         or not leads or not leads[0].status):
       self.reset()
       return 0.0
@@ -47,11 +57,12 @@ class FlexibleGap:
         continue
       d, vl, vr, al, jerk, prob = lead.dRel, lead.vLead, lead.vRel, lead.aLeadK, lead.jLead, lead.modelProb
       if (not lead.radar or lead.radarTrackId < 0 or not all(math.isfinite(x) for x in (d, vl, vr, al, jerk, prob))
-          or prob < 0.9 or vl < 0.0 or not -0.6 <= vr <= 0.15
-          or al < -0.2 or abs(al - a_ego) > 0.2 or abs(jerk) > 0.2
+          or prob < 0.9 or vl < 0.0 or not (-0.5 <= vr <= 0.05 if gentle_stop else -0.6 <= vr <= 0.15)
+          or not (-0.8 < al <= 0.0 if gentle_stop else al >= -0.2)
+          or abs(al - a_ego) > (0.3 if gentle_stop else 0.2) or abs(jerk) > (0.3 if gentle_stop else 0.2)
           or abs(vl - v_ego - vr) > 0.5
-          or d <= stop_distance + v_ego * MIN_FLEX_TF + max(0.0, -vr)**2 / (2.0 * comfort_brake)
-          or d / max(0.01, -vr) < 12.0):
+          or d <= stop_distance + v_ego * floor_tf + max(0.0, -vr)**2 / (2.0 * comfort_brake) + (0.5 if gentle_stop else 0.0)
+          or d / max(0.01, -vr) < (20.0 if gentle_stop else 12.0)):
         self.reset()
         return 0.0
       key = int(lead.radarTrackId)
@@ -73,6 +84,7 @@ class FlexibleGap:
     identity = tuple(int(lead.radarTrackId) if lead.status else None for lead in leads)
     if not observed or identity != self.tracks:
       self.reset()
+      self.gentle_stop = bool(gentle_stop)
       self.tracks = identity if observed else None
       self.previous = observed
       return 0.0
@@ -92,8 +104,7 @@ class FlexibleGap:
     if self.stable_time + 1e-9 < 3.0:
       return 0.0
 
-    permitted = min(1.0 - max(70, min(100, settings.minimum_ratio)) / 100.0,
-                    max(0.0, 1.0 - MIN_FLEX_TF / base_tf))
+    permitted = min(1.0 - ratio, max(0.0, 1.0 - floor_tf / base_tf))
     # Slow acquisition only. All risk/ineligibility exits above restore the
     # original planning reference immediately, not the physical range.
     self.reduction = min(permitted, self.reduction + 0.03 * self.dt)

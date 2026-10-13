@@ -253,7 +253,8 @@ class LongitudinalPlanner:
                     personality=sm['selfdriveState'].personality, approach_extra_tf=approach_request.extra_tf,
                     flex_gap_settings=self.flex_gap_settings,
                     flex_gap_eligible=approach_eligible and self.approach_settings.enabled,
-                    observed_a_ego=sm['carState'].aEgo)
+                    observed_a_ego=sm['carState'].aEgo,
+                    flex_gap_gentle_stop=self.approach_settings.smooth > 0)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
