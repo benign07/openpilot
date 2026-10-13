@@ -136,7 +136,8 @@ def main():
             distance+=((vl+next_vl)-(v+next_v))*.025
             minimum_gap=min(minimum_gap,distance)
             v,vl,a=next_v,next_vl,next_a
-          result={'scenario':scenario,'mode':mode,'variant':label,'minimum_gap':minimum_gap,
+          result={'scenario':scenario,'mode':mode,'variant':label,
+                  'minimum_gap':None if scenario=='free_cruise' else minimum_gap,
                   'first_decel_s':first_decel,'max_jerk':maximum_jerk,'peak':peak,'flex_seen':bool(flex_seen),
                   'solver_return_codes':dict(Counter(probe.codes))}
           results.append(result)
@@ -148,8 +149,9 @@ def main():
              'results':results}
     (out/'comparison.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
     print(json.dumps({'scenarios':len(results),'nonzero_solver_codes':sum(sum(v for k,v in r['solver_return_codes'].items() if k!=0) for r in results),
-                      'minimum_gap':min(r['minimum_gap'] for r in results),'all_traces_saved':True}))
-    assert all(set(r['solver_return_codes'])=={0} and r['minimum_gap']>0 for r in results)
+                      'minimum_gap_with_real_lead':min(r['minimum_gap'] for r in results if r['minimum_gap'] is not None),
+                      'all_traces_saved':True}))
+    assert all(set(r['solver_return_codes'])=={0} and (r['minimum_gap'] is None or r['minimum_gap']>0) for r in results)
 
 
 if __name__=='__main__':

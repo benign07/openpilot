@@ -160,11 +160,15 @@ class ApproachComfort:
     return ApproachRequest(ceiling, self.extra_tf, self.jerk_factor)
 
 
-def apply_approach_ceiling(maximum_accel, a_desired, request):
-  """Keep existing negative ceilings and the planner's feasible entry bound."""
+def apply_approach_ceiling(maximum_accel, a_desired, request, dt=0.05):
+  """Slew only the extra positive ceiling; negative braking stays available."""
   if request.accel_ceiling is None:
     return maximum_accel
-  return min(maximum_accel, max(request.accel_ceiling, a_desired - 0.05))
+  # A rapid downward positive bound forced a sharper acceleration transition
+  # in linked native comparisons. Allow 0.4 m/s^3 of ceiling reduction. This
+  # is not a hard jerk limit or a lower bound on the requested acceleration:
+  # MPC can still brake harder for a lead, and stricter stock ceilings win.
+  return min(maximum_accel, max(request.accel_ceiling, a_desired - 0.4 * dt))
 
 
 def additional_approach_tf(applied_tf, nominal_tf, requested_extra):

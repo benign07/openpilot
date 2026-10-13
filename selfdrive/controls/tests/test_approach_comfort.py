@@ -72,6 +72,16 @@ class TestApproachComfort(unittest.TestCase):
       self.assertEqual(apply_approach_ceiling(limit, 0.5, request), limit)
     self.assertGreaterEqual(apply_approach_ceiling(1.2, 1.0, request), 0.95)
 
+  def test_optional_coast_cap_does_not_force_a_fast_positive_accel_drop(self):
+    request = ApproachRequest(accel_ceiling=0.0)
+    cap = apply_approach_ceiling(1.2, 0.5, request)
+    # At the 20Hz planner, the old .05-per-frame drop repeatedly forced a
+    # sharper transition in the linked ideal-plant comparison. This bounds
+    # only the extra positive ceiling, never the ability to command braking.
+    self.assertGreaterEqual(cap, 0.475)
+    self.assertLess(cap, 0.5)
+    self.assertEqual(apply_approach_ceiling(-1., 0.5, request), -1.)
+
   def test_stop_profile_does_not_change_stop_distance(self):
     obj = lead(d=12, v=1.0, vr=-1.0)
     result = self.run_profile([obj], v_ego=2.0, a_ego=-0.3)

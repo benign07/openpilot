@@ -244,7 +244,7 @@ class LongitudinalPlanner:
       maximum_accel=accel_limits_turns[1], comfort_brake=carrot.comfort_brake,
       cruise_speed=v_cruise, planned_accel=self.a_desired,
     )
-    accel_limits_turns[1] = apply_approach_ceiling(accel_limits_turns[1], self.a_desired, approach_request)
+    accel_limits_turns[1] = apply_approach_ceiling(accel_limits_turns[1], self.a_desired, approach_request, self.dt)
 
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality, jerk_factor = carrot.jerk_factor_apply * approach_request.jerk_factor, a_change_cost_starting = carrot.aChangeCostStarting)
     self.mpc.set_accel_limits(accel_limits_turns[0], accel_limits_turns[1])
