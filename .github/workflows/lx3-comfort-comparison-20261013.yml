@@ -1,0 +1,46 @@
+name: LX3 exact installed approach comparison
+on:
+  push:
+    branches: [review/lx3-comfort-comparison-20261013]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-mpc-comparison:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Linux native prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+      - run: uv sync --frozen --no-dev --extra testing
+      - name: Read exact installed baseline and build linked solver
+        run: |
+          set -o pipefail
+          git fetch --depth=1 origin 32ff4a1101fc522ce43d44e0989cd52862abc203
+          uv run --no-sync scons --minimal -j2 common/params_pyx.so msgq_repo/msgq/ipc_pyx.so selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so 2>&1 | tee comparison-build.log
+      - name: Production planning and actual-schema recorder regressions
+        run: |
+          set -o pipefail
+          uv run --no-sync python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_preview.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_approach_composition.py selfdrive/carrot/can_diagnostics/test_runtime_schema.py -q --junitxml=comparison-contract.xml 2>&1 | tee comparison-contract.log
+      - name: Same input scenarios and settings on exact old and current code
+        run: |
+          set -o pipefail
+          uv run --no-sync python tools/compare_lx3_approach_native.py comparison 2>&1 | tee comparison.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exact-approach-comparison-not-vehicle-qualified
+          path: |
+            comparison-build.log
+            comparison-contract.xml
+            comparison-contract.log
+            comparison.log
+            comparison
