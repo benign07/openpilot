@@ -33,6 +33,19 @@ def test_mid_speed_margin_does_not_fade_away_at_50_kph():
   assert .35 < request.extra_tf <= .4
 
 
+def test_mid_speed_margin_does_not_expand_low_speed_opening_lead_preview():
+  lead = NS(status=True, radar=True, radarTrackId=1, dRel=10., vLead=2.5, vRel=.5, aLeadK=0.)
+  requests = []
+  for margin in (40, 80):
+    p = ApproachComfort()
+    for _ in range(120):
+      request = p.update(ApproachSettings(True, 40, margin, 40, 40), [lead], eligible=True,
+                         v_ego=2., a_ego=.2, base_tf=.7, stop_distance=5.5,
+                         maximum_accel=1.2, cruise_speed=18., planned_accel=.5)
+    requests.append(request)
+  assert requests[0].accel_ceiling == requests[1].accel_ceiling
+
+
 def stop_mpc():
   m, c, r, ns = production_mpc()
   m.x0 = np.array([0., 3., -.3])

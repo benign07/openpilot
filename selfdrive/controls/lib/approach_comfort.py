@@ -89,7 +89,10 @@ class ApproachComfort:
       # Far braking traffic does not suppress acceleration indefinitely.
       # Early braking must cover ordinary mid-speed approaches too. This is
       # a bounded cue window, not a guarantee of a particular braking point.
-      horizon = 4.0 + 3.0 * clamp(settings.margin, 0, 100) / 100.0
+      # Extending the preview at walking speed suppressed a launch behind an
+      # opening lead, then left a later stop to catch up. Keep the base window
+      # in stop-go; the extra early-braking window grows with road speed.
+      horizon = 4.0 + 3.0 * clamp(settings.margin, 0, 100) / 100.0 * clamp((v_ego - 5.0) / 9.0, 0.0, 1.0)
       lead_decel = clamp(-al, 0.0, 3.0)
       projected_closing = closing + min(vl, lead_decel * horizon) * 0.5
       # Preview actual positive planning intent, never the global capability.

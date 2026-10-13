@@ -72,7 +72,7 @@ def main():
                 ('candidate_same_40',new_helper,new_mpc,False,(40,40,40,40)),
                 ('candidate_60_80',new_helper,new_mpc,False,(60,80,60,60)),
                 ('candidate_flex80',new_helper,new_mpc,True,(60,80,60,60))]
-    cases = ['mild_braking','stop_go','strong_braking','cut_in','free_cruise','mild_low_speed']
+    cases = ['mild_braking','stop_go','strong_braking','cut_in','free_cruise','mild_low_speed','matched_mild_low_speed']
     results = []
     for scenario in cases:
       for mode in (1,2,3,4):
@@ -85,10 +85,10 @@ def main():
           c.tFollowDecelBoost, c.dynamicTFollow = .35, 0.
           c.mode,c.v_cruise,c.stop_dist = 'acc',18.,1000.
           c.j_lead_factor,c.stop_distance,c.comfort_brake = 0.,5.5,2.4*c.mySafeFactor
-          v = 0. if scenario=='stop_go' else (3. if scenario=='mild_low_speed' else 50/3.6)
-          vl = 2.8 if scenario=='mild_low_speed' else v
-          distance = {'stop_go':6.,'mild_low_speed':8.}.get(scenario,40.)
-          a = 0.
+          v = 0. if scenario=='stop_go' else (3. if scenario.endswith('low_speed') else 50/3.6)
+          vl = 2.8 if scenario.endswith('low_speed') else v
+          distance = {'stop_go':6.,'mild_low_speed':8.,'matched_mild_low_speed':8.5}.get(scenario,40.)
+          a = -.15 if scenario=='matched_mild_low_speed' else 0.
           planner, m = helper.ApproachComfort(), mpc_module.LongitudinalMpc()
           probe = SolverProbe(m.solver);m.solver = probe
           settings = helper.ApproachSettings(True,*strengths)
@@ -100,6 +100,7 @@ def main():
             if scenario=='mild_braking' and 3.<=t<24.:al=-.6
             elif scenario=='strong_braking' and 3.<=t<8.:al=-2.5
             elif scenario=='mild_low_speed' and t<9.4:al=-.3
+            elif scenario=='matched_mild_low_speed' and t<18.7:al=-.15
             elif scenario=='stop_go':
               if 3.<=t<8.:al=.5
               elif 12.<=t<18.3:al=-.4
