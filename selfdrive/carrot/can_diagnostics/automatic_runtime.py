@@ -79,7 +79,7 @@ def selected_fields(reader, fields):
   result = {}
   for key in fields:
     value = getattr(reader, key, None)
-    if key in ('gearShifter', 'state', 'longitudinalPlanSource') and value is not None:
+    if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'alertSound') and value is not None:
       value = str(value)
     elif key in ('speeds', 'accels', 'jerks') and value is not None:
       value = list(value)

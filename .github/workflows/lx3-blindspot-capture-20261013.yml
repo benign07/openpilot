@@ -16,11 +16,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install pytest aiohttp cryptography requests
+      - run: python -m pip install pytest aiohttp cryptography requests pycapnp
       - name: Actual passive recorder, rotation, quota, API and signed rollback
         run: |
           set -o pipefail
-          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_recording_rotation.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=passive.xml 2>&1 | tee passive.log
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_recording_rotation.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/carrot/can_diagnostics/test_runtime_schema.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=passive.xml 2>&1 | tee passive.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
