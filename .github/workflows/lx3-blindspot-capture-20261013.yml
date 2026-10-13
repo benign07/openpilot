@@ -1,0 +1,30 @@
+name: LX3 passive blindspot haptic investigation
+on:
+  push:
+    branches: [review/lx3-blindspot-capture-20261013]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  passive-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest aiohttp cryptography requests
+      - name: Actual passive recorder, rotation, quota, API and signed rollback
+        run: |
+          set -o pipefail
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_recording_rotation.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=passive.xml 2>&1 | tee passive.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: blindspot-passive-${{ matrix.python }}
+          path: |
+            passive.xml
+            passive.log

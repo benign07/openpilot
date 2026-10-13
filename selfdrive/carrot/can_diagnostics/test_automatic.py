@@ -118,6 +118,91 @@ class RecorderTests(unittest.TestCase):
         rows.extend(json.loads(line) for line in stream)
     return rows
 
+  @staticmethod
+  def blindspot_services(now, **values):
+    result = services(now)
+    result['carState']['data'].update(leftBlinker=False, rightBlinker=False,
+                                     leftBlindspot=False, rightBlindspot=False)
+    result['carState']['data'].update(values)
+    return result
+
+  def test_same_side_candidate_records_rear_raw_pre_and_post_without_engagement(self):
+    r = self.recorder
+    r.update(self.blindspot_services(100), 100)
+    r.can_frame(2, 0x1BA, bytes(24), 100_100_000_000, 100.1)
+    r.can_frame(2, 0x1BA, bytes([1])*24, 100_110_000_000, 100.11)
+    r.update(self.blindspot_services(100.2, leftBlinker=True, leftBlindspot=True), 100.2)
+    self.assertEqual(r.blindspot_trace_count, 1)
+    for t in (100.21, 100.22):
+      r.can_frame(2, 0x1BA, bytes(24), int(t*1e9), t)
+    rows = self.rows()
+    event = next(x for x in rows if x.get('reason') == 'blindspot_warning_candidate')
+    self.assertTrue(event['left'])
+    self.assertFalse(event['right'])
+    self.assertFalse(event['haptic_confirmed'])
+    self.assertFalse(event['warning_confirmed'])
+    self.assertFalse(event['lat_active'])
+    self.assertEqual(event['unknown_address_search'], 'match_full_rlog_on_PC')
+    raw = [x for x in rows if x['kind'] == 'button_trace_can' and x['address'] == 0x1BA]
+    self.assertEqual(len(raw), 4)
+    self.assertTrue(any(x['mono_ns'] < event['mono_ns'] for x in raw))
+    self.assertTrue(any(x['mono_ns'] > event['mono_ns'] for x in raw))
+
+  def test_opposite_side_or_missing_object_does_not_open_blindspot_window(self):
+    for t, state in ((100., dict(leftBlinker=True)),
+                     (100.3, dict(leftBlinker=True, rightBlindspot=True)),
+                     (100.6, dict(rightBlindspot=True))):
+      self.recorder.update(self.blindspot_services(t, **state), t)
+    self.assertEqual(self.recorder.blindspot_trace_count, 0)
+    self.assertFalse(any(x.get('reason') == 'blindspot_warning_candidate' for x in self.rows()))
+
+  def test_stale_invalid_dead_or_untyped_flags_cannot_confirm_candidate(self):
+    for i, condition in enumerate(('stale', 'invalid', 'dead', 'missing', 'string')):
+      now = 100.+i*.3
+      data = self.blindspot_services(now, leftBlinker=True, leftBlindspot=True)
+      state = data['carState']
+      if condition == 'stale': state['mono_ns'] -= 2_000_000_000
+      elif condition == 'invalid': state['valid'] = False
+      elif condition == 'dead': state['alive'] = False
+      elif condition == 'missing': state['data'].pop('rightBlindspot')
+      else: state['data']['leftBlindspot'] = 'true'
+      self.recorder.update(data, now)
+    self.assertEqual(self.recorder.blindspot_trace_count, 0)
+
+  def test_blindspot_raw_and_trigger_do_not_change_other_vehicle_capture(self):
+    self.recorder.metadata['car_fingerprint'] = 'KIA_EV9'
+    self.recorder.update(self.blindspot_services(100., leftBlinker=True, leftBlindspot=True), 100.)
+    self.recorder.can_frame(2, 0x1BA, bytes(24), 100_100_000_000, 100.1)
+    self.assertEqual(self.recorder.blindspot_trace_count, 0)
+    self.assertFalse(any(x.get('address') == 0x1BA or x.get('reason') == 'blindspot_warning_candidate' for x in self.rows()))
+
+  def test_blindspot_quota_cannot_consume_transport_steering_or_button_quota(self):
+    r = self.recorder
+    r.update(self.blindspot_services(100.), 100.)
+    for i in range(12):
+      now = 100.+40*i
+      r.diagnostic_trigger('blindspot_warning_candidate', int(now*1e9), now)
+      r.close_trace(now+9., 'test')
+    self.assertEqual(r.blindspot_trace_count, 4)
+    self.assertEqual(r.diagnostic_trace_count, 4)
+    r.diagnostic_trigger('transport_counter_change', 600_000_000_000, 600.)
+    r.close_trace(609., 'test')
+    r.diagnostic_trigger('oem_fault_edge', 620_000_000_000, 620.)
+    self.assertEqual(r.steering_trace_count, 1)
+    self.assertEqual(r.diagnostic_trace_count, 6)
+    self.assertEqual(r.trace_count-r.diagnostic_trace_count, 0)
+
+  def test_persistent_candidate_is_one_edge_and_next_trip_can_capture_again(self):
+    r = self.recorder
+    for i in range(40):
+      now = 100.+i*.2
+      r.update(self.blindspot_services(now, rightBlinker=True, rightBlindspot=True), now)
+    self.assertEqual(r.blindspot_trace_count, 1)
+    r.update(services(110., started=False), 110.)
+    r.update(self.blindspot_services(111., rightBlinker=True, rightBlindspot=True), 111.)
+    self.assertEqual(r.blindspot_trace_count, 1)
+    self.assertEqual(sum(x.get('reason') == 'blindspot_warning_candidate' for x in self.rows()), 2)
+
   def test_starts_without_openpilot_and_rotates_without_stopping_trip(self):
     self.recorder.update(services(), 100)
     trip = self.recorder.trip

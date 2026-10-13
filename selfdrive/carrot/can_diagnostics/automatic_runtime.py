@@ -207,10 +207,14 @@ class AutomaticController:
                                  'host_context_max_hz': 20, 'panda_max_hz': 20, 'panda_periodic_max_hz': 10},
                 'physical_ecu_origin': 'not_inferred_from_bus'}
     metadata['diagnostic_trace'] = {'triggers': ['oem_fault_edge', 'panda_authority_edge',
-                                                'transport_counter_change', 'observer_gap'],
+                                                'transport_counter_change', 'observer_gap', 'blindspot_warning_candidate'],
                                     'max_extra_traces_per_trip': 8, 'min_new_window_interval_s': 30,
                                     'spi_scope': 'existing_health_aggregate_only_not_stage_reasons',
                                     'echo_scope': 'panda_tx_confirmation_not_receiving_ecu_ack'}
+    metadata['blindspot_trace'] = {'pre_s': 2, 'post_s': 8, 'max_extra_windows_per_trip': 4,
+                                 'min_new_window_interval_s': 30, 'raw_rear_indicator_address': '0x1BA',
+                                 'trigger': 'fresh_same_side_blinker_and_object_not_confirmed_warning_or_haptic',
+                                 'unknown_address_search': 'full_rlog_on_PC_not_all_bus_python_capture'}
     metadata['clock_contract'] = {'version': 2, 'evidence': 'host_monotonic',
                                  'native_raw': 'source_log_mono_ns',
                                  'normalized_native_streams': ['can', 'pandaStates'],

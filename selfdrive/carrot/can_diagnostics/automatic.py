@@ -164,10 +164,10 @@ class AutoRecorder:
   # selection around physical LX3 button presses. The ordinary rlog remains
   # the independent full CAN source when its route segments are retained.
   ADDRESSES = {0x0A0, 0x0CB, 0x0EA, 0x105, 0x10B, 0x12A, 0x161, 0x162, 0x175,
-               0x1A0, 0x1AA, 0x1CF, 0x1EA, 0x2A4, 0x2AF, 0x362}
-  LX3_ONLY_ADDRESSES = {0x0A0, 0x105, 0x175, 0x1AA, 0x1CF, 0x2AF}
+               0x1A0, 0x1AA, 0x1BA, 0x1CF, 0x1EA, 0x2A4, 0x2AF, 0x362}
+  LX3_ONLY_ADDRESSES = {0x0A0, 0x105, 0x175, 0x1AA, 0x1BA, 0x1CF, 0x2AF}
   TRACE_ADDRESSES = {0x0CB, 0x0EA, 0x10B, 0x12A, 0x161, 0x162, 0x1A0,
-                     0x1EA, 0x2A4, 0x2AF, 0x362}
+                     0x1BA, 0x1EA, 0x2A4, 0x2AF, 0x362}
   # Raw samples are kept at 10 Hz outside a button trace. The full-rate trace
   # is bounded in time, memory, and frames, and never transmits a CAN packet.
   BUTTON_TRACE_PRE_NS = 2_000_000_000
@@ -179,6 +179,8 @@ class AutoRecorder:
   STEERING_TRACE_MAX_PER_TRIP = 8
   STEERING_TRACE_INTERVAL = 10.0
   DIAGNOSTIC_TRACE_INTERVAL = 30.0
+  BLINDSPOT_TRACE_MAX_PER_TRIP = 4
+  BLINDSPOT_TRACE_INTERVAL = 30.0
 
   def __init__(self, store, metadata):
     self.store, self.metadata = store, metadata
@@ -208,6 +210,9 @@ class AutoRecorder:
     self.last_steering_trace = -math.inf
     self.last_lane_departure = None
     self.last_haptic_request = None
+    self.last_blindspot_candidate = None
+    self.blindspot_trace_count = 0
+    self.last_blindspot_trace = -math.inf
     self.last_diagnostic_trace = -math.inf
     self.transport_baseline = None
     self.transport_identity = None
@@ -267,14 +272,24 @@ class AutoRecorder:
       return
     self.last_event['diagnostic:' + reason] = now
     steering = reason in ('lane_departure', 'haptic_request', 'oem_fault_edge')
-    quota_available = (self.steering_trace_count < self.STEERING_TRACE_MAX_PER_TRIP if steering else
-                      self.diagnostic_trace_count - self.steering_trace_count < self.DIAGNOSTIC_TRACE_MAX_PER_TRIP)
-    last_trace = self.last_steering_trace if steering else self.last_diagnostic_trace
-    interval = self.STEERING_TRACE_INTERVAL if steering else self.DIAGNOSTIC_TRACE_INTERVAL
+    blindspot = reason == 'blindspot_warning_candidate'
+    if blindspot:
+      quota_available = self.blindspot_trace_count < self.BLINDSPOT_TRACE_MAX_PER_TRIP
+      last_trace, interval = self.last_blindspot_trace, self.BLINDSPOT_TRACE_INTERVAL
+    elif steering:
+      quota_available = self.steering_trace_count < self.STEERING_TRACE_MAX_PER_TRIP
+      last_trace, interval = self.last_steering_trace, self.STEERING_TRACE_INTERVAL
+    else:
+      quota_available = (self.diagnostic_trace_count - self.steering_trace_count - self.blindspot_trace_count
+                         < self.DIAGNOSTIC_TRACE_MAX_PER_TRIP)
+      last_trace, interval = self.last_diagnostic_trace, self.DIAGNOSTIC_TRACE_INTERVAL
     if self.trace is None and quota_available and now - last_trace >= interval:
       self.begin_trace(mono_ns, now, 'diagnostic:' + reason, trigger=reason, trigger_details=details)
       self.diagnostic_trace_count += 1
-      if steering:
+      if blindspot:
+        self.blindspot_trace_count += 1
+        self.last_blindspot_trace = now
+      elif steering:
         self.steering_trace_count += 1
         self.last_steering_trace = now
       else:
@@ -399,6 +414,9 @@ class AutoRecorder:
       self.steering_trace_count = 0
       self.last_steering_trace = -math.inf
       self.last_lane_departure = self.last_haptic_request = None
+      self.last_blindspot_candidate = None
+      self.blindspot_trace_count = 0
+      self.last_blindspot_trace = -math.inf
       self.last_diagnostic_trace = -math.inf
       self.transport_baseline = self.transport_identity = None
       self.transport_report_time = -math.inf
@@ -428,6 +446,23 @@ class AutoRecorder:
     cs = services.get('carState', {}).get('data', {})
     cc = services.get('carControl', {}).get('data', {})
     sd = services.get('selfdriveState', {}).get('data', {})
+    # A side-object flag plus a same-side blinker is only a search candidate.
+    # It does not identify rear closing speed, an audible warning, or vibration.
+    keys = ('leftBlinker', 'rightBlinker', 'leftBlindspot', 'rightBlindspot')
+    if (fresh(services, 'carState', now, .3) and services['carState'].get('alive', True) is True
+        and all(type(cs.get(key)) is bool for key in keys)):
+      candidate = (cs['leftBlinker'] and cs['leftBlindspot'], cs['rightBlinker'] and cs['rightBlindspot'])
+      before = self.last_blindspot_candidate
+      if any(candidate) and (before is None or any(value and not old for value, old in zip(candidate, before))):
+        self.diagnostic_trigger('blindspot_warning_candidate', services['carState']['mono_ns'], now,
+                                left=candidate[0], right=candidate[1], initial_observation=before is None,
+                                v_ego=cs.get('vEgo'), lat_active=cc.get('latActive'), long_active=cc.get('longActive'),
+                                warning_confirmed=False, haptic_confirmed=False,
+                                meaning='same_side_blinker_and_object_not_rear_approach_or_actuation_proof',
+                                unknown_address_search='match_full_rlog_on_PC')
+      self.last_blindspot_candidate = candidate
+    else:
+      self.last_blindspot_candidate = None
     if fresh(services, 'carControl', now):
       hud = cc.get('hudControl') or {}
       left, right = hud.get('leftLaneDepart'), hud.get('rightLaneDepart')
@@ -666,4 +701,5 @@ class AutoRecorder:
             'button_trace_pre_evicted': self.trace_pre_evicted,
             'diagnostic_traces': self.diagnostic_trace_count,
             'steering_diagnostic_traces': self.steering_trace_count,
+            'blindspot_diagnostic_traces': self.blindspot_trace_count,
             'control_changes': False, 'phone_backup': False}
