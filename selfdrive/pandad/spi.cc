@@ -26,6 +26,7 @@
 enum SpiError {
   NACK = -2,
   ACK_TIMEOUT = -3,
+  HEADER_NACK = -4,  // Private retry classification; normalized before returning to callers.
 };
 
 const unsigned int SPI_ACK_TIMEOUT = 500; // milliseconds
@@ -240,16 +241,16 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
     ret = spi_transfer(endpoint, tx_data, tx_len, rx_data, max_rx_len, timeout);
 
     if (ret < 0) {
-      // NACK is also normal CAN TX backpressure. Preserve its existing retry
-      // behaviour; only charge actual non-NACK failures to the new budget.
-      if (ret != SpiError::NACK) failure_time_ms += std::max(0.0, millis_since_boot() - attempt_started);
+      // Only endpoint-3 DATA NACK may be normal CAN TX backpressure. Header
+      // rejection and other endpoints cannot be CAN queue flow control.
+      const bool can_backpressure = endpoint == 3U && ret == SpiError::NACK;
       timed_out = (timeout != 0) && (timeout_count > 5);
       timeout_count += ret == SpiError::ACK_TIMEOUT;
 
       // give other threads a chance to run
       std::this_thread::yield();
 
-      if (ret == SpiError::NACK) {
+      if (ret == SpiError::NACK || ret == SpiError::HEADER_NACK) {
         // prevent busy waiting while the panda is NACK'ing
         // due to full TX buffers
         nack_count += 1;
@@ -258,6 +259,9 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
           usleep(std::clamp(nack_count*10, 200, 2000));
         }
       }
+      // Include retry backoff in charged failure time. Do not charge legitimate
+      // (wire-ambiguous) endpoint-3 data NACK or change its legacy retry policy.
+      if (!can_backpressure) failure_time_ms += std::max(0.0, millis_since_boot() - attempt_started);
     }
   } while (ret < 0 && !timed_out && spi_within_budget(0, failure_time_ms, spi_retry_budget_ms(timeout), connected));
 
@@ -267,6 +271,7 @@ int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint1
   }
   report_spi_diagnostics();
 
+  if (ret == SpiError::HEADER_NACK) ret = SpiError::NACK;
   return ret;
 }
 
@@ -300,7 +305,7 @@ int PandaSpiHandle::wait_for_ack(uint8_t ack, uint8_t tx, unsigned int timeout, 
       if (ack == SPI_HACK) spi_diagnostics.count(SpiStage::HEADER_NACK);
       if (ack == SPI_DACK) spi_diagnostics.count(SpiStage::DATA_NACK);
       SPILOG(LOGD, "SPI: got NACK, waiting for 0x%x", ack);
-      return SpiError::NACK;
+      return ack == SPI_HACK ? SpiError::HEADER_NACK : SpiError::NACK;
     }
 
     // handle timeout

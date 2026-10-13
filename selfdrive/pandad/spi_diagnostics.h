@@ -29,8 +29,9 @@ private:
 
 inline unsigned spi_retry_budget_ms(unsigned timeout) {
   // Keep the existing ACK timeout range and six-timeout retry envelope, but
-  // bound non-timeout I/O/checksum failures as well. Normal NACK backpressure
-  // keeps the existing retry behaviour and does not consume this budget. A blocking kernel
+  // bound non-timeout I/O/checksum/protocol-NACK failures as well. Only endpoint-3
+  // data NACK (possibly CAN TX backpressure) retains the existing retry exemption.
+  // Charged attempts include their backoff sleep. A blocking kernel
   // ioctl may still overrun the userspace deadline.
   return 6U * std::clamp(timeout == 0U ? 500U : timeout, 20U, 500U);
 }

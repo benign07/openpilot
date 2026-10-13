@@ -1,0 +1,81 @@
+name: LX3 bounded SPI NACK ARM candidate
+on:
+  push:
+    branches: [review/lx3-spi-nack-20261014]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  arm-device-build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: ARM compiler and original SCons build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang python3-venv
+          python3 -m venv /tmp/lx3-build
+          /tmp/lx3-build/bin/pip install scons Cython numpy
+      - name: Verify sealed original ARM SDK
+        run: /tmp/lx3-build/bin/python tools/lx3_spi_arm_artifact.py sdk
+      - name: Build TICI pandad and production CAN protocol tests
+        run: |
+          set -o pipefail
+          mkdir -p arm-evidence arm-before-src
+          git fetch --depth=1 origin a381f7d6c7d469d391a8e45121718279bcaf9d61
+          git fetch --depth=1 origin 32ff4a1101fc522ce43d44e0989cd52862abc203
+          git fetch --depth=1 origin e09364d4606eaa9bf1b2c854901950483ecc78c2
+          git diff --exit-code e09364d4606eaa9bf1b2c854901950483ecc78c2 HEAD -- panda opendbc_repo selfdrive/controls selfdrive/carrot selfdrive/monitoring selfdrive/selfdrived cereal system/manager
+          git show a381f7d6c7d469d391a8e45121718279bcaf9d61:selfdrive/pandad/panda.cc > arm-before-src/panda.cc
+          /tmp/lx3-build/bin/scons -f tools/lx3_spi_arm.SConstruct -j2 2>&1 | tee arm-evidence/build.log
+      - name: Inspect ARM ELF and run CAN transport and SPI boundaries without hardware
+        run: |
+          set -o pipefail
+          /tmp/lx3-build/bin/python tools/lx3_spi_arm_artifact.py record
+          selfdrive/pandad/tests/test_pandad_canprotocol 2>&1 | tee arm-evidence/canprotocol.log
+          /tmp/lx3-build/bin/python tools/lx3_spi_hw_type_regression.py
+          for response in -1 0 1 2; do
+            selfdrive/pandad/tests/test_spi_mcu_status "$response" | tee "arm-evidence/mcu-status-$response.log"
+          done
+          /tmp/lx3-build/bin/python tools/check_lx3_spi_boundaries.py --cc clang --cxx clang++ --output arm-evidence/spi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-nack-arm-prebuilt
+          path: |
+            arm-evidence
+            selfdrive/pandad/pandad
+  passive-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest aiohttp cryptography requests pycapnp
+      - name: Actual diagnostic chunks, independent steering windows and HUD compatibility
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_recording_rotation.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/carrot/can_diagnostics/test_runtime_schema.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=passive.xml 2>&1 | tee passive.log
+      - name: Unchanged production authority and MAIN handoff
+        run: |
+          set -o pipefail
+          for suite in authority_native main_handoff; do
+            gcc -std=gnu11 -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=undefined -fno-sanitize-recover=all -Iopendbc_repo/opendbc/safety/board -Iopendbc_repo/opendbc/safety opendbc_repo/opendbc/safety/tests/test_lx3_${suite}.c -lm -o /tmp/lx3-${suite}
+            /tmp/lx3-${suite} | tee ${suite}.log
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-nack-passive-${{ matrix.python }}
+          path: |
+            passive.xml
+            passive.log
+            authority_native.log
+            main_handoff.log
