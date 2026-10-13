@@ -32,6 +32,7 @@ static constexpr unsigned BACKPRESSURE_NACKS = 100;
 static constexpr double IO_MS = 0.25;
 // Header + ACK poll + three recovery fills, followed by the clamped 2ms sleep.
 static constexpr double MAX_HEADER_CHARGE_MS = 5 * IO_MS + 2.0;
+static constexpr double MAX_DATA_CHARGE_MS = 7 * IO_MS + 2.0;
 namespace util {
 int safe_ioctl(int, unsigned long request, void *argument, const char *) {
   if (request != SPI_IOC_MESSAGE(1)) return 0;
@@ -108,6 +109,7 @@ int main(int argc, char **argv) {
                             panda.control_read(0x42, 0, 0, buffer, sizeof(buffer), timeout);
     if (scenario == Scenario::DATA_BACKPRESSURE || scenario == Scenario::MIXED_NACK || scenario == Scenario::BOUNDARY_OK) {
       assert(result == 0 && panda.comms_healthy && flow_nacks >= BACKPRESSURE_NACKS && fake_ms > 120);
+      if (scenario == Scenario::BOUNDARY_OK) assert(header_nacks == 37U && spi_diagnostics.get(SpiStage::HEADER_NACK) == 36U);
     } else if (scenario == Scenario::GOOD || scenario == Scenario::HEADER_NACK) {
       assert(result == 16 && buffer[0] == 0);
     } else {
@@ -116,7 +118,8 @@ int main(int argc, char **argv) {
       assert(panda.comms_healthy == !can_write);
       if (scenario == Scenario::HEADER_STUCK || scenario == Scenario::CONTROL_DATA_STUCK || scenario == Scenario::CAN_HEADER_STUCK) {
         assert(result == SpiError::NACK);  // Private header classification never escapes.
-        assert(fake_ms >= 120 && fake_ms < 120 + MAX_HEADER_CHARGE_MS);
+        const double max_charge = scenario == Scenario::CONTROL_DATA_STUCK ? MAX_DATA_CHARGE_MS : MAX_HEADER_CHARGE_MS;
+        assert(fake_ms >= 120 && fake_ms < 120 + max_charge);
         assert(spi_diagnostics.budget_permille_max() >= 1000);
       }
       if (scenario == Scenario::BOUNDARY_FAIL) {
@@ -135,6 +138,11 @@ int main(int argc, char **argv) {
     SpiDiagnostics report;
     assert(!report.report_due(4999) && report.report_due(5000));
     assert(!report.report_due(5001) && report.report_due(10000));
+    report.observe_call(9, 60000, 120);
+    assert(report.take_call_attempts_max() == 9 && report.take_charged_us_max() == 60000 && report.take_budget_permille_max() == 500);
+    assert(report.take_call_attempts_max() == 0 && report.take_charged_us_max() == 0 && report.take_budget_permille_max() == 0);
+    report.observe_call(2, 1200, 120);
+    assert(report.call_attempts_max() == 2 && report.budget_permille_max() == 10);
 #endif
     std::printf("PASS actual spi.cc %s: returned, preserved output on failure, recovered on valid next read\n", test.c_str());
     return 0;

@@ -26,6 +26,9 @@ def main():
   paths = ['selfdrive/pandad', 'panda', 'common', 'cereal', 'system/hardware', 'msgq_repo', 'third_party/json11']
   changed = subprocess.check_output(['git', 'diff', '--name-only', BASELINE, 'HEAD', '--', *paths], cwd=ROOT).decode().splitlines()
   assert all(p in CHANGED or p.startswith('selfdrive/pandad/tests/') for p in changed), changed
+  def clean():
+    assert not subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all', '--', *paths], cwd=ROOT)
+  clean()
   saved = {p: (ROOT / p).read_bytes() for p in CHANGED}
   try:
     for p in CHANGED:
@@ -36,6 +39,7 @@ def main():
   finally:
     for p, data in saved.items():
       (ROOT / p).write_bytes(data)
+  clean()
   build('build.log')
   after = objects()
   assert before.keys() == after.keys() and before
@@ -45,6 +49,8 @@ def main():
             'baseline': BASELINE, 'native_source_differences': changed, 'objects_before': before,
             'objects_after': after, 'changed_objects': differences, 'all_non_SPI_objects_identical': True,
             'rebuilt_baseline_binary_sha256': binary_before,
+            'verified_installed_binary_sha256': '56850ffaff33b34a92636852364fe0403f2778d15e99c882cd552baced06cf13',
+            'rebuilt_baseline_equals_installed_binary': binary_before == '56850ffaff33b34a92636852364fe0403f2778d15e99c882cd552baced06cf13',
             'candidate_binary_sha256': sha((ROOT / 'selfdrive/pandad/pandad').read_bytes()),
             'scope': 'Same runner/path/compiler/options. Baseline sources, not reproduction of old installed binary/toolchain.'}
   (OUT / 'native-object-comparison.json').write_text(json.dumps(record, indent=2))

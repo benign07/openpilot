@@ -50,14 +50,17 @@ drive does not establish cause or resolution.
 
 Diagnostic-only per-call high-water marks expose maximum attempts, charged
 microseconds and the maximum charged-budget fraction in per mille. These
-cumulative atomic maxima do not alter retry decisions or any CAN/health ABI.
+windowed atomic maxima do not alter retry decisions or any CAN/health ABI.
 A bulk failure keeps the existing sticky unhealthy state until handle restart;
 a successful later control read does not clear it. This candidate therefore
 changes availability under a long header-NACK burst. Aggregate retry counters
 from the old policy cannot prove such bursts absent. The parked pre-drive
 observation must reject any final failure, invalid CAN/health or a recorded
-charged-budget high-water mark at/above 250 per mille; passing that screening
+charged-budget high-water mark at/above 250 per mille in any complete window after first valid pandaState; passing that screening
 is not whole-vehicle qualification. Kernel blocking and future bursts remain
 limitations. The late boundary pair uses 210 exempt queue NACKs, then 36/37
 header NACKs at clamped backoff: respectively success/budget failure with the
 specified simulated timing, not a real-hardware NACK-count threshold.
+
+Maxima exchange to zero at each 5-second report; startup windows are kept but
+separated from valid parked observations. Legacy counters remain cumulative.

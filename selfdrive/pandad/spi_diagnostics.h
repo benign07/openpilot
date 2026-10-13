@@ -25,6 +25,9 @@ public:
   uint64_t call_attempts_max() const { return max_call_attempts.load(std::memory_order_relaxed); }
   uint64_t charged_us_max() const { return max_charged_us.load(std::memory_order_relaxed); }
   uint64_t budget_permille_max() const { return max_budget_permille.load(std::memory_order_relaxed); }
+  uint64_t take_call_attempts_max() { return max_call_attempts.exchange(0, std::memory_order_relaxed); }
+  uint64_t take_charged_us_max() { return max_charged_us.exchange(0, std::memory_order_relaxed); }
+  uint64_t take_budget_permille_max() { return max_budget_permille.exchange(0, std::memory_order_relaxed); }
   bool report_due(uint64_t now_ms) {
     uint64_t previous = last_report_ms.load(std::memory_order_relaxed);
     return now_ms >= previous && now_ms - previous >= 5000U &&

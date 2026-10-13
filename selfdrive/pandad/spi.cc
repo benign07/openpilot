@@ -36,7 +36,7 @@ static SpiDiagnostics spi_diagnostics;
 static void report_spi_diagnostics() {
   const auto now = static_cast<uint64_t>(millis_since_boot());
   if (!spi_diagnostics.report_due(now)) return;
-  LOGW("SPI_HOST_STATS mono_ms=%llu attempts=%llu retries=%llu header_io=%llu header_nack=%llu header_timeout=%llu data_io=%llu data_nack=%llu data_timeout=%llu read_io=%llu bad_length=%llu bad_checksum=%llu recovery_failed=%llu failed=%llu success=%llu max_call_attempts=%llu max_charged_us=%llu max_budget_permille=%llu",
+  LOGW("SPI_HOST_STATS mono_ms=%llu attempts=%llu retries=%llu header_io=%llu header_nack=%llu header_timeout=%llu data_io=%llu data_nack=%llu data_timeout=%llu read_io=%llu bad_length=%llu bad_checksum=%llu recovery_failed=%llu failed=%llu success=%llu window_max_call_attempts=%llu window_max_charged_us=%llu window_max_budget_permille=%llu",
        static_cast<unsigned long long>(now),
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::ATTEMPTS)),
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::RETRIES)),
@@ -52,9 +52,9 @@ static void report_spi_diagnostics() {
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::RECOVERY_FAILED)),
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::TRANSFER_FAILED)),
        static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::SUCCESS)),
-       static_cast<unsigned long long>(spi_diagnostics.call_attempts_max()),
-       static_cast<unsigned long long>(spi_diagnostics.charged_us_max()),
-       static_cast<unsigned long long>(spi_diagnostics.budget_permille_max()));
+       static_cast<unsigned long long>(spi_diagnostics.take_call_attempts_max()),
+       static_cast<unsigned long long>(spi_diagnostics.take_charged_us_max()),
+       static_cast<unsigned long long>(spi_diagnostics.take_budget_permille_max()));
 }
 
 class LockEx {
