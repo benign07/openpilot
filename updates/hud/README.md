@@ -56,3 +56,8 @@ GitHub에는 소스, 공개 가능한 배포 명세·서명된 bundle, 변경 �
 ## Latest verified publication
 
 [lx3-approach-test-20261013-01](releases/lx3-approach-test-20261013-01.md) / sequence 8. The source branch alone is not an OTA release. Publish the signed bundle, pinned index, change notes and verification record together. Application remains parked and hash-bound.
+
+
+## Latest verified publication
+
+[lx3-drive-quality-20261014-01](releases/lx3-drive-quality-20261014-01.md) / sequence 9. The source branch alone is not an OTA release. Publish the signed bundle, pinned index, change notes and verification record together. Application remains parked and hash-bound.
