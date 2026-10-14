@@ -14,6 +14,11 @@ def actual_services(now, sound='none'):
     payload = message.init(name)
     if name == 'deviceState':
       payload.started = True
+      payload.cpuTempC = [78., 80.]
+      payload.gpuTempC = [75.]
+      payload.pmicTempC = [68.]
+      payload.cpuUsagePercent = [20, 70]
+      payload.thermalStatus = 'yellow'
     if name == 'selfdriveState':
       payload.alertSound = sound
     with log.Event.from_bytes(message.to_bytes()) as event:
@@ -30,6 +35,8 @@ def test_all_runtime_fields_can_be_recorded_from_real_schema(tmp_path):
     # Conversion must preserve the actual warning; replacing it with an empty
     # value or stringifying the whole payload would hide the recording fault.
     assert services['selfdriveState']['data']['alertSound'] == sound
+    assert services['deviceState']['data']['cpuTempC'] == [78.,80.]
+    assert services['deviceState']['data']['thermalStatus'] == 'yellow'
     json.dumps(services, allow_nan=False)
     recorder.update(services, now)
   recorder.close()

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import time
 import numpy as np
 
 import cereal.messaging as messaging
@@ -321,6 +322,7 @@ class LongitudinalPlanner:
     self.long_evidence_pending = None
     if evidence_due:
       try:
+        snapshot_started = time.perf_counter_ns()
         self.long_evidence_pending = {
         'model_mono_ns': int(sm.logMonoTime['modelV2']), 'dt': float(self.dt),
         'model_frame_id': int(sm['modelV2'].frameId), 'model_timestamp_eof_ns': int(sm['modelV2'].timestampEof),
@@ -359,6 +361,7 @@ class LongitudinalPlanner:
                    'actuator_delay': float(longitudinalActuatorDelay), 'v_ego_stopping': float(vEgoStopping)},
         'problem': self.mpc.evidence_problem,
         }
+        self.long_evidence_pending['snapshot_us'] = (time.perf_counter_ns() - snapshot_started) / 1000.
       except Exception as exc:
         self.long_evidence.note_error(exc)
     if self.long_evidence.last_error and self.long_evidence_pending is None and self.long_evidence.cycle % 20 == 0:

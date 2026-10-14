@@ -153,3 +153,40 @@ def test_local_video_server_supports_range_seeking(tmp_path):
     with urlopen(Request(f'http://127.0.0.1:{server.server_port}/a.mp4',headers={'Range':'bytes=3-6'})) as r:
       assert r.status==206 and r.headers['Content-Range']=='bytes 3-6/10' and r.read()==b'3456'
   finally:server.shutdown();thread.join();server.server_close()
+
+
+def test_media_sync_keeps_active_segment_and_external_targets_out():
+  from tools.sync_lx3_quality_media import checked_base,completed_segments
+  assert checked_base('http://100.71.19.14:7000')=='http://100.71.19.14:7000'
+  for url in ('http://example.com:7000','http://127.0.0.1:7000','http://100.71.19.14:7000/evil','http://u@100.71.19.14:7000'):
+    with pytest.raises(ValueError):checked_base(url)
+  rows=['r--0','r--1','../r--2','other--3']
+  assert completed_segments('r',rows,'r')==['r--0']
+  assert completed_segments('r',rows,'next')==['r--0','r--1']
+
+
+@pytest.mark.parametrize('truncate',[False,True])
+def test_media_sync_uses_actual_catalog_and_never_finalizes_truncation(tmp_path,monkeypatch,truncate):
+  import io
+  from types import SimpleNamespace
+  from tools import sync_lx3_quality_media as media
+  (tmp_path/'a.jsonl.gz').write_bytes(gzip.compress(b'{"kind":"header","route":"r"}\n'))
+  called=[]
+  def reply(request,timeout):
+    url=request.full_url;called.append(url)
+    if 'params_bulk' in url:raw=b'{"values":{"CurrentRoute":"r"}}'
+    elif '/segments/' in url:raw=b'{"ok":true,"route":"r","segments":["r--0","r--1"]}'
+    else:raw=b'123' if truncate else b'123456'
+    response=io.BytesIO(raw);response.url=url;response.status=200
+    response.headers={'Content-Length':'6','Content-Disposition':'attachment; filename="r--0--qcamera.ts"'}
+    return response
+  monkeypatch.setattr(media.OPENER,'open',reply)
+  monkeypatch.setattr(media.shutil,'disk_usage',lambda _:SimpleNamespace(free=1024**3))
+  if truncate:
+    with pytest.raises(ValueError):media.sync('http://100.71.19.14:7000',tmp_path)
+    assert not (tmp_path/'video_segments/r--0/qcamera.ts').exists()
+  else:
+    assert media.sync('http://100.71.19.14:7000',tmp_path)['downloaded']==['r--0']
+    assert (tmp_path/'video_segments/r--0/qcamera.ts').read_bytes()==b'123456'
+    assert media.sync('http://100.71.19.14:7000',tmp_path)['downloaded']==[]
+  assert not any('/download/r--1/' in path for path in called)

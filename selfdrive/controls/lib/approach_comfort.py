@@ -263,7 +263,7 @@ class LongitudinalEvidence:
       size = len(json.dumps(row, separators=(',', ':'), allow_nan=False).encode())
       if size > self.MAX_BYTES:
         raise ValueError('longitudinal evidence exceeds bounded frame size')
-      if time.perf_counter_ns() - started > 5_000_000:
+      if (time.perf_counter_ns() - started) / 1000. + row.get('snapshot_us', 0.) + (row.get('problem') or {}).get('copy_us', 0.) > 5000.:
         self.cooldown = 20
         raise ValueError('diagnostic build exceeded 5ms; skip one second')
       sink({self.KEY: row})

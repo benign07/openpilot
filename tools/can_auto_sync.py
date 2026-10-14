@@ -178,12 +178,17 @@ def main():
   parser.add_argument('--analyze-only', action='store_true')
   parser.add_argument('--quality', action='store_true', help='Generate the offline detailed log/video quality report after sync')
   parser.add_argument('--video', action='store_true', help='Remux local qcamera files for the quality report')
+  parser.add_argument('--media-url', help='Read completed videos from this fixed Tailscale OP endpoint')
   args = parser.parse_args()
   args.out.mkdir(parents=True, exist_ok=True)
   while True:
     try:
       count = 0 if args.analyze_only else sync(args.url, args.out)
       result = analyze(args.out)
+      if args.media_url:
+        from sync_lx3_quality_media import sync as sync_media
+        try: result['media_sync'] = sync_media(args.media_url,args.out)
+        except (OSError,ValueError,KeyError) as exc: result['media_sync'] = {'pending':True,'reason':str(exc)[:160]}
       if args.quality:
         import subprocess
         import sys

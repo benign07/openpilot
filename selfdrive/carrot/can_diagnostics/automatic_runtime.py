@@ -8,7 +8,7 @@ import threading
 import time
 from collections import deque
 
-from .automatic import AutoRecorder, ChunkStore, atomic_json
+from .automatic import AutoRecorder, ChunkStore
 
 FIELDS = {
   'deviceState': ('started', 'startedMonoTime', 'cpuTempC', 'gpuTempC', 'memoryTempC', 'pmicTempC',
@@ -89,9 +89,9 @@ def selected_fields(reader, fields):
   result = {}
   for key in fields:
     value = getattr(reader, key, None)
-    if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'alertSound', 'longControlState') and value is not None:
+    if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'alertSound', 'longControlState', 'thermalStatus') and value is not None:
       value = str(value)
-    elif key in ('speeds', 'accels', 'jerks') and value is not None:
+    elif key in ('speeds', 'accels', 'jerks', 'cpuTempC', 'gpuTempC', 'pmicTempC', 'cpuUsagePercent') and value is not None:
       value = list(value)
     elif key == 'errors' and value is not None:
       value = [str(error) for error in value]
@@ -146,6 +146,8 @@ class AutomaticController:
     self.error = None
     self.restart_count = 0
     self.retry_after_seconds = 0
+    self.thermal_last = None
+    self.thermal_errors = 0
 
   def start(self):
     if self.worker is None:
@@ -158,6 +160,8 @@ class AutomaticController:
       if self.error:
         result.update(state='error', error=self.error, retry_after_seconds=self.retry_after_seconds)
       result['recorder_restart_count'] = self.restart_count
+      result['thermal_last'] = self.thermal_last
+      result['thermal_evidence_errors'] = self.thermal_errors
       if self.recorder:
         result['recording_retention'] = self.recorder.metadata.get('recording_retention', {'status': 'unknown'})
       return result
@@ -254,25 +258,27 @@ class AutomaticController:
       self.error = None
       self.retry_after_seconds = 0
     last_metadata = last_context = last_storage = -100
-    last_thermal = last_thermal_save = -100
+    last_thermal = -100
     thermal_recent = deque(maxlen=120)
+    thermal_at_start = None
+    thermal_emitted = False
     services = {}
     while not self.shutdown.is_set():
       sm.update(0)
       now = time.monotonic()
       native_offset_ns = native_clock_offset_ns()
-      if now - last_thermal >= 1 and sm.valid['deviceState'] and sm.alive['deviceState'] and 0 <= now - sm.logMonoTime['deviceState'] / 1e9 < 3:
-        thermal_recent.append({'mono_ns': int(sm.logMonoTime['deviceState']),
-                               **selected_fields(sm['deviceState'], FIELDS['deviceState'])})
-        metadata['boot_thermal_recent'] = list(thermal_recent)
-        last_thermal = now
-        if now - last_thermal_save >= 30:
-          try:
-            atomic_json(self.root / 'boot-thermal-latest.json', {'boot_id': boot, 'samples': list(thermal_recent),
-                                                               'scope': 'collector_start_onward_not_kernel_boot_or_causal_proof'})
-          except OSError:
-            pass  # Thermal evidence must not stop the existing recording worker.
-          last_thermal_save = now
+      try:
+        if now - last_thermal >= 1 and sm.valid['deviceState'] and sm.alive['deviceState'] and 0 <= now - sm.logMonoTime['deviceState'] / 1e9 < 3:
+          sample = {'mono_ns': int(sm.logMonoTime['deviceState']), **selected_fields(sm['deviceState'], FIELDS['deviceState'])}
+          json.dumps(sample, allow_nan=False)
+          thermal_recent.append(sample)
+          with self.lock:
+            self.thermal_last = sample
+          if sample['started'] and thermal_at_start is None:
+            thermal_at_start = list(thermal_recent)
+          last_thermal = now
+      except Exception:
+        self.thermal_errors += 1  # No additional fsync or failure of the CAN reader.
       with self.lock:
         if abs(native_offset_ns - metadata['native_clock_offset_ns']) > 2_000_000:
           before = metadata['native_clock_offset_ns']
@@ -307,6 +313,13 @@ class AutomaticController:
         last_context = now
       with self.lock:
         self.recorder.update(services, now)
+        if not thermal_emitted and thermal_at_start is not None and self.recorder.state == 'recording':
+          try:
+            self.recorder.event('boot_thermal_samples', now, samples=thermal_at_start,
+                                scope='collector_start_to_first_onroad_not_kernel_boot_or_causal_proof')
+            thermal_emitted = True
+          except Exception:
+            self.thermal_errors += 1
       # Bounded drains; lag is recorded explicitly and stale CAN is discarded.
       for name, sock in sockets.items():
         for _ in range(32):
@@ -360,10 +373,14 @@ class AutomaticController:
           now = time.monotonic()
           age = now - (int(event.logMonoTime) - native_offset_ns) / 1e9
           if not 0. <= age <= .5:
+            with self.lock:
+              self.recorder.storage_dropped += 1
             continue
           with self.lock:
             if self.recorder.state == 'recording' and self.recorder.rotate_full_chunk(now):
               self.recorder.store.append({'kind': 'video_index', 'index': event.qRoadEncodeIdx.to_dict(),
                                           'source_log_mono_ns': int(event.logMonoTime),
                                           'native_clock_offset_ns': native_offset_ns}, now)
+            elif self.recorder.state == 'recording':
+              self.recorder.storage_dropped += 1
       self.shutdown.wait(.05)

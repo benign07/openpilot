@@ -128,6 +128,7 @@ def collect(inputs, schema_dir):
               state=f.get('state',{});sv=f.get('services',{});lat=f.get('lateral',{})
               streams[route]['carState'].append({'t':sv.get('carState',{}).get('mono_ns',f['mono_ns']),
                 'valid':sv.get('carState',{}).get('valid',False),'vEgo':state.get('v_ego',0.),'aEgo':state.get('a_ego',0.),
+                'standstill':state.get('standstill',True),'cruiseState':{'standstill':state.get('cruise_standstill',True)},
                 'canValid':state.get('can_valid',False),'canTimeout':state.get('can_timeout',True),
                 'brakePressed':state.get('brake',False),'gasPressed':state.get('gas',False),
                 'leftBlinker':state.get('left_blinker',False),'rightBlinker':state.get('right_blinker',False),
@@ -314,18 +315,24 @@ def evaluate_route(route, ss, frames, native=False):
           active=predicate(before) if before is not None else None
           if active is True:return {'mono_ns':None,'status':'already_true_at_lead_threshold'}
           for row in ss.get(key,[]):
-            if lo<row['t']<=c['t']:
+            if lo<row['t']<=c['t'] and row.get('valid',True):
               value=predicate(row)
+              if value is None:continue
               if value and active is False:return {'mono_ns':row['t'],'status':'observed_edge'}
               active=value
           return {'mono_ns':None,'status':'not_observed'}
         phases={
-          'planner_release':phase_edge('longitudinalPlan',lambda r:not r.get('shouldStop',True)),
-          'long_control_release':phase_edge('controlsState',lambda r:r.get('longControlState') in ('starting','pid')),
-          'cruise_standstill_release':phase_edge('carState',lambda r:not r.get('cruiseState',{}).get('standstill',True)),
+          'planner_release':phase_edge('longitudinalPlan',lambda r:not r['shouldStop'] if 'shouldStop' in r else None),
+          'long_control_release':phase_edge('controlsState',lambda r:r['longControlState'] in ('starting','pid') if 'longControlState' in r else None),
+          'cruise_standstill_release':phase_edge('carState',lambda r:not r['cruiseState']['standstill'] if 'standstill' in r.get('cruiseState',{}) else None),
           'positive_command':phase_edge('carControl',lambda r:r.get('accel',r.get('actuators',{}).get('accel',0))>.1)}
-        previous_diff=[r['mono_ns'] for r in frames if stopped<=r['mono_ns']<lo and abs(r['comparison']['30']['applied_ceiling']-r['comparison']['40']['applied_ceiling'])>1e-9]
-        pair['last_different_ceiling_during_standstill_ns']=max(previous_diff) if previous_diff else None
+        reset_boundary=max((r['mono_ns'] for r in frames if r['mono_ns']<lo and (r.get('state',{}).get('reset_state') or r.get('state',{}).get('long_active') is False)),default=None)
+        previous_diff=[r['mono_ns'] for r in frames if (reset_boundary or 0)<=r['mono_ns']<lo and abs(r['comparison']['30']['applied_ceiling']-r['comparison']['40']['applied_ceiling'])>1e-9]
+        pair['last_different_ceiling_since_reset_ns']=max(previous_diff) if previous_diff else None
+        pair['recorded_reset_boundary_ns']=reset_boundary
+        if previous_diff:
+          pair['integrity_issues'].append('pre_window_state_may_differ')
+          pair['classification']='unknown'
         launch={'lead_v_gt_0p3_ns':lt,'phases':phases,'ego_moving_ns':c['t'],'ego10_ns':end,
                 'gap_at_move':lead.get('dRel'),'comparison':pair}
         starts.append(launch)
@@ -354,11 +361,12 @@ def media_prepare(videos,indexes,offsets,out):
       if not pts or abs(pts[0]) > .001 or any(b<a for a,b in zip(pts,pts[1:])):
         raise ValueError('MP4 presentation origin/order is not qualified')
       idx=sorted({x['segmentId']:x for x in indexes.get((route,segment),[])}.values(),key=lambda x:x['segmentId'])
-      if not idx or len(idx)!=len(pts) or [x['segmentId'] for x in idx]!=list(range(len(pts))):
+      if not idx or any(not 0<=x['segmentId']<len(pts) for x in idx):
         raise ValueError('encoder index/video frame coverage mismatch')
       if offsets.get(route) is None:
         raise ValueError('missing camera BOOTTIME to host MONOTONIC mapping')
-      media[route,segment]=[{'t':x['native_sof']-offsets[route],'pts':pts[i],'file':target.relative_to(out).as_posix(),'frameId':x['frameId']} for i,x in enumerate(idx)]
+      media[route,segment]=[{'t':x['native_sof']-offsets[route],'pts':pts[x['segmentId']],'file':target.relative_to(out).as_posix(),'frameId':x['frameId'],
+                             'index_coverage':{'mapped':len(idx),'video_frames':len(pts)}} for x in idx]
     except (OSError,ValueError,KeyError,subprocess.SubprocessError) as exc:
       errors.append({'video':str(path),'error':str(exc)[:200]})
   return media,errors
