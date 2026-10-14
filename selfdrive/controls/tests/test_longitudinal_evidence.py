@@ -223,3 +223,35 @@ def test_offline_video_source_still_produces_report(tmp_path,monkeypatch):
   monkeypatch.setattr(sys,'argv',['can_auto_sync','--out',str(tmp_path),'--analyze-only','--quality','--video','--media-url','http://100.71.19.14:7000'])
   can_auto_sync.main()
   assert (tmp_path/'quality/index.html').is_file()
+
+
+def test_failed_videos_do_not_starve_valid_new_video(tmp_path,monkeypatch):
+  import subprocess
+  from tools import lx3_drive_quality as quality
+  videos={};indexes={};calls=[]
+  for segment in range(5):
+    path=tmp_path/f'{"bad" if segment<4 else "valid"}{segment}.ts';path.write_bytes(b'input');videos['r',segment]=path
+    indexes['r',segment]=[{'segmentId':0,'frameId':segment,'native_sof':100}]
+  def run(command,**kwargs):
+    calls.append(command)
+    if command[0]=='ffmpeg':
+      if 'bad' in command[command.index('-i')+1]:raise subprocess.CalledProcessError(1,command)
+      Path(command[-1]).write_bytes(b'output')
+    return NS(stdout='{"frames":[{"best_effort_timestamp_time":"0.0"}]}')
+  monkeypatch.setattr(quality.subprocess,'run',run)
+  monkeypatch.setattr(quality.shutil,'disk_usage',lambda _:NS(free=4*1024**3))
+  media,errors=quality.media_prepare(videos,indexes,{'r':0},tmp_path)
+  assert len(errors)==4 and ('r',4) in media
+  calls.clear();media,errors=quality.media_prepare(videos,indexes,{'r':0},tmp_path)
+  assert not calls and len(errors)==4 and ('r',4) in media
+
+
+def test_video_remux_leaves_primary_receiver_reserve(tmp_path,monkeypatch):
+  from tools import lx3_drive_quality as quality
+  path=tmp_path/'a.ts';path.write_bytes(b'input')
+  free=2*1024**3+64*1024**2
+  monkeypatch.setattr(quality.shutil,'disk_usage',lambda _:NS(free=free))
+  monkeypatch.setattr(quality.subprocess,'run',lambda *a,**kw: (_ for _ in ()).throw(AssertionError('must not consume primary reserve')))
+  media,errors=quality.media_prepare({('r',0):path},{},{'r':0},tmp_path)
+  assert not media and 'primary chunk space preserved' in errors[0]['error']
+  assert free > 2*1024**3 + 4*1024**2

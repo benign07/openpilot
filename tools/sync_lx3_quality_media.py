@@ -73,7 +73,7 @@ def sync(base, root, maximum=4):
         filename=response.headers.get('Content-Disposition','')
         if not 0<length<=32*1024*1024 or not filename.endswith('--qcamera.ts"'):
           raise ValueError('Unsupported video length/format')
-        if shutil.disk_usage(root).free<2*1024**3+length:raise OSError('PC recording reserve reached')
+        if shutil.disk_usage(root).free<3*1024**3+length:raise OSError('Secondary video reserve reached; primary chunk space preserved')
         h=hashlib.sha256();received=0
         with partial.open('wb') as output:
           while block:=response.read(65536):

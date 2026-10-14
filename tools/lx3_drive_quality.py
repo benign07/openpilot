@@ -18,6 +18,7 @@ import statistics
 import subprocess
 import sys
 import time
+import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -370,22 +371,31 @@ def media_prepare(videos,indexes,offsets,out,maximum_new=4):
   media={};errors=[]
   (out/'media').mkdir(exist_ok=True)
   new=0;deadline=time.monotonic()+180
+  tool_identity='v1:'+'|'.join(str(Path(p).stat().st_mtime_ns) if (p:=shutil.which(name)) else 'missing' for name in ('ffmpeg','ffprobe'))
   for (route,segment),path in sorted(videos.items()):
     target=out/'media'/(hashlib.sha256(route.encode()).hexdigest()[:12]+'-'+str(segment)+'.mp4')
     try:
       cache=target.with_suffix('.cache.json');source=sha(path);cached=None
-      if cache.is_file() and target.is_file():
+      if cache.is_file():
         try:
           candidate=json.loads(cache.read_text())
-          if candidate.get('source_sha256')==source and candidate.get('mp4_sha256')==sha(target):cached=candidate
+          if candidate.get('source_sha256')==source and candidate.get('processor')==tool_identity and candidate.get('error'):
+            raise RuntimeError('cached decoder failure: '+candidate['error'])
+          if candidate.get('source_sha256')==source and target.is_file() and candidate.get('mp4_sha256')==sha(target):cached=candidate
         except (OSError,ValueError):pass
       if cached is None:
         if new>=maximum_new or time.monotonic()>deadline:raise ValueError('video work queued for next pass; partial report retained')
-        new+=1
-        subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(path),'-an','-c:v','copy','-avoid_negative_ts','make_zero','-movflags','+faststart',str(target)],check=True,capture_output=True,timeout=20)
-        p=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries','frame=best_effort_timestamp_time','-of','json',str(target)],check=True,capture_output=True,text=True,timeout=20)
+        if shutil.disk_usage(out).free < 3*1024**3 + path.stat().st_size + 32*1024**2:
+          raise ValueError('secondary video reserve reached; primary chunk space preserved')
+        try:
+          subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(path),'-an','-c:v','copy','-avoid_negative_ts','make_zero','-movflags','+faststart',str(target)],check=True,capture_output=True,timeout=20)
+          p=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries','frame=best_effort_timestamp_time','-of','json',str(target)],check=True,capture_output=True,text=True,timeout=20)
+        except (OSError,subprocess.SubprocessError) as exc:
+          temporary=cache.with_suffix('.tmp');temporary.write_text(json.dumps({'source_sha256':source,'processor':tool_identity,'error':str(exc)[:180]}),encoding='utf-8');temporary.replace(cache)
+          raise
         pts=[float(x['best_effort_timestamp_time']) for x in json.loads(p.stdout)['frames']]
         temporary=cache.with_suffix('.tmp');temporary.write_text(json.dumps({'source_sha256':source,'mp4_sha256':sha(target),'pts':pts}),encoding='utf-8');temporary.replace(cache)
+        new+=1
       else:pts=cached['pts']
       if not pts or abs(pts[0]) > .001 or any(b<a for a,b in zip(pts,pts[1:])):
         raise ValueError('MP4 presentation origin/order is not qualified')
@@ -394,7 +404,7 @@ def media_prepare(videos,indexes,offsets,out,maximum_new=4):
         raise ValueError('missing camera BOOTTIME to host MONOTONIC mapping')
       media[route,segment]=[{'t':x['native_sof']-offsets[route],'pts':pts[x['segmentId']],'file':target.relative_to(out).as_posix(),'frameId':x['frameId'],
                              'index_coverage':{'mapped':len(idx),'video_frames':len(pts)}} for x in idx]
-    except (OSError,ValueError,KeyError,subprocess.SubprocessError) as exc:
+    except (OSError,ValueError,KeyError,RuntimeError,subprocess.SubprocessError) as exc:
       errors.append({'video':str(path),'error':str(exc)[:200]})
   return media,errors
 
