@@ -6,11 +6,14 @@ from pathlib import Path
 import shutil
 import threading
 import time
+from collections import deque
 
-from .automatic import AutoRecorder, ChunkStore
+from .automatic import AutoRecorder, ChunkStore, atomic_json
 
 FIELDS = {
-  'deviceState': ('started',),
+  'deviceState': ('started', 'startedMonoTime', 'cpuTempC', 'gpuTempC', 'memoryTempC', 'pmicTempC',
+                  'maxTempC', 'thermalStatus', 'cpuUsagePercent', 'gpuUsagePercent',
+                  'memoryUsagePercent', 'fanSpeedPercentDesired', 'powerDrawW', 'somPowerDrawW'),
   'carState': ('vEgo', 'aEgo', 'standstill', 'gearShifter', 'canValid', 'canTimeout', 'brakePressed',
                'vCruise', 'softHoldActive',
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
@@ -251,11 +254,25 @@ class AutomaticController:
       self.error = None
       self.retry_after_seconds = 0
     last_metadata = last_context = last_storage = -100
+    last_thermal = last_thermal_save = -100
+    thermal_recent = deque(maxlen=120)
     services = {}
     while not self.shutdown.is_set():
       sm.update(0)
       now = time.monotonic()
       native_offset_ns = native_clock_offset_ns()
+      if now - last_thermal >= 1 and sm.valid['deviceState'] and sm.alive['deviceState'] and 0 <= now - sm.logMonoTime['deviceState'] / 1e9 < 3:
+        thermal_recent.append({'mono_ns': int(sm.logMonoTime['deviceState']),
+                               **selected_fields(sm['deviceState'], FIELDS['deviceState'])})
+        metadata['boot_thermal_recent'] = list(thermal_recent)
+        last_thermal = now
+        if now - last_thermal_save >= 30:
+          try:
+            atomic_json(self.root / 'boot-thermal-latest.json', {'boot_id': boot, 'samples': list(thermal_recent),
+                                                               'scope': 'collector_start_onward_not_kernel_boot_or_causal_proof'})
+          except OSError:
+            pass  # Thermal evidence must not stop the existing recording worker.
+          last_thermal_save = now
       with self.lock:
         if abs(native_offset_ns - metadata['native_clock_offset_ns']) > 2_000_000:
           before = metadata['native_clock_offset_ns']

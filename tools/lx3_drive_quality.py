@@ -187,6 +187,11 @@ def collect(inputs, schema_dir):
             c=e.carState
             row.update({name:getattr(c,name) for name in ('vEgo','aEgo','brakePressed','gasPressed','steeringPressed','standstill','leftBlinker','rightBlinker','canValid','canTimeout')})
             row['cruiseState']=c.cruiseState.to_dict()
+          elif k == 'deviceState':
+            d=e.deviceState
+            row.update(started=bool(d.started),thermalStatus=str(d.thermalStatus),
+              cpuTempC=list(d.cpuTempC),gpuTempC=list(d.gpuTempC),memoryTempC=float(d.memoryTempC),
+              maxTempC=float(d.maxTempC),cpuUsagePercent=list(d.cpuUsagePercent),fanSpeedPercentDesired=int(d.fanSpeedPercentDesired))
           elif k == 'carControl':
             c=e.carControl
             row.update(latActive=bool(c.latActive),longActive=bool(c.longActive),accel=float(c.actuators.accel))
