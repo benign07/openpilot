@@ -1,5 +1,6 @@
 """Worker-owned read-only msgq subscriptions, independent of HUD connections."""
 import hashlib
+import json
 from itertools import islice
 from pathlib import Path
 import shutil
@@ -11,6 +12,7 @@ from .automatic import AutoRecorder, ChunkStore
 FIELDS = {
   'deviceState': ('started',),
   'carState': ('vEgo', 'aEgo', 'standstill', 'gearShifter', 'canValid', 'canTimeout', 'brakePressed',
+               'vCruise', 'softHoldActive',
                'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'latEnabled',
                'steerFaultTemporary', 'steerFaultPermanent', 'buttonEvents', 'lx3Authority', 'lx3SteeringLimited'),
@@ -18,8 +20,10 @@ FIELDS = {
                  'manualSteeringScale', 'manualSteeringResume', 'hudControl'),
   'modelV2': ('frameId', 'timestampEof', 'meta'),
   'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType', 'alertSound', 'lx3LongRequest', 'lx3LongRefused', 'lx3RefuseAfterSequence'),
+  'controlsState': ('longControlState', 'forceDecel'),
   'radarState': ('leadOne', 'leadTwo', 'errors'),
   'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels',
+                       'aTarget', 'vTargetNow', 'jTargetNow', 'modelMonoTime', 'cruiseTarget',
                        'jerks', 'tFollow', 'desiredDistance', 'myDrivingMode'),
   'carrotMan': ('leftSec', 'desiredSpeed'),
 }
@@ -34,6 +38,9 @@ PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFol
           'ApproachTrafficCalm', 'ApproachFlexibleGap', 'ApproachFlexibleGapMin',
           'EnableSpeedTF', 'TFollowDecelBoost', 'DynamicTFollow', 'DynamicTFollowLC', 'StopDistanceCarrot', 'ManualSteerWithBlinker',
           'CruiseStartCurrentSpeed')
+PARAMS += tuple('CruiseMaxVals'+str(i) for i in range(7)) + (
+  'AChangeCostStarting', 'CruiseEcoControl', 'LongActuatorDelay', 'VEgoStopping', 'StoppingAccel',
+  'LongTuningKpV', 'LongTuningKiV', 'LongTuningKf')
 
 
 def recording_storage_status(root, usage=None):
@@ -79,7 +86,7 @@ def selected_fields(reader, fields):
   result = {}
   for key in fields:
     value = getattr(reader, key, None)
-    if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'alertSound') and value is not None:
+    if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'alertSound', 'longControlState') and value is not None:
       value = str(value)
     elif key in ('speeds', 'accels', 'jerks') and value is not None:
       value = list(value)
@@ -196,6 +203,7 @@ class AutomaticController:
     sm = messaging.SubMaster(list(FIELDS))
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
     panda_socket = messaging.sub_sock('pandaStates', timeout=0, conflate=True)
+    evidence_socket = messaging.sub_sock('logMessage', timeout=0, conflate=False)
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     metadata = {'boot_id': boot, 'route': None, 'car_fingerprint': None,
                 'rate_hz': 5, 'can_per_key_max_hz': 10, 'panda_max_hz': 20, 'panda_periodic_max_hz': 2,
@@ -211,6 +219,9 @@ class AutomaticController:
                                     'max_extra_traces_per_trip': 8, 'min_new_window_interval_s': 30,
                                     'spi_scope': 'existing_health_aggregate_only_not_stage_reasons',
                                     'echo_scope': 'panda_tx_confirmation_not_receiving_ecu_ack'}
+    metadata['longitudinal_evidence'] = {'schema': 1, 'producer_clock': 'monotonic',
+                                       'source': 'existing_logMessage_and_rlog', 'maximum_frame_bytes': 32768,
+                                       'comparison': 'same_filter_state_ceiling_not_alternative_command_or_placebo_proof'}
     metadata['blindspot_trace'] = {'pre_s': 2, 'post_s': 8, 'max_extra_windows_per_trip': 4,
                                  'min_new_window_interval_s': 30, 'raw_rear_indicator_address': '0x1BA',
                                  'trigger': 'fresh_same_side_blinker_and_object_not_confirmed_warning_or_haptic',
@@ -304,4 +315,22 @@ class AutomaticController:
             self.recorder.panda_snapshot([panda_summary(p) for p in islice(event.pandaStates, 4)],
                                          packet_evidence_time('pandaStates', source_ns, native_offset_ns),
                                          time.monotonic(), source_mono_ns=source_ns)
+      # Existing logmessaged remains the sole publisher. This reader neither
+      # changes the CAN drain budget nor conflates away short launch decisions.
+      for _ in range(16):
+        raw = evidence_socket.receive(non_blocking=True)
+        if raw is None:
+          break
+        event = messaging.log_from_bytes(raw)
+        if not event.valid or event.which() != 'logMessage':
+          continue
+        text = str(event.logMessage)
+        if len(text) > 65536 or 'lx3_longitudinal_evidence' not in text:
+          continue
+        try:
+          row = json.loads(text).get('msg', {}).get('lx3_longitudinal_evidence')
+        except (ValueError, AttributeError):
+          continue
+        with self.lock:
+          self.recorder.longitudinal_evidence(row, int(event.logMonoTime), time.monotonic())
       self.shutdown.wait(.05)

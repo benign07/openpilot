@@ -282,6 +282,9 @@ class LongitudinalMpc:
     self.set_weights()
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
+    # Passive copies for PC replay; never used by the production calculation.
+    self.evidence_cost_weights = list(cost_weights)
+    self.evidence_constraint_weights = list(constraint_cost_weights)
     W = np.asfortranarray(np.diag(cost_weights))
     for i in range(N):
       # TODO don't hardcode A_CHANGE_COST idx
@@ -366,6 +369,7 @@ class LongitudinalMpc:
 
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, approach_extra_tf=0.0,
              flex_gap_settings=FlexibleGapSettings(), flex_gap_eligible=False, observed_a_ego=0.0, flex_gap_gentle_stop=False):
+    self.evidence_problem = None
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -520,7 +524,35 @@ class LongitudinalMpc:
 
     self.t_follow = t_follow
 
+    # Copy already-computed inputs only on requested LX3 evidence cycles.
+    # No second solver, solver.get(), CAN writes, or control-state changes.
+    evidence = None
+    if getattr(self, 'evidence_requested', False):
+      try:
+        evidence_started = time.perf_counter_ns()
+        evidence = {'mode': mode, 'reset_state': bool(reset_state), 'x0': self.x0.tolist(),
+                    'params': self.params.tolist(), 'yref': self.yref.tolist(),
+                    'weights': self.evidence_cost_weights, 'constraint_weights': self.evidence_constraint_weights,
+                    'obstacles': x_obstacles.tolist(), 't_idxs': T_IDXS.tolist(), 't_diffs': T_DIFFS.tolist(),
+                    'v_cruise': float(v_cruise), 'cruise_min_a': float(self.cruise_min_a), 'max_a': float(self.max_a),
+                    'reference_modifiers_active': bool(approach_extra_tf > 0. or reduce_tf > 0.),
+                    'warm_x': self.x_sol.tolist(), 'warm_u': self.u_sol.tolist(),
+                    'warm_scope': 'previous_primal_solution_not_internal_dual_state',
+                    'flex': {'eligible': bool(flex_gap_eligible), 'gentle_stop': bool(gentle_stop),
+                             'reason': self.flex_gap.last_reason,
+                             'stable_s': float(self.flex_gap.stable_time), 'reduction_ratio': float(self.flex_gap.reduction),
+                             'reduce_tf_s': float(reduce_tf), 'nominal_tf': float(nominal_tf)}}
+        evidence['copy_us'] = (time.perf_counter_ns() - evidence_started)/1000.
+      except Exception:
+        evidence = {'capture_error': True}
     self.run()
+    if evidence is not None:
+      try:
+        evidence.update(output_x=self.x_sol.tolist(), output_u=self.u_sol.tolist(),
+                        solution_status=int(getattr(self, 'evidence_solve_status', self.solution_status)), solve_s=float(self.solve_time))
+        self.evidence_problem = evidence
+      except Exception:
+        self.evidence_problem = {'capture_error': True}
     if (np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
             radarstate.leadOne.modelProb > 0.9):
       self.crash_cnt += 1
@@ -545,6 +577,7 @@ class LongitudinalMpc:
     self.solver.constraints_set(0, "ubx", self.x0)
 
     self.solution_status = self.solver.solve()
+    self.evidence_solve_status = self.solution_status  # Preserve failure before stock reset clears it.
     self.solve_time = float(self.solver.get_stats('time_tot')[0])
     self.time_qp_solution = float(self.solver.get_stats('time_qp')[0])
     self.time_linearization = float(self.solver.get_stats('time_lin')[0])

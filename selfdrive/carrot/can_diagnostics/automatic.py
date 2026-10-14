@@ -222,6 +222,7 @@ class AutoRecorder:
     self.transport_seen = set()
     self.transport_gaps = set()
     self.last_observer_tick = None
+    self.longitudinal_frames = self.longitudinal_rejected = 0
 
   def trace_active(self, now):
     return self.trace is not None and int(now * 1e9) <= self.trace['until_ns']
@@ -686,6 +687,30 @@ class AutoRecorder:
     self.transport_seen.update(counters)
     self.transport_gaps.clear()
 
+  def longitudinal_evidence(self, row, source_ns, now):
+    """Forward bounded producer evidence through the existing phone export."""
+    if (self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV'
+        or self.state != 'recording'):
+      return
+    if (not isinstance(row, dict) or row.get('schema') != 1
+        or type(row.get('mono_ns')) is not int or not 0 <= now - row['mono_ns']/1e9 <= 1.
+        or not isinstance(row.get('producer'), str) or len(row['producer']) != 32
+        or type(row.get('sequence')) is not int or row['sequence'] <= 0):
+      self.longitudinal_rejected += 1
+      return
+    try:
+      if len(json.dumps(row, separators=(',', ':'), allow_nan=False).encode()) > 32768:
+        raise ValueError('oversized evidence')
+    except (TypeError, ValueError):
+      self.longitudinal_rejected += 1
+      return
+    if not self.rotate_full_chunk(now):
+      self.storage_dropped += 1
+      return
+    self.store.append({**row, 'kind': 'longitudinal_evidence', 'source_log_mono_ns': source_ns,
+                       'trip_id': self.trip, 'boot_id': self.metadata.get('boot_id')}, now)
+    self.longitudinal_frames += 1
+
   def close(self):
     self.close_trace(time.monotonic(), 'server_shutdown')
     self.store.seal('server_shutdown')
@@ -702,4 +727,6 @@ class AutoRecorder:
             'diagnostic_traces': self.diagnostic_trace_count,
             'steering_diagnostic_traces': self.steering_trace_count,
             'blindspot_diagnostic_traces': self.blindspot_trace_count,
+            'longitudinal_evidence_frames': self.longitudinal_frames,
+            'longitudinal_evidence_rejected': self.longitudinal_rejected,
             'control_changes': False, 'phone_backup': False}

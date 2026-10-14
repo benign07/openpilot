@@ -1,0 +1,66 @@
+name: LX3 longitudinal evidence and video evaluation
+on:
+  push:
+    branches: [review/lx3-longitudinal-evidence-20261014]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  passive-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest numpy aiohttp cryptography requests
+      - name: Evidence, recorder and signed updater contracts
+        run: |
+          set -o pipefail
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_longitudinal_evidence.py selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_preview.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_approach_composition.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=evidence.xml 2>&1 | tee evidence.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-${{ matrix.python }}
+          path: |
+            evidence.xml
+            evidence.log
+  native-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+      - run: uv sync --frozen --no-dev --extra testing
+      - name: Build actual longitudinal solver and runtime bindings
+        run: |
+          set -o pipefail
+          uv run --no-sync scons --minimal -j2 common/params_pyx.so msgq_repo/msgq/ipc_pyx.so selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so 2>&1 | tee build.log
+      - name: Real schema and linked solver comparisons
+        run: |
+          set -o pipefail
+          uv run --no-sync python -m pytest --noconftest -o addopts= selfdrive/carrot/can_diagnostics/test_runtime_schema.py -q --junitxml=schema.xml 2>&1 | tee schema.log
+          uv run --no-sync python tools/check_lx3_evidence_native.py --output native-evidence.json 2>&1 | tee native-evidence.log
+          uv run --no-sync python tools/check_lx3_approach_native.py --output native-comfort.json 2>&1 | tee native-comfort.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linked-evidence-not-vehicle-qualified
+          path: |
+            build.log
+            schema.xml
+            schema.log
+            native-evidence.json
+            native-evidence.log
+            native-comfort.json
+            native-comfort.log

@@ -15,7 +15,8 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
-from openpilot.selfdrive.controls.lib.approach_comfort import ApproachComfort, ApproachSettings, apply_approach_ceiling
+from openpilot.selfdrive.controls.lib.approach_comfort import (ApproachComfort, ApproachSettings, apply_approach_ceiling,
+                                                            LongitudinalEvidence, traffic_ceiling_comparison)
 from openpilot.selfdrive.controls.lib.flexible_gap import FlexibleGapSettings
 
 
@@ -115,6 +116,7 @@ class LongitudinalPlanner:
     self.flex_gap_settings = FlexibleGapSettings()
     self.approach_param_time = 1.0
     self.approach_supported = str(CP.carFingerprint) == 'HYUNDAI_PALISADE_LX3_HEV'
+    self.long_evidence = LongitudinalEvidence(self.approach_supported)
 
   @staticmethod
   def parse_model(model_msg):
@@ -235,6 +237,10 @@ class LongitudinalPlanner:
         and sm.valid['modelV2'] and sm.alive['modelV2']
         and abs(int(sm.logMonoTime['modelV2']) - int(sm.logMonoTime['radarState'])) <= 200_000_000
       )
+    # Preserve the actual pre-helper values, rather than reconstructing them
+    # from asynchronous published trajectories on the PC.
+    evidence_maximum = float(accel_limits_turns[1])
+    evidence_base_tf = float(max(0.3, carrot.t_follow_last))
     approach_request = self.approach.update(
       self.approach_settings, (sm['radarState'].leadOne, sm['radarState'].leadTwo),
       eligible=approach_eligible,
@@ -245,6 +251,12 @@ class LongitudinalPlanner:
       cruise_speed=v_cruise, planned_accel=self.a_desired,
     )
     accel_limits_turns[1] = apply_approach_ceiling(accel_limits_turns[1], self.a_desired, approach_request, self.dt)
+
+    evidence_due = self.long_evidence.due(v_ego < 6. or self.approach.coast_weight > 0. or sm['carState'].aEgo < -.1)
+    evidence_comparison = (traffic_ceiling_comparison(self.approach, self.approach_settings, evidence_maximum, self.a_desired, self.dt)
+                           if evidence_due else None)
+    self.mpc.evidence_requested = bool(evidence_due and (
+      evidence_comparison['30']['applied_ceiling'] != evidence_comparison['40']['applied_ceiling'] or self.long_evidence.cycle % 20 == 0))
 
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality, jerk_factor = carrot.jerk_factor_apply * approach_request.jerk_factor, a_change_cost_starting = carrot.aChangeCostStarting)
     self.mpc.set_accel_limits(accel_limits_turns[0], accel_limits_turns[1])
@@ -297,6 +309,41 @@ class LongitudinalPlanner:
     self.output_v_target_now = output_v_target_now
     self.output_j_target_now = self.j_desired_trajectory[0]
 
+    self.long_evidence_builder = None
+    if evidence_due:
+      self.long_evidence_builder = lambda: {
+        'model_mono_ns': int(sm.logMonoTime['modelV2']), 'dt': float(self.dt),
+        'model_frame_id': int(sm['modelV2'].frameId), 'model_timestamp_eof_ns': int(sm['modelV2'].timestampEof),
+        'services': {k: {'mono_ns': int(sm.logMonoTime[k]), 'valid': bool(sm.valid[k]), 'alive': bool(sm.alive[k])}
+                     for k in ('carState', 'controlsState', 'carControl', 'radarState', 'modelV2', 'selfdriveState')},
+        'settings': {**vars(self.approach_settings), 'mode': int(carrot.myDrivingMode.value),
+                     'personality': str(sm['selfdriveState'].personality),
+                     'accel_table': [float(getattr(carrot, 'cruiseMaxVals'+str(i))) for i in range(7)],
+                     'stop_distance': float(carrot.stop_distance), 'starting_cost': float(carrot.aChangeCostStarting),
+                     'time_gaps': [float(getattr(carrot, 'tFollowGap'+str(i))) for i in range(1, 5)],
+                     'flexible_enabled': bool(self.flex_gap_settings.enabled), 'flexible_minimum': int(self.flex_gap_settings.minimum_ratio)},
+        'state': {'v_ego': float(v_ego), 'a_ego': float(sm['carState'].aEgo),
+                  'standstill': bool(sm['carState'].standstill), 'cruise_standstill': bool(sm['carState'].cruiseState.standstill),
+                  'soft_hold': bool(carrot.soft_hold_active), 'brake': bool(sm['carState'].brakePressed),
+                  'gas': bool(sm['carState'].gasPressed), 'long_active': bool(sm['carControl'].longActive),
+                  'long_control_state': str(sm['controlsState'].longControlState), 'reset_state': bool(reset_state),
+                  'force_decel': bool(force_slow_decel), 'approach_eligible': bool(approach_eligible),
+                  'previous_command': float(sm['carControl'].actuators.accel)},
+        'leads': [lead.to_dict() for lead in (sm['radarState'].leadOne, sm['radarState'].leadTwo)],
+        'bounds': {'table_max': float(accel_limits[1]), 'before_approach': evidence_maximum,
+                   'after_approach': float(accel_limits_turns[1]), 'mpc_max': float(self.mpc.max_a),
+                   'cruise_min': float(accel_limits_turns[0]), 'a_desired_before': float(a_prev),
+                   'base_tf_before': evidence_base_tf, 'jerk_factor': float(carrot.jerk_factor_apply),
+                   'coast_weight': float(self.approach.coast_weight), 'traffic_weight': float(self.approach.traffic_weight),
+                   'request_ceiling': approach_request.accel_ceiling,
+                   'extra_tf': float(approach_request.extra_tf), 'jerk_multiplier': float(approach_request.jerk_factor)},
+        'comparison': evidence_comparison,
+        'output': {'should_stop': bool(self.output_should_stop), 'a_target': float(self.output_a_target),
+                   'source': str(self.mpc.source), 'v_target': float(self.output_v_target_now),
+                   'actuator_delay': float(longitudinalActuatorDelay), 'v_ego_stopping': float(vEgoStopping)},
+        'problem': self.mpc.evidence_problem,
+      }
+
   def publish(self, sm, pm, carrot):
     plan_send = messaging.new_message('longitudinalPlan')
 
@@ -331,3 +378,8 @@ class LongitudinalPlanner:
     longitudinalPlan.myDrivingMode = carrot.myDrivingMode.value
 
     pm.send('longitudinalPlan', plan_send)
+    # Normal plan publication precedes diagnostics; its transport is unchanged.
+    build = self.long_evidence_builder
+    self.long_evidence_builder = None
+    if build is not None:
+      self.long_evidence.emit(lambda: {**build(), 'plan_mono_ns': int(plan_send.logMonoTime)}, cloudlog.debug)

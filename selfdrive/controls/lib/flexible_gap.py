@@ -26,7 +26,8 @@ class FlexibleGap:
     self.dt = dt
     self.reset()
 
-  def reset(self):
+  def reset(self, reason='reset'):
+    self.last_reason = reason  # Passive evidence only; never read by control.
     self.tracks = None
     self.previous = {}
     self.stable_time = 0.0
@@ -48,7 +49,7 @@ class FlexibleGap:
         or not speed_ok or not accel_ok
         or base_tf <= max(0.0, floor_tf) or stop_distance < 0.0 or comfort_brake <= 0.0
         or not leads or not leads[0].status):
-      self.reset()
+      self.reset('eligibility_or_domain')
       return 0.0
 
     observed = {}
@@ -63,11 +64,11 @@ class FlexibleGap:
           or abs(vl - v_ego - vr) > 0.5
           or d <= stop_distance + v_ego * floor_tf + max(0.0, -vr)**2 / (2.0 * comfort_brake) + (0.5 if gentle_stop else 0.0)
           or d / max(0.01, -vr) < (20.0 if gentle_stop else 12.0)):
-        self.reset()
+        self.reset('lead_qualification')
         return 0.0
       key = int(lead.radarTrackId)
       if key in observed and abs(d - observed[key][0]) > 0.5:
-        self.reset()
+        self.reset('duplicate_track_range')
         return 0.0
       observed[key] = (d, vr)
 
@@ -76,14 +77,14 @@ class FlexibleGap:
                      + max(0.0, v_ego**2 - primary.vLead**2) / (2.0 * comfort_brake))
     if primary.dRel > nominal_range + max(2.0, 0.1 * nominal_range):
       # A distant mildly slower lead must not suppress ordinary acceleration.
-      self.reset()
+      self.reset('outside_nominal_range')
       return 0.0
 
     # Primary/secondary swaps and cut-ins must reconfirm; an uncertain second
     # selected lead cannot be ignored just because the primary is stable.
     identity = tuple(int(lead.radarTrackId) if lead.status else None for lead in leads)
     if not observed or identity != self.tracks:
-      self.reset()
+      self.reset('track_identity_changed')
       self.gentle_stop = bool(gentle_stop)
       self.tracks = identity if observed else None
       self.previous = observed
@@ -93,19 +94,22 @@ class FlexibleGap:
       old_d, old_vr = self.previous[key]
       # Discontinuous range/relative velocity cancels even with an unchanged ID.
       if abs(d - (old_d + old_vr * self.dt)) > 0.5 or abs(vr - old_vr) > 0.1:
-        self.reset()
+        self.reset('track_discontinuity')
         return 0.0
     self.previous = observed
     closing = any(vr <= -0.1 for _, vr in observed.values())
     if not closing and self.reduction == 0.0:
       self.stable_time = 0.0
+      self.last_reason = 'not_closing'
       return 0.0
     self.stable_time += self.dt
     if self.stable_time + 1e-9 < 3.0:
+      self.last_reason = 'confirming_steady_approach'
       return 0.0
 
     permitted = min(1.0 - ratio, max(0.0, 1.0 - floor_tf / base_tf))
     # Slow acquisition only. All risk/ineligibility exits above restore the
     # original planning reference immediately, not the physical range.
     self.reduction = min(permitted, self.reduction + 0.03 * self.dt)
+    self.last_reason = 'reducing_moving_gap'
     return base_tf * self.reduction

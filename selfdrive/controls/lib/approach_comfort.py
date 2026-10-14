@@ -7,7 +7,10 @@ Physical obstacles, braking bounds, FCW and standstill hold are unchanged.
 """
 
 from dataclasses import dataclass
+import json
 import math
+import time
+import uuid
 
 
 def clamp(value, low, high):
@@ -185,3 +188,80 @@ def additional_approach_tf(applied_tf, nominal_tf, requested_extra):
     return 0.0
   existing = max(0.0, applied_tf - nominal_tf) if math.isfinite(nominal_tf) and nominal_tf > 0.0 else 0.0
   return min(max(0.0, clamp(requested_extra, 0.0, 0.5) - existing), max(0.0, 2.5 - applied_tf))
+
+
+def traffic_ceiling_comparison(approach, settings, maximum_accel, a_desired, dt=0.05):
+  """Read the CURRENT filter state; never advance a second control calculation.
+
+  This compares only a positive ceiling. It is neither a solved alternative
+  command nor a vehicle timing/comfort counterfactual. Stock bounds still win.
+  """
+  result = {}
+  for traffic in (30, 40):
+    coast = clamp(approach.coast_weight * clamp(settings.coast, 0, 100) * .03, 0., 1.)
+    congestion = approach.traffic_weight * traffic * .005
+    reduction = max(coast, congestion) if settings.enabled else 0.
+    raw = None if reduction <= 0. else max(0., maximum_accel) * (1. - reduction)
+    applied = apply_approach_ceiling(maximum_accel, a_desired, ApproachRequest(raw), dt)
+    result[str(traffic)] = {'raw_ceiling': raw, 'applied_ceiling': float(applied),
+                            'winning_term': 'disabled' if not settings.enabled else (
+                              'coast' if coast > congestion else 'traffic' if congestion > coast else 'tie')}
+  return result
+
+
+class LongitudinalEvidence:
+  """Bounded producer on existing nonblocking swaglog IPC, with no file/CAN I/O.
+
+  Every LX3 low-speed/approach cycle is recorded, ordinary cruising one in four.
+  Logging failures affect only evidence. Missing sequences are not zero effect.
+  """
+  KEY = 'lx3_longitudinal_evidence'
+  MAX_BYTES = 32768
+
+  def __init__(self, enabled=False):
+    self.enabled = enabled
+    self.producer = uuid.uuid4().hex
+    self.cycle = self.sequence = self.errors = 0
+    self.max_emit_us = 0.
+    self.settings_generation = 0
+    self.previous_settings = None
+    self.cooldown = 0
+
+  def due(self, high_rate):
+    self.cycle += 1
+    if self.cooldown:
+      self.cooldown -= 1
+      return False
+    return self.enabled and (high_rate or self.cycle % 4 == 0)
+
+  def emit(self, build, sink):
+    if not self.enabled:
+      return
+    self.sequence += 1
+    started = time.perf_counter_ns()
+    try:
+      row = {'schema': 1, 'producer': self.producer, 'sequence': self.sequence,
+             'cycle': self.cycle, 'mono_ns': time.monotonic_ns(),
+             'producer_errors': self.errors, 'previous_max_emit_us': self.max_emit_us,
+             **build()}
+      boot_clock = getattr(time, 'CLOCK_BOOTTIME', None)
+      before = time.monotonic_ns()
+      native = time.clock_gettime_ns(boot_clock) if boot_clock is not None else None
+      after = time.monotonic_ns()
+      row['native_clock_offset_ns'] = (native - (before + after)//2) if native is not None else None
+      if row.get('settings') != self.previous_settings:
+        self.settings_generation += 1
+        self.previous_settings = row.get('settings')
+      row['settings_generation'] = self.settings_generation
+      # Reject nonfinite/oversized evidence, never change a control value.
+      size = len(json.dumps(row, separators=(',', ':'), allow_nan=False).encode())
+      if size > self.MAX_BYTES:
+        raise ValueError('longitudinal evidence exceeds bounded frame size')
+      if time.perf_counter_ns() - started > 5_000_000:
+        self.cooldown = 20
+        raise ValueError('diagnostic build exceeded 5ms; skip one second')
+      sink({self.KEY: row})
+    except Exception:
+      self.errors += 1
+    finally:
+      self.max_emit_us = max(self.max_emit_us, (time.perf_counter_ns() - started) / 1000.)
