@@ -26,10 +26,14 @@ through Carrot HUD, rather than stopping after a source-branch push.
 - Record GitHub publication, actual installation and functional/road
   verification as separate states. Keep Carrot HUD 1.0.27's download/API contract.
   The EV9 work is on hold; LX3 releases must not be installed on it.
-- When a new same-topic cross-review is useful, use the installed Claude
-  Opus 5.5 CLI with high effort and save the actual model/result, as requested
-  on 2026-10-07. A usage-limit failure is not a review pass. Historical Fable
-  reviews do not count as a new Opus review.
+- For same-topic Claude cross-review, the owner's 2026-10-14 instruction uses
+  the installed Fable CLI. Use max for difficult control, causality, concurrency
+  and provenance questions; high for substantial correction review; medium
+  for simple checks. Resume the same named session with shared working paths
+  and task/evidence records, rather than opening a fresh session for each
+  opinion. Save the actual model, effort, session and result. A timeout or
+  usage-limit failure is not a review pass. This replaces the earlier Opus
+  5.5/high preference; older reviews do not count as fresh validation.
 - The owner's LX3 clone has no driver-facing camera and uses DisableDM=1.
   Follow stock Carrot monitoring and its DisableDM setting. The owner explicitly
   rejected adding a separate wheel monitor or a new monitoring policy. Do not

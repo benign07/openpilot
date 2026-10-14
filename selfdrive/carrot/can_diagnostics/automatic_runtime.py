@@ -268,6 +268,9 @@ class AutomaticController:
       sm.update(0)
       now = time.monotonic()
       native_offset_ns = native_clock_offset_ns()
+      # Route identity must not wait for the five-second settings refresh.
+      # This tmpfs read runs in the existing passive worker, never controlsd.
+      current_route = read_param(params, 'CurrentRoute') or None
       try:
         if now - last_thermal >= 1 and sm.valid['deviceState'] and sm.alive['deviceState'] and 0 <= now - sm.logMonoTime['deviceState'] / 1e9 < 3:
           sample = {'mono_ns': int(sm.logMonoTime['deviceState']), **selected_fields(sm['deviceState'], FIELDS['deviceState'])}
@@ -283,6 +286,7 @@ class AutomaticController:
       except Exception:
         self.thermal_errors += 1  # No additional fsync or failure of the CAN reader.
       with self.lock:
+        metadata['route'] = current_route
         if abs(native_offset_ns - metadata['native_clock_offset_ns']) > 2_000_000:
           before = metadata['native_clock_offset_ns']
           metadata['native_clock_offset_ns'] = native_offset_ns
@@ -291,7 +295,6 @@ class AutomaticController:
                                 meaning='clock_mapping_changed_not_producer_outage_proof')
         self.recorder.observer_tick(now)
       if now - last_metadata >= 5:
-        metadata['route'] = read_param(params, 'CurrentRoute') or None
         metadata['settings'] = {key: read_param(params, key) for key in PARAMS}
         if metadata['car_fingerprint'] is None:
           raw = params.get('CarParams')
@@ -386,6 +389,9 @@ class AutomaticController:
           current_route = read_param(params, 'CurrentRoute') or None
           with self.lock:
             if current_route != self.recorder.metadata.get('route'):
+              self.recorder.video_index_route_mismatch += 1
+              continue
+            if int(event.qRoadEncodeIdx.timestampSof) - native_offset_ns < self.recorder.route_observed_ns:
               self.recorder.video_index_route_mismatch += 1
               continue
             if self.recorder.state == 'recording' and self.recorder.rotate_full_chunk(now):

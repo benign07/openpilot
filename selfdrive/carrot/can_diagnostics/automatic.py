@@ -185,6 +185,8 @@ class AutoRecorder:
   def __init__(self, store, metadata):
     self.store, self.metadata = store, metadata
     self.trip = None
+    self.recording_route = None
+    self.route_observed_ns = 0
     self.last_sample = -math.inf
     self.previous = {}
     self.lead_changes = deque(maxlen=20)
@@ -370,6 +372,7 @@ class AutoRecorder:
 
   def chunk_metadata(self, now):
     return {**self.metadata, 'trip_id': self.trip, 'mono_ns': int(now * 1e9),
+            'route_observed_mono_ns': self.route_observed_ns,
             'utc_ns': time.time_ns(), 'capture': 'sampled_evidence',
             'full_can_source': 'rlog_not_copied_by_this_recorder'}
 
@@ -403,6 +406,7 @@ class AutoRecorder:
       return
     if self.trip is None:
       self.trip = uuid.uuid4().hex
+      self.route_observed_ns = int(now * 1e9)
       self.previous, self.can_last, self.faults, self.last_event = {}, {}, {}, {}
       self.last_panda_sample = -math.inf
       self.lead_changes.clear()
@@ -429,6 +433,16 @@ class AutoRecorder:
       self.last_observer_tick = None
       self.chunk_rotations = 0
       self.max_chunk_rotation_ms = 0.0
+    route = self.metadata.get('route')
+    if route != self.recording_route:
+      # loggerd can change route without an ignition-off sample. A chunk has
+      # one immutable route header; never append the next route below it.
+      self.close_trace(now, 'route_changed')
+      self.store.seal('route_changed')
+      self.trace_pre.clear()
+      self.last_sample = -math.inf
+      self.recording_route = route
+      self.route_observed_ns = int(now * 1e9)
     if self.trace is not None and not self.trace_active(now):
       self.close_trace(now, 'window_elapsed')
     if not self.rotate_full_chunk(now) or not self.store.begin(self.chunk_metadata(now), now):
@@ -528,7 +542,7 @@ class AutoRecorder:
         if self.trace_active(now) and address in self.TRACE_ADDRESSES:
           self.trace['dropped_full'] += 1
       return
-    if not 0 <= now - mono_ns / 1e9 <= .5:
+    if mono_ns < self.route_observed_ns or not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
       self.stale_can_frames += 1
       return
@@ -594,7 +608,7 @@ class AutoRecorder:
       if self.state == 'storage_full_preserving_records' and 0 <= now - mono_ns / 1e9 <= .5:
         self.storage_dropped += 1
       return
-    if not 0 <= now - mono_ns / 1e9 <= .5:
+    if mono_ns < self.route_observed_ns or not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
       self.stale_panda_snapshots += 1
       return
@@ -695,6 +709,7 @@ class AutoRecorder:
       return
     if (not isinstance(row, dict) or row.get('schema') != 1
         or type(row.get('mono_ns')) is not int or not 0 <= now - row['mono_ns']/1e9 <= 1.
+        or row['mono_ns'] < self.route_observed_ns
         or not isinstance(row.get('producer'), str) or len(row['producer']) != 32
         or type(row.get('sequence')) is not int or row['sequence'] <= 0):
       self.longitudinal_rejected += 1
@@ -709,6 +724,7 @@ class AutoRecorder:
       self.storage_dropped += 1
       return
     self.store.append({**row, 'kind': 'longitudinal_evidence', 'source_log_mono_ns': source_ns,
+                       'route': self.recording_route,
                        'trip_id': self.trip, 'boot_id': self.metadata.get('boot_id')}, now)
     self.longitudinal_frames += 1
 

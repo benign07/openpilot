@@ -114,11 +114,16 @@ def collect(inputs, schema_dir):
           raise ValueError('missing header')
         header = rows[0]
         route = header.get('route')
+        hashes[str(path)] = sha(path)
+        # Legacy collectors could leave one route's header over the next
+        # route's rows. Unstamped legacy records remain readable, but an
+        # explicit conflict invalidates attribution of the entire chunk.
+        if any('route' in row and row['route'] != route for row in rows[1:]):
+          raise ValueError('mixed route stamps: chunk attribution rejected')
         if route and isinstance(header.get('native_clock_offset_ns'),int):
           value=header['native_clock_offset_ns']
           previous=offsets.get(route,value)
           offsets[route]=value if previous is not None and abs(previous-value)<=2_000_000 else None
-        hashes[str(path)] = sha(path)
         for row in rows[1:]:
           f = unwrap(row)
           if f:

@@ -255,3 +255,77 @@ def test_video_remux_leaves_primary_receiver_reserve(tmp_path,monkeypatch):
   media,errors=quality.media_prepare({('r',0):path},{},{'r':0},tmp_path)
   assert not media and 'primary chunk space preserved' in errors[0]['error']
   assert free > 2*1024**3 + 4*1024**2
+
+
+def test_route_change_seals_before_new_sample_and_clears_trace_pre(tmp_path):
+  from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  from tools.lx3_drive_quality import collect
+  metadata={'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':'old_route','boot_id':'test'}
+  recorder=AutoRecorder(ChunkStore(tmp_path,reserve=0),metadata)
+  recorder.update(services(100.,long=True),100.)
+  trip=recorder.trip
+  recorder.trace_pre.append((100_000_000_000,'rx',0,0x10B,b'old',None,None))
+  metadata['route']='new_route'
+  data=services(100.3,long=True);data['carState']['data']['vEgo']=10.
+  recorder.update(data,100.3)
+  assert recorder.trip==trip and not recorder.trace_pre
+  recorder.close()
+  chunks=[[json.loads(line) for line in gzip.open(p,'rt')] for p in tmp_path.glob('*.jsonl.gz')]
+  assert {chunk[0]['route'] for chunk in chunks}=={'old_route','new_route'}
+  assert all(row['route']==chunk[0]['route'] for chunk in chunks for row in chunk if row['kind']=='sample')
+  streams,*_=collect([tmp_path],tmp_path)
+  assert [row['vEgo'] for row in streams['old_route']['carState']]==[20.]
+  assert [row['vEgo'] for row in streams['new_route']['carState']]==[10.]
+
+
+@pytest.mark.parametrize('stamp_new_route',[True,False])
+def test_mixed_legacy_chunk_rejected_without_breaking_unstamped_compatibility(tmp_path,stamp_new_route):
+  from tools.lx3_drive_quality import collect
+  rows=[{'kind':'header','route':'old_route'},
+        {'kind':'sample','mono_ns':100,'route':'old_route','services':{'carState':{'mono_ns':100,'valid':True,'data':{'vEgo':20.}}}},
+        {'kind':'sample','mono_ns':200,'services':{'carState':{'mono_ns':200,'valid':True,'data':{'vEgo':10.}}}}]
+  if stamp_new_route:rows[-1]['route']='new_route'
+  (tmp_path/'chunk.jsonl.gz').write_bytes(gzip.compress(('\n'.join(json.dumps(row) for row in rows)+'\n').encode()))
+  streams,frames,_,indexes,_,hashes,errors=collect([tmp_path],tmp_path)
+  assert hashes
+  if stamp_new_route:
+    assert not streams and not frames and not indexes
+    assert any('mixed route' in row['error'] for row in errors)
+  else:
+    assert not errors and [row['vEgo'] for row in streams['old_route']['carState']]==[20.,10.]
+
+
+def test_new_route_rejects_buffered_previous_route_evidence(tmp_path):
+  from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  metadata={'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':'old_route'}
+  recorder=AutoRecorder(ChunkStore(tmp_path,reserve=0),metadata)
+  recorder.update(services(100.,long=True),100.)
+  metadata['route']='new_route';recorder.update(services(100.3,long=True),100.3)
+  recorder.longitudinal_evidence(frame(20,mono_ns=100_100_000_000),100_100_000_000,100.35)
+  assert recorder.longitudinal_rejected==1 and recorder.longitudinal_frames==0
+  recorder.longitudinal_evidence(frame(21,mono_ns=100_340_000_000),100_340_000_000,100.35)
+  assert recorder.longitudinal_frames==1
+  recorder.close()
+
+
+@pytest.mark.parametrize('source',['can','panda'])
+def test_new_route_rejects_buffered_native_packets_before_observed_boundary(tmp_path,source):
+  from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  metadata={'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':'old_route'}
+  recorder=AutoRecorder(ChunkStore(tmp_path,reserve=0),metadata)
+  recorder.update(services(100.,long=True),100.)
+  metadata['route']='new_route';recorder.update(services(100.3,long=True),100.3)
+  def send(t):
+    if source=='can':recorder.can_frame(0,0x12A,bytes(16),t,100.35)
+    else:recorder.panda_snapshot([{'controls_allowed':False}],t,100.35)
+  send(100_100_000_000)
+  assert recorder.stale_packets==1 and not recorder.trace_pre
+  send(100_340_000_000)
+  recorder.close()
+  chunks=[[json.loads(line) for line in gzip.open(p,'rt')] for p in tmp_path.glob('*.jsonl.gz')]
+  new_chunk=next(c for c in chunks if c[0]['route']=='new_route')
+  native=[r for r in new_chunk if r['kind']==('can_sample' if source=='can' else 'panda_snapshot')]
+  assert len(native)==1 and native[0]['mono_ns']==100_340_000_000
