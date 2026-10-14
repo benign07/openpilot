@@ -380,25 +380,9 @@ class AutomaticController:
           now = time.monotonic()
           if self.recorder.state != 'recording':
             continue
-          age = now - (int(event.logMonoTime) - native_offset_ns) / 1e9
-          if not 0. <= age <= .5:
-            with self.lock:
-              self.recorder.video_index_stale += 1
-            continue
           route_observed_ns = time.monotonic_ns()
           current_route = read_param(params, 'CurrentRoute') or None
           with self.lock:
-            if current_route != self.recorder.metadata.get('route'):
-              self.recorder.video_index_route_mismatch += 1
-              continue
-            if int(event.qRoadEncodeIdx.timestampSof) - native_offset_ns < self.recorder.route_observed_ns:
-              self.recorder.video_index_route_mismatch += 1
-              continue
-            if self.recorder.state == 'recording' and self.recorder.rotate_full_chunk(now):
-              self.recorder.store.append({'kind': 'video_index', 'index': event.qRoadEncodeIdx.to_dict(),
-                                          'route': current_route, 'route_observed_mono_ns': route_observed_ns,
-                                          'source_log_mono_ns': int(event.logMonoTime),
-                                          'native_clock_offset_ns': native_offset_ns}, now)
-            elif self.recorder.state == 'recording':
-              self.recorder.video_index_dropped += 1
+            self.recorder.video_index(event.qRoadEncodeIdx.to_dict(), int(event.logMonoTime), now,
+                                      current_route, route_observed_ns, native_offset_ns)
       self.shutdown.wait(.05)

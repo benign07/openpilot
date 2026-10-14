@@ -186,6 +186,7 @@ class AutoRecorder:
     self.store, self.metadata = store, metadata
     self.trip = None
     self.recording_route = None
+    self.stale_route = None
     self.route_observed_ns = 0
     self.last_sample = -math.inf
     self.previous = {}
@@ -257,6 +258,7 @@ class AutoRecorder:
                   'stale_panda_start': self.stale_panda_snapshots}
     # Retain the existing chunk/reader contract for all bounded trace windows.
     self.store.append({'kind': 'event', 'name': 'button_trace_start', 'mono_ns': mono_ns,
+                       'pre_window_before_route_observation': any(row[0] < self.route_observed_ns for row in self.trace_pre),
                        'trace_id': self.trace['id'], 'button': label,
                        'pre_ns': self.BUTTON_TRACE_PRE_NS, 'post_ns': self.BUTTON_TRACE_POST_NS,
                        **details}, now)
@@ -371,7 +373,7 @@ class AutoRecorder:
       self.trace['frames'] += 1
 
   def chunk_metadata(self, now):
-    return {**self.metadata, 'trip_id': self.trip, 'mono_ns': int(now * 1e9),
+    return {**self.metadata, 'route': self.recording_route, 'trip_id': self.trip, 'mono_ns': int(now * 1e9),
             'route_observed_mono_ns': self.route_observed_ns,
             'utc_ns': time.time_ns(), 'capture': 'sampled_evidence',
             'full_can_source': 'rlog_not_copied_by_this_recorder'}
@@ -399,6 +401,10 @@ class AutoRecorder:
     started = ignition_fresh and services['deviceState']['data'].get('started') is True
     if not started:
       reason = 'ignition_off' if ignition_fresh else 'ignition_unknown'
+      if ignition_fresh and self.recording_route is not None:
+        # CurrentRoute is not cleared offroad. Only a confirmed off marks the
+        # completed route stale; a missing deviceState must still recover it.
+        self.stale_route, self.recording_route = self.recording_route, None
       self.close_trace(now, reason)
       self.store.seal(reason)
       self.trip = None
@@ -434,18 +440,27 @@ class AutoRecorder:
       self.chunk_rotations = 0
       self.max_chunk_rotation_ms = 0.0
     route = self.metadata.get('route')
+    route = None if route == self.stale_route else route
+    route_rotation_started = None
     if route != self.recording_route:
       # loggerd can change route without an ignition-off sample. A chunk has
       # one immutable route header; never append the next route below it.
+      if self.store.stream is not None:
+        route_rotation_started = time.monotonic()
       self.close_trace(now, 'route_changed')
       self.store.seal('route_changed')
-      self.trace_pre.clear()
+      # Same-boot native pre-event evidence remains useful. Its source clock
+      # and the trace-start annotation expose pre-observation coverage.
       self.last_sample = -math.inf
       self.recording_route = route
       self.route_observed_ns = int(now * 1e9)
     if self.trace is not None and not self.trace_active(now):
       self.close_trace(now, 'window_elapsed')
-    if not self.rotate_full_chunk(now) or not self.store.begin(self.chunk_metadata(now), now):
+    ready = self.rotate_full_chunk(now) and self.store.begin(self.chunk_metadata(now), now)
+    if route_rotation_started is not None:
+      self.chunk_rotations += 1
+      self.max_chunk_rotation_ms = max(self.max_chunk_rotation_ms, (time.monotonic() - route_rotation_started) * 1000)
+    if not ready:
       self.state = self.store.error
       return
     self.state = 'recording'
@@ -457,7 +472,7 @@ class AutoRecorder:
               'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
               'stale_can_frames': self.stale_can_frames, 'stale_panda_snapshots': self.stale_panda_snapshots,
               'storage_dropped': self.storage_dropped, 'dropped_no_stream': self.store.dropped_no_stream,
-              'route': self.metadata.get('route')}
+              'route': self.recording_route}
     self.store.append(sample, now)
     cs = services.get('carState', {}).get('data', {})
     cc = services.get('carControl', {}).get('data', {})
@@ -542,7 +557,7 @@ class AutoRecorder:
         if self.trace_active(now) and address in self.TRACE_ADDRESSES:
           self.trace['dropped_full'] += 1
       return
-    if mono_ns < self.route_observed_ns or not 0 <= now - mono_ns / 1e9 <= .5:
+    if not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
       self.stale_can_frames += 1
       return
@@ -608,7 +623,7 @@ class AutoRecorder:
       if self.state == 'storage_full_preserving_records' and 0 <= now - mono_ns / 1e9 <= .5:
         self.storage_dropped += 1
       return
-    if mono_ns < self.route_observed_ns or not 0 <= now - mono_ns / 1e9 <= .5:
+    if not 0 <= now - mono_ns / 1e9 <= .5:
       self.stale_packets += 1
       self.stale_panda_snapshots += 1
       return
@@ -728,13 +743,32 @@ class AutoRecorder:
                        'trip_id': self.trip, 'boot_id': self.metadata.get('boot_id')}, now)
     self.longitudinal_frames += 1
 
+  def video_index(self, index, source_ns, now, observed_route, observed_ns, native_offset_ns):
+    """Preserve native clock evidence only with a qualified current route."""
+    if self.state != 'recording':
+      return
+    if not 0. <= now - (source_ns - native_offset_ns) / 1e9 <= .5:
+      self.video_index_stale += 1
+      return
+    if (self.recording_route is None or observed_route != self.recording_route
+        or int(index['timestampSof']) - native_offset_ns < self.route_observed_ns):
+      self.video_index_route_mismatch += 1
+      return
+    if self.rotate_full_chunk(now):
+      self.store.append({'kind': 'video_index', 'index': index, 'route': self.recording_route,
+                         'route_observed_mono_ns': observed_ns, 'source_log_mono_ns': source_ns,
+                         'native_clock_offset_ns': native_offset_ns}, now)
+    else:
+      self.video_index_dropped += 1
+
   def close(self):
     self.close_trace(time.monotonic(), 'server_shutdown')
     self.store.seal('server_shutdown')
     self.state = 'stopped'
 
   def status(self):
-    return {'state': self.state, 'trip_id': self.trip, 'bytes': self.store.usage, 'quota': self.store.quota,
+    return {'state': self.state, 'trip_id': self.trip, 'recording_route': self.recording_route,
+            'bytes': self.store.usage, 'quota': self.store.quota,
             'error': self.store.error, 'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
             'stale_can_frames': self.stale_can_frames, 'stale_panda_snapshots': self.stale_panda_snapshots,
             'storage_dropped': self.storage_dropped, 'dropped_no_stream': self.store.dropped_no_stream,

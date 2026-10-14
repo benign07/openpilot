@@ -34,6 +34,8 @@ through Carrot HUD, rather than stopping after a source-branch push.
   opinion. Save the actual model, effort, session and result. A timeout or
   usage-limit failure is not a review pass. This replaces the earlier Opus
   5.5/high preference; older reviews do not count as fresh validation.
+  The owner also requests no arbitrary time limit on Claude reasoning: let
+  the review finish and manage token use through effort and focused follow-ups.
 - The owner's LX3 clone has no driver-facing camera and uses DisableDM=1.
   Follow stock Carrot monitoring and its DisableDM setting. The owner explicitly
   rejected adding a separate wheel monitor or a new monitoring policy. Do not

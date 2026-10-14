@@ -48,3 +48,20 @@ def test_all_runtime_fields_can_be_recorded_from_real_schema(tmp_path):
   assert len(samples) == 2
   assert [r['services']['selfdriveState']['data']['alertSound'] for r in sorted(samples,key=lambda r:r['mono_ns'])] == ['none','refuse']
   assert len([r for r in rows if r['kind']=='header']) == 2
+
+
+def test_wire_video_index_passes_effective_route_and_native_clock_gate(tmp_path):
+  recorder=AutoRecorder(ChunkStore(tmp_path,reserve=0),{'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':'actual_schema'})
+  recorder.update(actual_services(100.),100.)
+  message=log.Event.new_message()
+  message.logMonoTime=102_400_000_000
+  index=message.init('qRoadEncodeIdx')
+  index.timestampSof=102_350_000_000;index.timestampEof=102_360_000_000
+  index.segmentNum=0;index.segmentId=0;index.frameId=10
+  with log.Event.from_bytes(message.to_bytes()) as event:
+    recorder.video_index(event.qRoadEncodeIdx.to_dict(),int(event.logMonoTime),100.4,'actual_schema',100_400_000_000,2_000_000_000)
+  recorder.close()
+  rows=[json.loads(line) for p in tmp_path.glob('*.jsonl.gz') for line in gzip.open(p,'rt',encoding='utf-8')]
+  forwarded=[r for r in rows if r['kind']=='video_index']
+  assert len(forwarded)==1 and forwarded[0]['index']['frameId']==10
+  assert forwarded[0]['route']=='actual_schema' and forwarded[0]['source_log_mono_ns']==102_400_000_000

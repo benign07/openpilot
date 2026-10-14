@@ -257,7 +257,7 @@ def test_video_remux_leaves_primary_receiver_reserve(tmp_path,monkeypatch):
   assert free > 2*1024**3 + 4*1024**2
 
 
-def test_route_change_seals_before_new_sample_and_clears_trace_pre(tmp_path):
+def test_route_change_seals_before_new_sample_and_keeps_same_boot_trace_pre(tmp_path):
   from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
   from selfdrive.carrot.can_diagnostics.test_automatic import services
   from tools.lx3_drive_quality import collect
@@ -269,7 +269,8 @@ def test_route_change_seals_before_new_sample_and_clears_trace_pre(tmp_path):
   metadata['route']='new_route'
   data=services(100.3,long=True);data['carState']['data']['vEgo']=10.
   recorder.update(data,100.3)
-  assert recorder.trip==trip and not recorder.trace_pre
+  assert recorder.trip==trip and recorder.trace_pre
+  recorder.begin_trace(100_350_000_000,100.35,'test')
   recorder.close()
   chunks=[[json.loads(line) for line in gzip.open(p,'rt')] for p in tmp_path.glob('*.jsonl.gz')]
   assert {chunk[0]['route'] for chunk in chunks}=={'old_route','new_route'}
@@ -277,6 +278,8 @@ def test_route_change_seals_before_new_sample_and_clears_trace_pre(tmp_path):
   streams,*_=collect([tmp_path],tmp_path)
   assert [row['vEgo'] for row in streams['old_route']['carState']]==[20.]
   assert [row['vEgo'] for row in streams['new_route']['carState']]==[10.]
+  start=next(r for c in chunks for r in c if r.get('name')=='button_trace_start')
+  assert start['pre_window_before_route_observation'] is True
 
 
 @pytest.mark.parametrize('stamp_new_route',[True,False])
@@ -311,7 +314,7 @@ def test_new_route_rejects_buffered_previous_route_evidence(tmp_path):
 
 
 @pytest.mark.parametrize('source',['can','panda'])
-def test_new_route_rejects_buffered_native_packets_before_observed_boundary(tmp_path,source):
+def test_new_route_preserves_fresh_same_boot_native_pre_event_evidence(tmp_path,source):
   from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
   from selfdrive.carrot.can_diagnostics.test_automatic import services
   metadata={'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':'old_route'}
@@ -322,10 +325,97 @@ def test_new_route_rejects_buffered_native_packets_before_observed_boundary(tmp_
     if source=='can':recorder.can_frame(0,0x12A,bytes(16),t,100.35)
     else:recorder.panda_snapshot([{'controls_allowed':False}],t,100.35)
   send(100_100_000_000)
-  assert recorder.stale_packets==1 and not recorder.trace_pre
+  assert recorder.stale_packets==0
   send(100_340_000_000)
   recorder.close()
   chunks=[[json.loads(line) for line in gzip.open(p,'rt')] for p in tmp_path.glob('*.jsonl.gz')]
   new_chunk=next(c for c in chunks if c[0]['route']=='new_route')
   native=[r for r in new_chunk if r['kind']==('can_sample' if source=='can' else 'panda_snapshot')]
-  assert len(native)==1 and native[0]['mono_ns']==100_340_000_000
+  # Native pre-event evidence is useful and is not a route-qualified report
+  # input. Source timestamps expose that it predates the observed boundary.
+  assert native[0]['mono_ns']==100_100_000_000 < new_chunk[0]['route_observed_mono_ns']
+  assert recorder.stale_packets==0
+
+
+@pytest.mark.parametrize('off_ticks,unknown_after_off',[(1,False),(4,False),(1,True)])
+def test_previous_trip_route_never_labels_next_trip_before_new_route(tmp_path,off_ticks,unknown_after_off):
+  from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  from tools.lx3_drive_quality import collect
+  metadata={'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':'old_route'}
+  recorder=AutoRecorder(ChunkStore(tmp_path,reserve=0),metadata)
+  recorder.update(services(100.,long=True),100.)
+  for step in range(off_ticks):recorder.update(services(100.1+step*.02,started=False),100.1+step*.02)
+  if unknown_after_off:recorder.update({},100.2)
+  data=services(100.3,long=True);data['carState']['data']['vEgo']=10.
+  recorder.update(data,100.3);new_trip=recorder.trip
+  assert recorder.recording_route is None
+  # Raw metadata may still carry old_route. It must not leak through headers,
+  # sample rows, detailed rows, or native video forwarding.
+  recorder.longitudinal_evidence(frame(21,mono_ns=100_340_000_000),100_340_000_000,100.35)
+  recorder.video_index({'timestampSof':100_340_000_000,'segmentNum':0},100_350_000_000,100.35,'old_route',100_350_000_000,0)
+  assert recorder.video_index_route_mismatch==1
+  metadata['route']='new_route';data=services(100.6,long=True);data['carState']['data']['vEgo']=9.
+  recorder.update(data,100.6);recorder.close()
+  chunks=[[json.loads(line) for line in gzip.open(p,'rt')] for p in tmp_path.glob('*.jsonl.gz')]
+  current=[c for c in chunks if c[0]['trip_id']==new_trip]
+  assert {c[0]['route'] for c in current}=={None,'new_route'}
+  assert all(r.get('route')==c[0]['route'] for c in current for r in c if r['kind'] in ('sample','longitudinal_evidence'))
+  streams,*_=collect([tmp_path],tmp_path)
+  assert [r['vEgo'] for r in streams['old_route']['carState']]==[20.]
+  assert [r['vEgo'] for r in streams['new_route']['carState']]==[9.]
+
+
+def test_unknown_ignition_recovers_the_same_live_route(tmp_path):
+  from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  metadata={'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':'same_route'}
+  recorder=AutoRecorder(ChunkStore(tmp_path,reserve=0),metadata)
+  recorder.update(services(100.,long=True),100.)
+  recorder.update({},104.)
+  recorder.update(services(104.1,long=True),104.1)
+  assert recorder.recording_route=='same_route'
+  recorder.close()
+  chunks=[[json.loads(line) for line in gzip.open(p,'rt')] for p in tmp_path.glob('*.jsonl.gz')]
+  assert len(chunks)==2 and {c[0]['route'] for c in chunks}=={'same_route'}
+
+
+@pytest.mark.parametrize('prior_trip',[False,True])
+def test_new_route_visible_before_worker_started_is_preserved(tmp_path,prior_trip):
+  from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  metadata={'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':'old_route' if prior_trip else None}
+  recorder=AutoRecorder(ChunkStore(tmp_path,reserve=0),metadata)
+  if prior_trip:recorder.update(services(100.),100.)
+  recorder.update(services(100.1,started=False),100.1)
+  metadata['route']='new_route';recorder.update(services(100.2,started=False),100.2)
+  recorder.update(services(100.3),100.3)
+  assert recorder.recording_route=='new_route'
+  recorder.close()
+
+
+@pytest.mark.parametrize('condition',['accepted','old_sof','old_envelope','changed_route','unknown_route','storage_full'])
+def test_video_forwarding_uses_effective_route_and_native_clock(tmp_path,condition):
+  from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  route=None if condition=='unknown_route' else 'route'
+  recorder=AutoRecorder(ChunkStore(tmp_path,reserve=0),{'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':route})
+  recorder.update(services(100.),100.)
+  offset=2_000_000_000
+  index={'timestampSof':102_350_000_000,'timestampEof':102_360_000_000,'segmentNum':0,'segmentId':0,'frameId':10}
+  source_ns=102_400_000_000
+  observed=route
+  if condition=='old_sof':index['timestampSof']=101_950_000_000
+  if condition=='old_envelope':source_ns=101_800_000_000
+  if condition=='changed_route':observed='different'
+  if condition=='storage_full':recorder.store.seconds=0;recorder.store.quota=0
+  recorder.video_index(index,source_ns,100.4,observed,100_400_000_000,offset)
+  recorder.close()
+  rows=[json.loads(line) for p in tmp_path.glob('*.jsonl.gz') for line in gzip.open(p,'rt')]
+  forwarded=[r for r in rows if r['kind']=='video_index']
+  assert len(forwarded)==(1 if condition=='accepted' else 0)
+  assert recorder.video_index_stale==(1 if condition=='old_envelope' else 0)
+  assert recorder.video_index_route_mismatch==(1 if condition in ('old_sof','changed_route','unknown_route') else 0)
+  assert recorder.video_index_dropped==(1 if condition=='storage_full' else 0)
+  if forwarded:
+    assert forwarded[0]['route']==route and forwarded[0]['native_clock_offset_ns']==offset
