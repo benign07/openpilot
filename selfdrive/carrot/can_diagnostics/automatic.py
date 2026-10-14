@@ -258,7 +258,9 @@ class AutoRecorder:
                   'stale_panda_start': self.stale_panda_snapshots}
     # Retain the existing chunk/reader contract for all bounded trace windows.
     self.store.append({'kind': 'event', 'name': 'button_trace_start', 'mono_ns': mono_ns,
-                       'pre_window_before_route_observation': any(row[0] < self.route_observed_ns for row in self.trace_pre),
+                       'pre_window_before_route_observation': any(
+                         mono_ns - self.BUTTON_TRACE_PRE_NS <= row[0] < mono_ns and row[0] < self.route_observed_ns
+                         for row in self.trace_pre),
                        'trace_id': self.trace['id'], 'button': label,
                        'pre_ns': self.BUTTON_TRACE_PRE_NS, 'post_ns': self.BUTTON_TRACE_POST_NS,
                        **details}, now)

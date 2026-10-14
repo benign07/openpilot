@@ -419,3 +419,21 @@ def test_video_forwarding_uses_effective_route_and_native_clock(tmp_path,conditi
   assert recorder.video_index_dropped==(1 if condition=='storage_full' else 0)
   if forwarded:
     assert forwarded[0]['route']==route and forwarded[0]['native_clock_offset_ns']==offset
+
+
+def test_pre_window_annotation_excludes_old_rows_outside_copied_window(tmp_path):
+  from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder,ChunkStore
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  metadata={'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','route':'old_route'}
+  recorder=AutoRecorder(ChunkStore(tmp_path,reserve=0),metadata)
+  recorder.update(services(100.),100.)
+  metadata['route']='new_route';recorder.update(services(100.3),100.3)
+  recorder.can_frame(0,0x12A,bytes(16),100_100_000_000,100.35)
+  # No more selected CAN arrives, so the old deque is not pruned. A later
+  # host/panda-triggered trace must describe only the pre-rows actually copied.
+  recorder.begin_trace(104_000_000_000,104.,'quiet_bus_trigger')
+  recorder.close()
+  rows=[json.loads(line) for p in tmp_path.glob('*.jsonl.gz') for line in gzip.open(p,'rt')]
+  start=next(r for r in rows if r.get('name')=='button_trace_start')
+  assert not start['pre_window_before_route_observation']
+  assert not any(r['kind']=='button_trace_can' for r in rows)
