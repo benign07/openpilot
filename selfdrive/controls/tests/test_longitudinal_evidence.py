@@ -2,6 +2,7 @@
 import ast
 import copy
 import gzip
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -181,7 +182,7 @@ def test_media_sync_uses_actual_catalog_and_never_finalizes_truncation(tmp_path,
     response.headers={'Content-Length':'6','Content-Disposition':'attachment; filename="r--0--qcamera.ts"'}
     return response
   monkeypatch.setattr(media.OPENER,'open',reply)
-  monkeypatch.setattr(media.shutil,'disk_usage',lambda _:SimpleNamespace(free=1024**3))
+  monkeypatch.setattr(media.shutil,'disk_usage',lambda _:SimpleNamespace(free=4*1024**3))
   if truncate:
     with pytest.raises(ValueError):media.sync('http://100.71.19.14:7000',tmp_path)
     assert not (tmp_path/'video_segments/r--0/qcamera.ts').exists()
@@ -190,3 +191,35 @@ def test_media_sync_uses_actual_catalog_and_never_finalizes_truncation(tmp_path,
     assert (tmp_path/'video_segments/r--0/qcamera.ts').read_bytes()==b'123456'
     assert media.sync('http://100.71.19.14:7000',tmp_path)['downloaded']==[]
   assert not any('/download/r--1/' in path for path in called)
+
+
+def test_conflicting_and_incomplete_video_identities_are_not_aligned():
+  from tools.lx3_drive_quality import qualified_indexes
+  row={'segmentId':0,'frameId':10,'native_sof':100}
+  assert qualified_indexes([row,row],1)==[row]
+  with pytest.raises(ValueError):qualified_indexes([row,{**row,'native_sof':101}],1)
+  with pytest.raises(ValueError):qualified_indexes([row],2)
+
+
+def test_cached_videos_do_not_repeat_remux_or_probe(tmp_path,monkeypatch):
+  from tools import lx3_drive_quality as quality
+  videos={};indexes={};(tmp_path/'media').mkdir()
+  for segment in range(50):
+    source=tmp_path/f'{segment}.ts';source.write_bytes(b'input');videos['r',segment]=source
+    target=tmp_path/'media'/(hashlib.sha256(b'r').hexdigest()[:12]+f'-{segment}.mp4');target.write_bytes(b'output')
+    target.with_suffix('.cache.json').write_text(json.dumps({'source_sha256':quality.sha(source),'mp4_sha256':quality.sha(target),'pts':[0.]}))
+    indexes['r',segment]=[{'segmentId':0,'native_sof':100,'frameId':segment}]
+  monkeypatch.setattr(quality.subprocess,'run',lambda *a,**kw: (_ for _ in ()).throw(AssertionError('cached video was reprocessed')))
+  media,errors=quality.media_prepare(videos,indexes,{'r':0},tmp_path)
+  assert len(media)==50 and not errors
+
+
+def test_offline_video_source_still_produces_report(tmp_path,monkeypatch):
+  import sys
+  from tools import can_auto_sync
+  monkeypatch.syspath_prepend(str(Path(can_auto_sync.__file__).parent))
+  import sync_lx3_quality_media
+  monkeypatch.setattr(sync_lx3_quality_media,'sync',lambda *a: (_ for _ in ()).throw(OSError('OP offline')))
+  monkeypatch.setattr(sys,'argv',['can_auto_sync','--out',str(tmp_path),'--analyze-only','--quality','--video','--media-url','http://100.71.19.14:7000'])
+  can_auto_sync.main()
+  assert (tmp_path/'quality/index.html').is_file()

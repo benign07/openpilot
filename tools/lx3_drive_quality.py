@@ -17,6 +17,7 @@ from pathlib import Path
 import statistics
 import subprocess
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -128,7 +129,7 @@ def collect(inputs, schema_dir):
               state=f.get('state',{});sv=f.get('services',{});lat=f.get('lateral',{})
               streams[route]['carState'].append({'t':sv.get('carState',{}).get('mono_ns',f['mono_ns']),
                 'valid':sv.get('carState',{}).get('valid',False),'vEgo':state.get('v_ego',0.),'aEgo':state.get('a_ego',0.),
-                'standstill':state.get('standstill',True),'cruiseState':{'standstill':state.get('cruise_standstill',True)},
+                'standstill':state.get('standstill',True),'cruiseState':({'standstill':state['cruise_standstill']} if 'cruise_standstill' in state else {}),
                 'canValid':state.get('can_valid',False),'canTimeout':state.get('can_timeout',True),
                 'brakePressed':state.get('brake',False),'gasPressed':state.get('gas',False),
                 'leftBlinker':state.get('left_blinker',False),'rightBlinker':state.get('right_blinker',False),
@@ -149,6 +150,9 @@ def collect(inputs, schema_dir):
                 if min(ps[1],ps[2])>=.8 and max(abs(xs[1]),abs(xs[2]))<.1 and 2.5<=abs(ys[2]-ys[1])<=4.5:center=(ys[1]+ys[2])/2
               streams[route]['modelV2'].append({'t':f.get('model_mono_ns',f['mono_ns']),'valid':sv.get('modelV2',{}).get('valid',False),'lane_center_y_m':center})
           if row.get('kind')=='video_index' and route:
+            if row.get('route') != route:
+              errors.append({'path':str(path),'error':'video_index route stamp mismatch or absent'})
+              continue
             x=row['index'];indexes[route,int(x['segmentNum'])].append({'native_sof':int(x['timestampSof']),
               'native_eof':int(x['timestampEof']),'received_t':row['source_log_mono_ns'],'frameId':int(x['frameId']),'segmentId':int(x['segmentId'])})
           if row.get('kind') == 'sample' and route:
@@ -349,20 +353,43 @@ def evaluate_route(route, ss, frames, native=False):
       'launches':starts,'events':sorted(events,key=lambda x:x['t']),'plot':plot}
 
 
-def media_prepare(videos,indexes,offsets,out):
+def qualified_indexes(rows, frame_count):
+  unique={}
+  for row in rows:
+    previous=unique.get(row['segmentId'])
+    if previous and any(previous[k]!=row[k] for k in ('frameId','native_sof')):
+      raise ValueError('conflicting encoder identities for the same presentation index')
+    unique[row['segmentId']]=row
+  idx=sorted(unique.values(),key=lambda x:x['segmentId'])
+  if not idx or len(idx)!=frame_count or [x['segmentId'] for x in idx]!=list(range(frame_count)):
+    raise ValueError('full encoder/video coverage unavailable; alignment unverified')
+  return idx
+
+
+def media_prepare(videos,indexes,offsets,out,maximum_new=4):
   media={};errors=[]
   (out/'media').mkdir(exist_ok=True)
+  new=0;deadline=time.monotonic()+180
   for (route,segment),path in sorted(videos.items()):
     target=out/'media'/(hashlib.sha256(route.encode()).hexdigest()[:12]+'-'+str(segment)+'.mp4')
     try:
-      subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(path),'-an','-c:v','copy','-avoid_negative_ts','make_zero','-movflags','+faststart',str(target)],check=True,capture_output=True,timeout=60)
-      p=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries','frame=best_effort_timestamp_time','-of','json',str(target)],check=True,capture_output=True,text=True,timeout=60)
-      pts=[float(x['best_effort_timestamp_time']) for x in json.loads(p.stdout)['frames']]
+      cache=target.with_suffix('.cache.json');source=sha(path);cached=None
+      if cache.is_file() and target.is_file():
+        try:
+          candidate=json.loads(cache.read_text())
+          if candidate.get('source_sha256')==source and candidate.get('mp4_sha256')==sha(target):cached=candidate
+        except (OSError,ValueError):pass
+      if cached is None:
+        if new>=maximum_new or time.monotonic()>deadline:raise ValueError('video work queued for next pass; partial report retained')
+        new+=1
+        subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(path),'-an','-c:v','copy','-avoid_negative_ts','make_zero','-movflags','+faststart',str(target)],check=True,capture_output=True,timeout=20)
+        p=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries','frame=best_effort_timestamp_time','-of','json',str(target)],check=True,capture_output=True,text=True,timeout=20)
+        pts=[float(x['best_effort_timestamp_time']) for x in json.loads(p.stdout)['frames']]
+        temporary=cache.with_suffix('.tmp');temporary.write_text(json.dumps({'source_sha256':source,'mp4_sha256':sha(target),'pts':pts}),encoding='utf-8');temporary.replace(cache)
+      else:pts=cached['pts']
       if not pts or abs(pts[0]) > .001 or any(b<a for a,b in zip(pts,pts[1:])):
         raise ValueError('MP4 presentation origin/order is not qualified')
-      idx=sorted({x['segmentId']:x for x in indexes.get((route,segment),[])}.values(),key=lambda x:x['segmentId'])
-      if not idx or any(not 0<=x['segmentId']<len(pts) for x in idx):
-        raise ValueError('encoder index/video frame coverage mismatch')
+      idx=qualified_indexes(indexes.get((route,segment),[]),len(pts))
       if offsets.get(route) is None:
         raise ValueError('missing camera BOOTTIME to host MONOTONIC mapping')
       media[route,segment]=[{'t':x['native_sof']-offsets[route],'pts':pts[x['segmentId']],'file':target.relative_to(out).as_posix(),'frameId':x['frameId'],
@@ -409,10 +436,11 @@ def main():
   p.add_argument('--schema-dir',type=Path,default=ROOT/'cereal')
   p.add_argument('--video',action='store_true')
   p.add_argument('--native-pair',action='store_true')
+  p.add_argument('--max-new-videos',type=int,default=4)
   args=p.parse_args();args.out.mkdir(parents=True,exist_ok=True)
   streams,frames,videos,indexes,offsets,hashes,errors=collect(args.input,args.schema_dir)
   routes=[evaluate_route(k,v,[r for r in frames if r.get('route')==k],args.native_pair) for k,v in streams.items()]
-  media,video_errors=media_prepare(videos,indexes,offsets,args.out) if args.video else ({},[])
+  media,video_errors=media_prepare(videos,indexes,offsets,args.out,max(0,min(200,args.max_new_videos))) if args.video else ({},[])
   for r in routes:
     for event in r['events']:event['video']=match_video(event,media)
   result={'schema':1,'routes':routes,'source_sha256':hashes,'read_errors':errors,'video_errors':video_errors,

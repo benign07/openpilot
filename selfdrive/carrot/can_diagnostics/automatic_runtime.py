@@ -262,6 +262,7 @@ class AutomaticController:
     thermal_recent = deque(maxlen=120)
     thermal_at_start = None
     thermal_emitted = False
+    thermal_started_at_first_sample = None
     services = {}
     while not self.shutdown.is_set():
       sm.update(0)
@@ -271,6 +272,8 @@ class AutomaticController:
         if now - last_thermal >= 1 and sm.valid['deviceState'] and sm.alive['deviceState'] and 0 <= now - sm.logMonoTime['deviceState'] / 1e9 < 3:
           sample = {'mono_ns': int(sm.logMonoTime['deviceState']), **selected_fields(sm['deviceState'], FIELDS['deviceState'])}
           json.dumps(sample, allow_nan=False)
+          if thermal_started_at_first_sample is None:
+            thermal_started_at_first_sample = sample['started']
           thermal_recent.append(sample)
           with self.lock:
             self.thermal_last = sample
@@ -316,6 +319,7 @@ class AutomaticController:
         if not thermal_emitted and thermal_at_start is not None and self.recorder.state == 'recording':
           try:
             self.recorder.event('boot_thermal_samples', now, samples=thermal_at_start,
+                                started_at_first_sample=thermal_started_at_first_sample, restart_count=self.restart_count,
                                 scope='collector_start_to_first_onroad_not_kernel_boot_or_causal_proof')
             thermal_emitted = True
           except Exception:
@@ -371,16 +375,24 @@ class AutomaticController:
         event = messaging.log_from_bytes(raw)
         if event.valid and event.which() == 'qRoadEncodeIdx':
           now = time.monotonic()
+          if self.recorder.state != 'recording':
+            continue
           age = now - (int(event.logMonoTime) - native_offset_ns) / 1e9
           if not 0. <= age <= .5:
             with self.lock:
-              self.recorder.storage_dropped += 1
+              self.recorder.video_index_stale += 1
             continue
+          route_observed_ns = time.monotonic_ns()
+          current_route = read_param(params, 'CurrentRoute') or None
           with self.lock:
+            if current_route != self.recorder.metadata.get('route'):
+              self.recorder.video_index_route_mismatch += 1
+              continue
             if self.recorder.state == 'recording' and self.recorder.rotate_full_chunk(now):
               self.recorder.store.append({'kind': 'video_index', 'index': event.qRoadEncodeIdx.to_dict(),
+                                          'route': current_route, 'route_observed_mono_ns': route_observed_ns,
                                           'source_log_mono_ns': int(event.logMonoTime),
                                           'native_clock_offset_ns': native_offset_ns}, now)
             elif self.recorder.state == 'recording':
-              self.recorder.storage_dropped += 1
+              self.recorder.video_index_dropped += 1
       self.shutdown.wait(.05)

@@ -223,6 +223,7 @@ class AutoRecorder:
     self.transport_gaps = set()
     self.last_observer_tick = None
     self.longitudinal_frames = self.longitudinal_rejected = 0
+    self.video_index_stale = self.video_index_dropped = self.video_index_route_mismatch = 0
 
   def trace_active(self, now):
     return self.trace is not None and int(now * 1e9) <= self.trace['until_ns']
@@ -729,4 +730,6 @@ class AutoRecorder:
             'blindspot_diagnostic_traces': self.blindspot_trace_count,
             'longitudinal_evidence_frames': self.longitudinal_frames,
             'longitudinal_evidence_rejected': self.longitudinal_rejected,
+            'video_index_stale': self.video_index_stale, 'video_index_dropped': self.video_index_dropped,
+            'video_index_route_mismatch': self.video_index_route_mismatch,
             'control_changes': False, 'phone_backup': False}

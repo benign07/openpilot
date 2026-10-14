@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import time
 from urllib.parse import urlparse, quote
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
@@ -51,18 +52,19 @@ def sync(base, root, maximum=4):
   state=fetch(base,'/api/params_bulk?names=CurrentRoute')
   current=state.get('values',{}).get('CurrentRoute')
   if not current: raise ValueError('Current route identity unavailable; do not guess the active encoder')
-  result={'downloaded':[],'pending_active_segment':True,'scope':'completed_qcamera_only_local_hash_not_remote_signed_hash'}
+  result={'downloaded':[],'scope':'completed_qcamera_only_local_hash_not_remote_signed_hash'}
+  deadline=time.monotonic()+30
   for route in sorted(routes,reverse=True)[:5]:
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,110}',route):continue
     data=fetch(base,'/api/dashcam/segments/'+quote(route,safe='')+'?limit=2000')
     if not data.get('ok') or data.get('route') != route:continue
     for segment in completed_segments(route,data.get('segments',[]),current):
       directory=root/'video_segments'/segment;directory.mkdir(parents=True,exist_ok=True)
-      target=directory/'qcamera.ts';manifest=directory/'qcamera.manifest.json'
+      target=directory/'qcamera.ts';manifest=directory/'qcamera.source.json'
       if target.is_file() and manifest.is_file():
         m=json.loads(manifest.read_text())
         if target.stat().st_size==m['bytes'] and hashlib.sha256(target.read_bytes()).hexdigest()==m['sha256']:continue
-      if len(result['downloaded'])>=maximum:return result
+      if len(result['downloaded'])>=maximum or time.monotonic()>=deadline:return result
       path='/api/dashcam/download/'+quote(segment,safe='')+'/qcamera';url=base+path
       partial=directory/'qcamera.partial'
       with OPENER.open(Request(url),timeout=15) as response:
@@ -71,10 +73,11 @@ def sync(base, root, maximum=4):
         filename=response.headers.get('Content-Disposition','')
         if not 0<length<=32*1024*1024 or not filename.endswith('--qcamera.ts"'):
           raise ValueError('Unsupported video length/format')
-        if shutil.disk_usage(root).free<512*1024*1024+length:raise OSError('PC recording reserve reached')
+        if shutil.disk_usage(root).free<2*1024**3+length:raise OSError('PC recording reserve reached')
         h=hashlib.sha256();received=0
         with partial.open('wb') as output:
           while block:=response.read(65536):
+            if time.monotonic()>deadline:raise TimeoutError('Video pass budget reached; resume report without new video')
             received+=len(block)
             if received>length:raise ValueError('Video grew beyond closed response size')
             output.write(block);h.update(block)
