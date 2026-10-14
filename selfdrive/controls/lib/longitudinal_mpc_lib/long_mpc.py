@@ -283,8 +283,8 @@ class LongitudinalMpc:
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
     # Passive copies for PC replay; never used by the production calculation.
-    self.evidence_cost_weights = list(cost_weights)
-    self.evidence_constraint_weights = list(constraint_cost_weights)
+    self.evidence_cost_weights = [float(x) for x in cost_weights]
+    self.evidence_constraint_weights = [float(x) for x in constraint_cost_weights]
     W = np.asfortranarray(np.diag(cost_weights))
     for i in range(N):
       # TODO don't hardcode A_CHANGE_COST idx

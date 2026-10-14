@@ -204,6 +204,7 @@ class AutomaticController:
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
     panda_socket = messaging.sub_sock('pandaStates', timeout=0, conflate=True)
     evidence_socket = messaging.sub_sock('logMessage', timeout=0, conflate=False)
+    camera_index_socket = messaging.sub_sock('qRoadEncodeIdx', timeout=0, conflate=False)
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     metadata = {'boot_id': boot, 'route': None, 'car_fingerprint': None,
                 'rate_hz': 5, 'can_per_key_max_hz': 10, 'panda_max_hz': 20, 'panda_periodic_max_hz': 2,
@@ -333,4 +334,19 @@ class AutomaticController:
           continue
         with self.lock:
           self.recorder.longitudinal_evidence(row, int(event.logMonoTime), time.monotonic())
+      for _ in range(16):
+        raw = camera_index_socket.receive(non_blocking=True)
+        if raw is None:
+          break
+        event = messaging.log_from_bytes(raw)
+        if event.valid and event.which() == 'qRoadEncodeIdx':
+          now = time.monotonic()
+          age = now - (int(event.logMonoTime) - native_offset_ns) / 1e9
+          if not 0. <= age <= .5:
+            continue
+          with self.lock:
+            if self.recorder.state == 'recording' and self.recorder.rotate_full_chunk(now):
+              self.recorder.store.append({'kind': 'video_index', 'index': event.qRoadEncodeIdx.to_dict(),
+                                          'source_log_mono_ns': int(event.logMonoTime),
+                                          'native_clock_offset_ns': native_offset_ns}, now)
       self.shutdown.wait(.05)

@@ -176,12 +176,20 @@ def main():
   parser.add_argument('--out', type=Path, required=True)
   parser.add_argument('--watch', action='store_true')
   parser.add_argument('--analyze-only', action='store_true')
+  parser.add_argument('--quality', action='store_true', help='Generate the offline detailed log/video quality report after sync')
+  parser.add_argument('--video', action='store_true', help='Remux local qcamera files for the quality report')
   args = parser.parse_args()
   args.out.mkdir(parents=True, exist_ok=True)
   while True:
     try:
       count = 0 if args.analyze_only else sync(args.url, args.out)
       result = analyze(args.out)
+      if args.quality:
+        import subprocess
+        import sys
+        cmd=[sys.executable,str(Path(__file__).with_name('lx3_drive_quality.py')),'--input',str(args.out),'--out',str(args.out/'quality')]
+        if args.video:cmd.append('--video')
+        subprocess.run(cmd,check=True,timeout=300)
       print(json.dumps({'downloaded': count, **result['coverage']}), flush=True)
     except (OSError, ValueError, KeyError) as exc:
       print(f'Sync incomplete; records preserved: {exc}', flush=True)

@@ -2,6 +2,8 @@
 import argparse
 import json
 import os
+import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -37,14 +39,14 @@ def main():
     np.testing.assert_array_equal(plain.u_sol,captured.u_sol)
     ts=ModelConstants.T_IDXS[:CONTROL_N]
     target,stop,_,_=get_accel_from_plan(np.interp(ts,T_IDXS,captured.v_solution),np.interp(ts,T_IDXS,captured.a_solution),ts,action_t=.25,vEgoStopping=.5)
-    packets.append({'problem':captured.evidence_problem,'comparison':pair,'dt':.05,
+    packets.append({'problem':captured.evidence_problem,'comparison':pair,'dt':.05,'actual_arm':30,
                     'output':{'a_target':float(target),'should_stop':bool(stop),'actuator_delay':.2,'v_ego_stopping':.5}})
   initial=compare(packets[0])
-  assert initial['status']=='qualified_single_problem', initial
+  assert initial['status']=='baseline_reproduced_single_problem', initial
   assert initial['max_horizon_accel_difference']>0.
   nochange={**packets[0],'comparison':{'30':pair['30'],'40':pair['30']}}
   equal=compare(nochange)
-  assert equal['status']=='qualified_single_problem' and equal['max_horizon_accel_difference']==0.,equal
+  assert equal['status']=='baseline_reproduced_single_problem' and equal['max_horizon_accel_difference']==0.,equal
   mismatch=json.loads(json.dumps(packets[0]));mismatch['problem']['output_x'][1][2]+=1.
   assert compare(mismatch)['status']=='baseline_mismatch'
   logger=LongitudinalEvidence(True);sizes=[]
@@ -55,6 +57,45 @@ def main():
           'baseline_mismatch_rejected':True,'maximum_frame_bytes':max(sizes),
           'logger_max_emit_us_including_sink':logger.max_emit_us,'logger_budget_rejections':logger.errors,
           'scope':'CI synthetic single-problem validation, no vehicle or subjective quality qualification'}
+  # Run the REAL planner builder with the REAL CarrotPlanner fields. Navigation
+  # update is held fixed to isolate this passive logger, not to qualify driving.
+  with tempfile.TemporaryDirectory(prefix='lx3-evidence-params-') as directory:
+    os.environ['PARAMS_ROOT']=directory
+    from cereal import car, log
+    from openpilot.common.params import Params
+    from openpilot.selfdrive.carrot.carrot_functions import CarrotPlanner
+    from openpilot.selfdrive.controls.lib import longitudinal_planner as lp
+    params=Params();params.put_int('MyDrivingMode',3);params.put_int('ApproachTrafficCalm',30)
+    params.put_bool('ApproachComfortEnabled',True)
+    cp=car.CarParams.new_message();cp.carFingerprint='HYUNDAI_PALISADE_LX3_HEV';cp.openpilotLongitudinalControl=True
+    class SM(dict):
+      def all_checks(self,service_list):return True
+    sm=SM(carState=car.CarState.new_message(),carControl=car.CarControl.new_message(),
+          controlsState=log.ControlsState.new_message(),radarState=log.RadarState.new_message(),
+          modelV2=log.ModelDataV2.new_message(),selfdriveState=log.SelfdriveState.new_message())
+    sm.valid={k:True for k in sm};sm.alive={k:True for k in sm};sm.logMonoTime={k:time.monotonic_ns() for k in sm}
+    sm['carState'].vCruise=20.;sm['carState'].vCluRatio=1.;sm['carState'].standstill=True;sm['carState'].canValid=True
+    sm['controlsState'].longControlState='pid';sm['carControl'].longActive=True
+    carrot=CarrotPlanner();carrot.update=lambda *args:20.;carrot.mode='acc';carrot.v_cruise=20/3.6;carrot.stop_dist=1000.
+    planner=lp.LongitudinalPlanner(cp);rows=[];sent=[]
+    old_sink=lp.cloudlog.debug;lp.cloudlog.debug=rows.append
+    try:
+      planner.update(sm,carrot)
+      assert planner.long_evidence_pending is not None,planner.long_evidence.last_error
+      original=planner.long_evidence_pending['state']['v_ego']
+      sm['carState'].vEgo=99.  # A lazy closure would silently change the evidence.
+      planner.publish(sm,NS(send=lambda *args:sent.append(args)),carrot)
+      assert sent and rows[-1][LongitudinalEvidence.KEY]['state']['v_ego']==original
+      sm['carState'].vEgo=0.
+      old_compare=lp.traffic_ceiling_comparison
+      lp.traffic_ceiling_comparison=lambda *a: (_ for _ in ()).throw(ValueError('injected diagnostic failure'))
+      try:planner.update(sm,carrot)
+      finally:lp.traffic_ceiling_comparison=old_compare
+      assert planner.long_evidence.errors>0 and np.isfinite(planner.output_a_target)
+    finally:lp.cloudlog.debug=old_sink
+    result['real_planner_real_carrot_builder']=True
+    result['snapshot_not_lazy']=True
+    result['diagnostic_failure_did_not_abort_planner']=True
   args.output.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 
 

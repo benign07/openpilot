@@ -117,6 +117,7 @@ class LongitudinalPlanner:
     self.approach_param_time = 1.0
     self.approach_supported = str(CP.carFingerprint) == 'HYUNDAI_PALISADE_LX3_HEV'
     self.long_evidence = LongitudinalEvidence(self.approach_supported)
+    self.long_evidence_pending = None
 
   @staticmethod
   def parse_model(model_msg):
@@ -252,11 +253,19 @@ class LongitudinalPlanner:
     )
     accel_limits_turns[1] = apply_approach_ceiling(accel_limits_turns[1], self.a_desired, approach_request, self.dt)
 
-    evidence_due = self.long_evidence.due(v_ego < 6. or self.approach.coast_weight > 0. or sm['carState'].aEgo < -.1)
-    evidence_comparison = (traffic_ceiling_comparison(self.approach, self.approach_settings, evidence_maximum, self.a_desired, self.dt)
-                           if evidence_due else None)
-    self.mpc.evidence_requested = bool(evidence_due and (
-      evidence_comparison['30']['applied_ceiling'] != evidence_comparison['40']['applied_ceiling'] or self.long_evidence.cycle % 20 == 0))
+    evidence_due = False
+    evidence_comparison = None
+    self.mpc.evidence_requested = False
+    try:
+      evidence_due = self.long_evidence.due(v_ego < 6. or self.approach.coast_weight > 0. or sm['carState'].aEgo < -.1)
+      if evidence_due:
+        evidence_comparison = traffic_ceiling_comparison(self.approach, self.approach_settings, evidence_maximum, self.a_desired, self.dt)
+        self.mpc.evidence_requested = (evidence_comparison['30']['applied_ceiling'] != evidence_comparison['40']['applied_ceiling']
+                                       or self.long_evidence.cycle % 20 == 0)
+    except Exception as exc:
+      evidence_due = False
+      self.mpc.evidence_requested = False
+      self.long_evidence.note_error(exc)
 
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality, jerk_factor = carrot.jerk_factor_apply * approach_request.jerk_factor, a_change_cost_starting = carrot.aChangeCostStarting)
     self.mpc.set_accel_limits(accel_limits_turns[0], accel_limits_turns[1])
@@ -309,9 +318,10 @@ class LongitudinalPlanner:
     self.output_v_target_now = output_v_target_now
     self.output_j_target_now = self.j_desired_trajectory[0]
 
-    self.long_evidence_builder = None
+    self.long_evidence_pending = None
     if evidence_due:
-      self.long_evidence_builder = lambda: {
+      try:
+        self.long_evidence_pending = {
         'model_mono_ns': int(sm.logMonoTime['modelV2']), 'dt': float(self.dt),
         'model_frame_id': int(sm['modelV2'].frameId), 'model_timestamp_eof_ns': int(sm['modelV2'].timestampEof),
         'services': {k: {'mono_ns': int(sm.logMonoTime[k]), 'valid': bool(sm.valid[k]), 'alive': bool(sm.alive[k])}
@@ -328,7 +338,13 @@ class LongitudinalPlanner:
                   'gas': bool(sm['carState'].gasPressed), 'long_active': bool(sm['carControl'].longActive),
                   'long_control_state': str(sm['controlsState'].longControlState), 'reset_state': bool(reset_state),
                   'force_decel': bool(force_slow_decel), 'approach_eligible': bool(approach_eligible),
+                  'lat_active': bool(sm['carControl'].latActive), 'steering_pressed': bool(sm['carState'].steeringPressed),
+                  'left_blinker': bool(sm['carState'].leftBlinker), 'right_blinker': bool(sm['carState'].rightBlinker),
+                  'can_valid': bool(sm['carState'].canValid), 'can_timeout': bool(sm['carState'].canTimeout),
                   'previous_command': float(sm['carControl'].actuators.accel)},
+        'lateral': {'lane_y0': [float(line.y[0]) if len(line.y) else None for line in sm['modelV2'].laneLines],
+                    'lane_x0': [float(line.x[0]) if len(line.x) else None for line in sm['modelV2'].laneLines],
+                    'lane_probs': list(sm['modelV2'].laneLineProbs)},
         'leads': [lead.to_dict() for lead in (sm['radarState'].leadOne, sm['radarState'].leadTwo)],
         'bounds': {'table_max': float(accel_limits[1]), 'before_approach': evidence_maximum,
                    'after_approach': float(accel_limits_turns[1]), 'mpc_max': float(self.mpc.max_a),
@@ -337,12 +353,16 @@ class LongitudinalPlanner:
                    'coast_weight': float(self.approach.coast_weight), 'traffic_weight': float(self.approach.traffic_weight),
                    'request_ceiling': approach_request.accel_ceiling,
                    'extra_tf': float(approach_request.extra_tf), 'jerk_multiplier': float(approach_request.jerk_factor)},
-        'comparison': evidence_comparison,
+        'comparison': evidence_comparison, 'actual_arm': int(self.approach_settings.traffic),
         'output': {'should_stop': bool(self.output_should_stop), 'a_target': float(self.output_a_target),
                    'source': str(self.mpc.source), 'v_target': float(self.output_v_target_now),
                    'actuator_delay': float(longitudinalActuatorDelay), 'v_ego_stopping': float(vEgoStopping)},
         'problem': self.mpc.evidence_problem,
-      }
+        }
+      except Exception as exc:
+        self.long_evidence.note_error(exc)
+    if self.long_evidence.last_error and self.long_evidence_pending is None and self.long_evidence.cycle % 20 == 0:
+      self.long_evidence_pending = {'record_type': 'producer_error', 'last_error': self.long_evidence.last_error}
 
   def publish(self, sm, pm, carrot):
     plan_send = messaging.new_message('longitudinalPlan')
@@ -379,7 +399,7 @@ class LongitudinalPlanner:
 
     pm.send('longitudinalPlan', plan_send)
     # Normal plan publication precedes diagnostics; its transport is unchanged.
-    build = self.long_evidence_builder
-    self.long_evidence_builder = None
-    if build is not None:
-      self.long_evidence.emit(lambda: {**build(), 'plan_mono_ns': int(plan_send.logMonoTime)}, cloudlog.debug)
+    pending = self.long_evidence_pending
+    self.long_evidence_pending = None
+    if pending is not None:
+      self.long_evidence.emit(lambda: {**pending, 'plan_mono_ns': int(plan_send.logMonoTime)}, cloudlog.debug)

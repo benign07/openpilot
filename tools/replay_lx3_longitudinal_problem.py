@@ -16,7 +16,7 @@ def compare(frame):
   except (ImportError, OSError) as exc:
     return {'status': 'native_solver_unavailable', 'detail': type(exc).__name__}
   required = {'params': (N+1, 8), 'yref': (N+1, 6), 'x0': (3,),
-              'warm_x': (N+1, 3), 'warm_u': (N, 1), 'output_x': (N+1, 3), 'obstacles': (N+1, 4)}
+              'warm_x': (N+1, 3), 'warm_u': (N, 1), 'output_x': (N+1, 3), 'output_u': (N, 1), 'obstacles': (N+1, 4)}
   try:
     a = {key: np.array(p[key], dtype=float) for key in required}
     if any(x.shape != required[k] or not np.isfinite(x).all() for k,x in a.items()):
@@ -52,16 +52,26 @@ def compare(frame):
       accel = np.interp(ts, T_IDXS, m.a_solution)
       target, stop, _, _ = get_accel_from_plan(v, accel, ts,
         action_t=frame['output']['actuator_delay']+frame['dt'], vEgoStopping=frame['output']['v_ego_stopping'])
-      return m.x_sol.copy(), float(target), bool(stop)
-    baseline_x, baseline_target, baseline_stop = solve()
+      return m.x_sol.copy(), m.u_sol.copy(), float(target), bool(stop)
+    baseline_x, baseline_u, baseline_target, baseline_stop = solve()
     error = float(np.max(np.abs(baseline_x - a['output_x'])))
+    jerk_error = float(np.max(np.abs(baseline_u-a['output_u'])))
     target_error = abs(baseline_target-frame['output']['a_target'])
-    if error > .02 or target_error > .02 or baseline_stop != frame['output']['should_stop']:
-      return {'status': 'baseline_mismatch', 'state_max_error': error, 'target_error': target_error,
+    tolerance=1e-4
+    if error > tolerance or jerk_error > tolerance or target_error > tolerance or baseline_stop != frame['output']['should_stop']:
+      return {'status': 'baseline_mismatch', 'state_max_error': error, 'jerk_error':jerk_error, 'target_error': target_error,
               'reason': 'previous primal solutions do not reproduce internal warm/dual state'}
-    x30, target30, stop30 = solve(frame['comparison']['30']['applied_ceiling'])
-    x40, target40, stop40 = solve(frame['comparison']['40']['applied_ceiling'])
-    return {'status': 'qualified_single_problem', 'baseline_state_error': error, 'baseline_target_error': target_error,
+    x30, u30, target30, stop30 = solve(frame['comparison']['30']['applied_ceiling'])
+    x40, u40, target40, stop40 = solve(frame['comparison']['40']['applied_ceiling'])
+    arm=frame.get('actual_arm')
+    if arm not in (30,40):return {'status':'actual_arm_unavailable'}
+    actual_x,actual_u=(x30,u30) if arm==30 else (x40,u40)
+    if max(float(np.max(np.abs(actual_x-baseline_x))),float(np.max(np.abs(actual_u-baseline_u))))>1e-9:
+      return {'status':'actual_arm_reconstruction_mismatch'}
+    reproduction_floor=max(tolerance,2*target_error)
+    return {'status': 'baseline_reproduced_single_problem', 'tolerance':tolerance,
+            'baseline_state_error': error, 'baseline_jerk_error':jerk_error,'baseline_target_error': target_error,
+            'target_effect_resolved':abs(target30-target40)>reproduction_floor,
             'a_target30': target30, 'a_target40': target40, 'delta_a_target': target30-target40,
             'should_stop30': stop30, 'should_stop40': stop40,
             'max_horizon_accel_difference': float(np.max(np.abs(x30[:,2]-x40[:,2]))),

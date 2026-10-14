@@ -54,9 +54,19 @@ def frame_integrity(rows):
     if b['sequence'] != a['sequence']+1 or b['cycle'] != a['cycle']+1 or b['mono_ns']-a['mono_ns'] > 100_000_000:
       reasons.append('planner_evidence_gap')
       break
-  if any(r.get('producer_errors',0) for r in rows):
+  if any(a.get('producer_errors',0)!=b.get('producer_errors',0) for a,b in zip(rows,rows[1:])):
     reasons.append('producer_error_observed')
   for r in rows:
+    arm=r.get('actual_arm')
+    expected=(r.get('comparison',{}).get(str(arm)) or {}).get('applied_ceiling')
+    bounds=r.get('bounds',{})
+    if arm not in (30,40) or arm!=(r.get('settings') or {}).get('traffic'):
+      reasons.append('comparison_excludes_actual_setting')
+    if (expected is None or bounds.get('after_approach') is None
+        or abs(expected-bounds['after_approach'])>1e-9):
+      reasons.append('actual_ceiling_mismatch')
+    if bounds.get('mpc_max')!=bounds.get('after_approach'):
+      reasons.append('later_limit_changed')
     if set(r.get('services',{})) != {'carState','carControl','controlsState','radarState','modelV2','selfdriveState'}:
       reasons.append('missing_input_validity')
     for service in r.get('services',{}).values():
@@ -110,7 +120,36 @@ def collect(inputs, schema_dir):
         for row in rows[1:]:
           f = unwrap(row)
           if f:
+            if f.get('record_type','frame')!='frame':
+              errors.append({'producer':f.get('producer'),'error':f.get('last_error','producer error')})
+              continue
             frames.append({**f, 'route':route, 'boot_id':header.get('boot_id')})
+            if route:
+              state=f.get('state',{});sv=f.get('services',{});lat=f.get('lateral',{})
+              streams[route]['carState'].append({'t':sv.get('carState',{}).get('mono_ns',f['mono_ns']),
+                'valid':sv.get('carState',{}).get('valid',False),'vEgo':state.get('v_ego',0.),'aEgo':state.get('a_ego',0.),
+                'canValid':state.get('can_valid',False),'canTimeout':state.get('can_timeout',True),
+                'brakePressed':state.get('brake',False),'gasPressed':state.get('gas',False),
+                'leftBlinker':state.get('left_blinker',False),'rightBlinker':state.get('right_blinker',False),
+                'steeringPressed':state.get('steering_pressed',False)})
+              streams[route]['carControl'].append({'t':sv.get('carControl',{}).get('mono_ns',f['mono_ns']),
+                'valid':sv.get('carControl',{}).get('valid',False),'latActive':state.get('lat_active',False),
+                'longActive':state.get('long_active',False),'accel':state.get('previous_command',0.)})
+              streams[route]['controlsState'].append({'t':sv.get('controlsState',{}).get('mono_ns',f['mono_ns']),
+                'valid':sv.get('controlsState',{}).get('valid',False),
+                'longControlState':state.get('long_control_state','off'),'forceDecel':state.get('force_decel',False)})
+              streams[route]['longitudinalPlan'].append({'t':f.get('plan_mono_ns',f['mono_ns']),'valid':True,
+                'shouldStop':f.get('output',{}).get('should_stop',True),'aTarget':f.get('output',{}).get('a_target',0.)})
+              if f.get('leads'):
+                streams[route]['radarState'].append({'t':sv.get('radarState',{}).get('mono_ns',f['mono_ns']),
+                  'valid':sv.get('radarState',{}).get('valid',False),'leadOne':f['leads'][0]})
+              ys,xs,ps=[lat.get(k,[]) for k in ('lane_y0','lane_x0','lane_probs')];center=None
+              if min(len(ys),len(xs),len(ps))>=3 and all(v is not None for v in (ys[1],ys[2],xs[1],xs[2])):
+                if min(ps[1],ps[2])>=.8 and max(abs(xs[1]),abs(xs[2]))<.1 and 2.5<=abs(ys[2]-ys[1])<=4.5:center=(ys[1]+ys[2])/2
+              streams[route]['modelV2'].append({'t':f.get('model_mono_ns',f['mono_ns']),'valid':sv.get('modelV2',{}).get('valid',False),'lane_center_y_m':center})
+          if row.get('kind')=='video_index' and route:
+            x=row['index'];indexes[route,int(x['segmentNum'])].append({'native_sof':int(x['timestampSof']),
+              'native_eof':int(x['timestampEof']),'received_t':row['source_log_mono_ns'],'frameId':int(x['frameId']),'segmentId':int(x['segmentId'])})
           if row.get('kind') == 'sample' and route:
             for k,v in row.get('services',{}).items():
               streams[route][k].append({'t':v.get('mono_ns',row['mono_ns']), 'valid':v.get('valid'), **v.get('data',{})})
@@ -180,7 +219,8 @@ def collect(inputs, schema_dir):
             if KEY in text:
               f=unwrap(json.loads(text))
               if f:
-                frames.append({**f,'route':route})
+                if f.get('record_type','frame')=='frame':frames.append({**f,'route':route})
+                else:errors.append({'producer':f.get('producer'),'error':f.get('last_error','producer error')})
             continue
           else:
             continue
@@ -264,11 +304,27 @@ def evaluate_route(route, ss, frames, native=False):
           reasons.append('incomplete_detailed_window')
         pair['integrity_issues']=sorted(set(pair['integrity_issues']+reasons))
         if pair['integrity_issues']:pair['classification']='unknown'
-        release=next((r['t'] for r in ss.get('longitudinalPlan',[]) if lo<=r['t']<=c['t'] and not r.get('shouldStop',True)),None)
-        command=next((r['t'] for r in ss.get('carControl',[]) if lo<=r['t']<=c['t'] and r.get('accel',r.get('actuators',{}).get('accel',0))>.1),None)
-        starts.append({'lead_detection_ns':lt,'planner_release_ns':release,'positive_command_ns':command,'ego_moving_ns':c['t'],'ego10_ns':end,
-                       'gap_at_move':lead.get('dRel'),'comparison':pair})
-        events.append({'route':route,'t':lo,'kind':'재출발 단계 검토','value':round((c['t']-lt)/1e9,3) if lt else None,'status':pair['classification']})
+        def phase_edge(key,predicate):
+          before=at(key,lo)
+          active=predicate(before) if before is not None else None
+          if active is True:return {'mono_ns':None,'status':'already_true_at_lead_threshold'}
+          for row in ss.get(key,[]):
+            if lo<row['t']<=c['t']:
+              value=predicate(row)
+              if value and active is False:return {'mono_ns':row['t'],'status':'observed_edge'}
+              active=value
+          return {'mono_ns':None,'status':'not_observed'}
+        phases={
+          'planner_release':phase_edge('longitudinalPlan',lambda r:not r.get('shouldStop',True)),
+          'long_control_release':phase_edge('controlsState',lambda r:r.get('longControlState') in ('starting','pid')),
+          'cruise_standstill_release':phase_edge('carState',lambda r:not r.get('cruiseState',{}).get('standstill',True)),
+          'positive_command':phase_edge('carControl',lambda r:r.get('accel',r.get('actuators',{}).get('accel',0))>.1)}
+        previous_diff=[r['mono_ns'] for r in frames if stopped<=r['mono_ns']<lo and abs(r['comparison']['30']['applied_ceiling']-r['comparison']['40']['applied_ceiling'])>1e-9]
+        pair['last_different_ceiling_during_standstill_ns']=max(previous_diff) if previous_diff else None
+        launch={'lead_v_gt_0p3_ns':lt,'phases':phases,'ego_moving_ns':c['t'],'ego10_ns':end,
+                'gap_at_move':lead.get('dRel'),'comparison':pair}
+        starts.append(launch)
+        events.append({'route':route,'t':lo,'kind':'재출발 단계 검토','value':round((c['t']-lt)/1e9,3) if lt else None,'status':pair['classification'],'details':launch})
       stopped=last_stop=None
   last=None
   for r in ss.get('selfdriveState',[]):
@@ -287,9 +343,11 @@ def media_prepare(videos,indexes,offsets,out):
   for (route,segment),path in sorted(videos.items()):
     target=out/'media'/(hashlib.sha256(route.encode()).hexdigest()[:12]+'-'+str(segment)+'.mp4')
     try:
-      subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(path),'-an','-c:v','copy','-movflags','+faststart',str(target)],check=True,capture_output=True,timeout=60)
+      subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(path),'-an','-c:v','copy','-avoid_negative_ts','make_zero','-movflags','+faststart',str(target)],check=True,capture_output=True,timeout=60)
       p=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries','frame=best_effort_timestamp_time','-of','json',str(target)],check=True,capture_output=True,text=True,timeout=60)
       pts=[float(x['best_effort_timestamp_time']) for x in json.loads(p.stdout)['frames']]
+      if not pts or abs(pts[0]) > .001 or any(b<a for a,b in zip(pts,pts[1:])):
+        raise ValueError('MP4 presentation origin/order is not qualified')
       idx=sorted({x['segmentId']:x for x in indexes.get((route,segment),[])}.values(),key=lambda x:x['segmentId'])
       if not idx or len(idx)!=len(pts) or [x['segmentId'] for x in idx]!=list(range(len(pts))):
         raise ValueError('encoder index/video frame coverage mismatch')
@@ -314,7 +372,7 @@ def render(result,out):
   page='''<!doctype html><html lang="ko"><meta charset="utf-8"><title>LX3 주행 품질 검토</title>
 <style>body{background:#101820;color:#e7edf1;font:16px system-ui;margin:24px}video{width:100%;max-height:55vh;background:black}button,select{font:inherit;padding:8px;margin:4px}table{border-collapse:collapse;width:100%}td,th{padding:8px;border-bottom:1px solid #456;text-align:left}canvas{width:100%;height:180px;background:#192b38}small{color:#b8cad5}.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:20px}@media(max-width:900px){.grid{display:block}}#events{max-height:62vh;overflow:auto}</style>
 <h1>LX3 주행 품질 검토</h1><p>로그 수치와 영상을 함께 확인합니다. 자동 점수·설정 변경은 하지 않습니다.</p>
-<div id="summary"></div><div class="grid"><div><video id="video" controls></video><p id="context"></p><canvas id="chart" width="1000" height="180"></canvas>
+<div id="summary"></div><div class="grid"><div><video id="video" controls></video><p id="context"></p><details><summary>선택 구간의 단계·비교 근거</summary><pre id="details" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details><canvas id="chart" width="1000" height="180"></canvas>
 <small>선: 속도(파랑), 가속도(주황). 각 축은 보기용 정규화이며 수치는 선택 항목에 표시됩니다.</small><p><button onclick="rate('편안함')">편안함</button><button onclick="rate('불편함')">불편함</button><button onclick="rate('운전자 개입')">운전자 개입</button><button onclick="save()">평가 저장</button></p></div><div id="events"></div></div>
 <p>차선 편차는 모델 추정이며 실제 차선 위치의 정답이 아닙니다. 가속도 미분은 센서 잡음의 영향을 받습니다. 설정별 상한 차이는 실제 명령 차이나 플라시보의 증명이 아닙니다. 영상 연결이 없거나 기록이 끊긴 항목은 미확인으로 남깁니다.</p>
 <script>const report=__DATA__;let selected=null;const ratings=[];const video=document.getElementById('video');
@@ -322,6 +380,7 @@ const events=report.routes.flatMap(r=>r.events).sort((a,b)=>a.route.localeCompar
 document.getElementById('summary').textContent=report.routes.map(r=>`${r.route}: 재출발 ${r.launches.length}회, |jerk|95% ${r.metrics.jerk_abs_p95_mps3?.toFixed(2)??'미확인'}, 중앙편차 추정95% ${r.metrics.model_center_abs_p95_m?.toFixed(2)??'미확인'}m`).join(' / ');
 const box=document.getElementById('events');events.forEach((e,i)=>{const b=document.createElement('button');b.textContent=`${i+1}. ${e.kind} ${e.value??''} ${e.video?'▶':'영상 미연결'}`;b.onclick=()=>choose(i);box.append(b,document.createElement('br'))});
 function choose(i){selected=i;const e=events[i];document.getElementById('context').textContent=`${e.kind} / ${e.status} / ${e.value??''}${e.video?' / 영상 오차 '+e.video.match_error_ms.toFixed(1)+'ms':''}`;
+document.getElementById('details').textContent=e.details?JSON.stringify(e.details,null,2):'해당 항목의 추가 단계 기록 없음';
 if(e.video){if(video.getAttribute('src')!==e.video.file){video.src=e.video.file;video.onloadedmetadata=()=>video.currentTime=e.video.pts}else video.currentTime=e.video.pts}draw(e)}
 function draw(e){const c=document.getElementById('chart'),x=c.getContext('2d');x.clearRect(0,0,c.width,c.height);const rows=report.routes.find(r=>r.route===e.route).plot.filter(r=>Math.abs(r.t-e.t)<8e9);for(const [field,color,scale,base] of [['speed','#5dcfff',100,150],['accel','#ffbd69',5,90]]){x.strokeStyle=color;x.beginPath();rows.forEach((r,i)=>{const xx=500+(r.t-e.t)/8e9*500,yy=base-r[field]/scale*100;i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke()}x.strokeStyle='#fff';x.beginPath();x.moveTo(500,0);x.lineTo(500,180);x.stroke()}
 function rate(value){if(selected===null)return;ratings.push({route:events[selected].route,mono_ns:events[selected].t,rating:value});document.getElementById('context').textContent+=' / 평가: '+value}

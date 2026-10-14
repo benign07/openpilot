@@ -18,6 +18,7 @@ from tools.lx3_drive_quality import frame_integrity, match_video, render, summar
 def frame(seq=1, **changes):
   t=seq*50_000_000
   return {'schema':1,'producer':'a'*32,'sequence':seq,'cycle':seq,'mono_ns':t,'settings_generation':1,
+          'settings':{'traffic':30},'actual_arm':30,'bounds':{'after_approach':1.105,'mpc_max':1.105},
           'comparison':{'30':{'applied_ceiling':1.105},'40':{'applied_ceiling':1.04}},
           'services':{k:{'mono_ns':t,'valid':True,'alive':True} for k in (
             'carState','carControl','controlsState','radarState','modelV2','selfdriveState')},**changes}
@@ -95,7 +96,8 @@ def test_logging_follows_actual_plan_publication():
 @pytest.mark.parametrize('change,reason',[
   ({'sequence':4},'planner_evidence_gap'),({'cycle':5},'planner_evidence_gap'),
   ({'settings_generation':2},'producer_or_settings_changed'),
-  ({'producer_errors':1},'producer_error_observed'),({'services':{}},'missing_input_validity')])
+  ({'producer_errors':1},'producer_error_observed'),({'services':{}},'missing_input_validity'),
+  ({'actual_arm':20},'comparison_excludes_actual_setting')])
 def test_missing_or_changed_evidence_never_claims_no_effect(change,reason):
   result=summarize_frames([frame(),frame(2,**change)])
   assert result['classification']=='unknown' and reason in result['integrity_issues']
@@ -103,7 +105,7 @@ def test_missing_or_changed_evidence_never_claims_no_effect(change,reason):
 
 
 def test_complete_equal_ceiling_is_not_a_placebo_or_plan_identity_claim():
-  rows=[frame(i,comparison={'30':{'applied_ceiling':1.3},'40':{'applied_ceiling':1.3}}) for i in range(1,5)]
+  rows=[frame(i,comparison={'30':{'applied_ceiling':1.3},'40':{'applied_ceiling':1.3}},bounds={'after_approach':1.3,'mpc_max':1.3}) for i in range(1,5)]
   assert summarize_frames(rows)['classification']=='same_ceiling_on_recorded_inputs'
   assert summarize_frames([])['classification']=='unknown'
 
@@ -136,3 +138,18 @@ def test_recorder_storage_and_schema_compatible_export(tmp_path):
   lines=[json.loads(line) for line in gzip.open(next(tmp_path.glob('*.jsonl.gz')),'rt')]
   assert lines[-1]['kind']=='longitudinal_evidence'
   assert lines[-1]['comparison']==row['comparison']
+
+
+def test_local_video_server_supports_range_seeking(tmp_path):
+  from functools import partial
+  from http.server import ThreadingHTTPServer
+  import threading
+  from urllib.request import Request,urlopen
+  from tools.serve_lx3_quality import Handler
+  (tmp_path/'a.mp4').write_bytes(b'0123456789')
+  server=ThreadingHTTPServer(('127.0.0.1',0),partial(Handler,directory=str(tmp_path)))
+  thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+  try:
+    with urlopen(Request(f'http://127.0.0.1:{server.server_port}/a.mp4',headers={'Range':'bytes=3-6'})) as r:
+      assert r.status==206 and r.headers['Content-Range']=='bytes 3-6/10' and r.read()==b'3456'
+  finally:server.shutdown();thread.join();server.server_close()

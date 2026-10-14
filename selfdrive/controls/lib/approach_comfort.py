@@ -226,6 +226,11 @@ class LongitudinalEvidence:
     self.settings_generation = 0
     self.previous_settings = None
     self.cooldown = 0
+    self.last_error = None
+
+  def note_error(self, exc):
+    self.errors += 1
+    self.last_error = f'{type(exc).__name__}: {str(exc)[:140]}'
 
   def due(self, high_rate):
     self.cycle += 1
@@ -243,6 +248,7 @@ class LongitudinalEvidence:
       row = {'schema': 1, 'producer': self.producer, 'sequence': self.sequence,
              'cycle': self.cycle, 'mono_ns': time.monotonic_ns(),
              'producer_errors': self.errors, 'previous_max_emit_us': self.max_emit_us,
+             'last_error': self.last_error, 'record_type': 'frame',
              **build()}
       boot_clock = getattr(time, 'CLOCK_BOOTTIME', None)
       before = time.monotonic_ns()
@@ -261,7 +267,7 @@ class LongitudinalEvidence:
         self.cooldown = 20
         raise ValueError('diagnostic build exceeded 5ms; skip one second')
       sink({self.KEY: row})
-    except Exception:
-      self.errors += 1
+    except Exception as exc:
+      self.note_error(exc)
     finally:
       self.max_emit_us = max(self.max_emit_us, (time.perf_counter_ns() - started) / 1000.)
