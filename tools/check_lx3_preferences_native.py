@@ -39,7 +39,7 @@ def main():
     cs=sm['carState'];cs.vEgo=12.;cs.useLaneLineSpeed=5;cs.canValid=True
     cs.leftLaneLine=21;cs.rightLaneLine=10;sm['carControl'].latActive=True
     sm['carrotMan'].vTurnSpeed=200
-    md=sm['modelV2'];t=ModelConstants.T_IDXS.tolist();x=(ModelConstants.T_IDXS*12).tolist()
+    md=sm['modelV2'];t=list(ModelConstants.T_IDXS);x=(np.asarray(t)*12).tolist()
     for name in ('position','orientation','orientationRate','velocity','acceleration'):
       value=getattr(md,name);value.t=t;value.x=x if name=='position' else [12. if name=='velocity' else 0.]*33
       value.y=[-0.0]*33;value.z=[0.]*33
