@@ -36,10 +36,39 @@ def inject_driving_preferences(data):
       'ctitle': title, 'cdescr': description, 'min': lo, 'max': hi, 'default': default,
       'unit': 1, 'virtual': True})
     names.append(name)
-  if names and isinstance(data.get('menu'), list):
-    data['menu'].append({'id': 'lx3_preferences', 'ko': 'LX3 주행 보완', 'en': 'LX3 preferences',
-      'zh': 'LX3 preferences', 'groups': [{'id': 'lx3_preferences_group', 'ko': '시험·기록',
-        'en': 'Test and record', 'zh': 'Test and record', 'params': names}]})
+  # Development controls have one prominent home. Move existing comfort/gap
+  # entries by name, preserving defaults/limits and profile/favorite identity.
+  sections = [
+    ('launch_follow','재출발 추종','Launch following',['LaunchFollowStrength']),
+    ('lateral_margin','차선 내 측방 여유','Within-lane margin',
+      ['YellowLineBiasCm','NearbyVehicleBiasCm','LateralMarginShadow']),
+    ('approach_comfort','부드러운 감속·차간거리','Approach comfort and gap',
+      ['ApproachComfortEnabled','ApproachCoastStrength','ApproachBrakeMargin',
+       'ApproachStopSmooth','ApproachTrafficCalm','ApproachFlexibleGap','ApproachFlexibleGapMin']),
+  ]
+  definitions = {p.get('name'):p for p in data.get('params',[])}
+  development = {name for _,_,_,items in sections for name in items if name in definitions}
+  for name in development:
+    definitions[name].update(group='개발 중 기능',egroup='Development features',cgroup='Development features')
+  if development and isinstance(data.get('menu'),list):
+    def move(nodes):
+      out=[]
+      for node in nodes:
+        if node.get('id') in ('lx3_preferences','development_features'):continue
+        previous=node.get('params',[])
+        node['params']=[name for name in previous if name not in development]
+        children=node.get('groups',[])
+        if children:node['groups']=move(children)
+        if previous or children:
+          if not node.get('params') and not node.get('groups'):continue
+        out.append(node)
+      return out
+    data['menu']=move(data['menu'])
+    groups=[{'id':sid,'ko':ko,'en':en,'zh':en,'params':[n for n in items if n in definitions]}
+            for sid,ko,en,items in sections if any(n in definitions for n in items)]
+    data['menu'].insert(0,{'id':'development_features','ko':'개발 중 기능','en':'Development features',
+      'zh':'Development features','groups':[{'id':'lx3_preferences_group','ko':'신기능 모아보기',
+        'en':'New features','zh':'New features','groups':groups}]})
   return data
 
 

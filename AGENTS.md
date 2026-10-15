@@ -26,6 +26,9 @@ through Carrot HUD, rather than stopping after a source-branch push.
 - Record GitHub publication, actual installation and functional/road
   verification as separate states. Keep Carrot HUD 1.0.27's download/API contract.
   The EV9 work is on hold; LX3 releases must not be installed on it.
+- Keep new and in-development driving options together in the first
+  "개발 중 기능" settings category. Preserve parameter names/values and avoid
+  duplicate entries in ordinary menus. Group movement never enables a feature.
 - For same-topic Claude cross-review, the owner's 2026-10-14 instruction uses
   the installed Fable CLI. Use max for difficult control, causality, concurrency
   and provenance questions; high for substantial correction review; medium

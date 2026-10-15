@@ -190,3 +190,32 @@ def test_explicit_defaults_preserves_corrupt_preference_file(tmp_path):
   assert defaults['LaunchFollowStrength']==defaults['YellowLineBiasCm']==0
   assert defaults['LateralMarginShadow']==1 and not p.error
   assert next(tmp_path.glob('prefs.json.invalid.*')).read_bytes()==b'broken'
+
+
+def test_development_menu_keeps_parameter_contract_and_has_no_duplicate_entries():
+  import copy
+  from pathlib import Path
+  from collections import Counter
+  from openpilot.selfdrive.carrot.server.services.settings import inject_driving_preferences,build_menu_categories
+  path=Path(__file__).resolve().parents[3]/'selfdrive/carrot_settings.json'
+  original=json.loads(path.read_text(encoding='utf-8'))
+  data=inject_driving_preferences(copy.deepcopy(original))
+  def names(nodes):
+    for node in nodes:
+      yield from node.get('params',[])
+      yield from names(node.get('groups',[]))
+  before=Counter(names(original['menu']));after=Counter(names(data['menu']))
+  assert set(after)==set(before)|set(DrivingPreferences().values)
+  assert all(value==1 for value in after.values())
+  assert data['menu'][0]['id']=='development_features' and data['menu'][0]['ko']=='개발 중 기능'
+  moved=set(names([data['menu'][0]]))
+  assert set(DrivingPreferences().values)<=moved
+  assert {'ApproachComfortEnabled','ApproachFlexibleGap','ApproachTrafficCalm'}<=moved
+  by_name={p['name']:p for p in data['params']}
+  for item in original['params']:
+    assert {k:v for k,v in item.items() if k not in ('group','egroup','cgroup')}=={
+      k:v for k,v in by_name[item['name']].items() if k not in ('group','egroup','cgroup')}
+  categories=build_menu_categories(data,by_name)
+  assert categories[0]['groups'][0]['id']=='lx3_preferences_group'
+  assert categories[0]['groups'][0]['count']==len(moved)
+  assert inject_driving_preferences(copy.deepcopy(data))==data
