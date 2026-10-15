@@ -9,7 +9,7 @@ from ..live_runtime.broker import RealtimeBroker
 from ..live_runtime.normalize import to_transport_safe
 from ..config import OFFROAD_ASSETS_DIR
 from ..services.device_info import get_calibration_status, get_device_network
-from ..services.params import HAS_PARAMS, Params, restore_param_values_validated, set_param_value
+from ..services.params import HAS_PARAMS, Params, restore_param_values_validated, driving_preferences
 from ..services.setting_safety import require_parked
 from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES
 from ..services.settings import get_settings_cached
@@ -315,8 +315,7 @@ async def api_set_default(request: web.Request) -> web.Response:
     # as on individual changes. Reject before ANY native settings are reset.
     if virtual:
       await require_parked(request)
-      for name, value in virtual.items():
-        set_param_value(name, value)
+      virtual = driving_preferences.reset_defaults()
     restored = restore_param_values_validated(values)
     result = restored.get("result") or {}
     ok = int(result.get("fail_cnt") or 0) == 0

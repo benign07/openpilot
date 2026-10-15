@@ -56,6 +56,7 @@ class LateralMargin:
     self.last_steer = -10_000_000_000
     self.hold = [0, 0]
     self.previous_shadow = None
+    self.withdraw_context = (False,False,[],0.)
 
   def reset(self, reason):
     self.value = 0.0
@@ -69,7 +70,20 @@ class LateralMargin:
     self.yellow_since = None
     self.hold = [0, 0]
     self.value += max(-0.05*self.dt, min(0.05*self.dt, -self.value))
-    self.evidence = {'qualified':False}
+    left_occupied,right_occupied,corridor,legacy_offset=self.withdraw_context
+    lower,upper=-.1,.1
+    for left,right,path,yaw in corridor:
+      if all(math.isfinite(v) for v in (left,right,path,yaw)):
+        footprint=1.12+2.53*abs(math.sin(yaw))
+        lower=max(lower,left+footprint+.30-path)
+        upper=min(upper,right-footprint-.30-path)
+    if math.isfinite(legacy_offset):
+      lower=max(lower,-.4-legacy_offset);upper=min(upper,.4-legacy_offset)
+    if left_occupied:lower=max(0.,lower)
+    if right_occupied:upper=min(0.,upper)
+    self.value=max(lower,min(upper,self.value)) if lower<=0.<=upper else 0.
+    self.evidence = {'qualified':False,'lower':lower,'upper':upper,
+                     'occupied':[left_occupied,right_occupied]}
     return 0.0 if shadow else self.value
 
   def update(self, settings, radar, *, now_ns, radar_ns, valid, lane_mode, lat_active,
@@ -78,6 +92,21 @@ class LateralMargin:
              corridor, legacy_offset):
     yellow_cm, nearby_cm = settings['YellowLineBiasCm'], settings['NearbyVehicleBiasCm']
     shadow = bool(settings['LateralMarginShadow'])
+    # Hard side/corridor vetoes also apply during a routine withdrawal. A low
+    # line probability must not leave a historical bias pointing at traffic.
+    occupied_veto=[bool(left_occupied),bool(right_occupied)]
+    for side,leads in enumerate((radar.leadsLeft,radar.leadsRight)):
+      sign=1 if side==0 else -1
+      for lead in leads:
+        if (lead.status and all(math.isfinite(v) for v in (lead.dRel,lead.dPath,lead.yRel)) and
+            0<lead.dRel<50 and 0<lead.dPath*sign<5 and lead.yRel*sign>0):
+          occupied_veto[side]=True
+    for lead in radar.leadsCutIn:
+      if lead.status and (not math.isfinite(lead.dRel) or 0<lead.dRel<40):
+        y=getattr(lead,'yRel',float('nan'))
+        if not math.isfinite(y) or abs(y)<.1:occupied_veto=[True,True]
+        else:occupied_veto[0 if y>0 else 1]=True
+    self.withdraw_context=(*occupied_veto,corridor,legacy_offset)
     if not yellow_cm and not nearby_cm:
       return self.reset('off')
     if self.previous_shadow != shadow:

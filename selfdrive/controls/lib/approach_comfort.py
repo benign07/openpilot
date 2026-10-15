@@ -74,22 +74,33 @@ class DrivingPreferences:
       if self.error:
         raise ValueError('driving preference file needs repair; preserved original')
       values[name] = value
-      self.path.parent.mkdir(parents=True, exist_ok=True)
-      temporary = self.path.with_name(self.path.name + '.' + uuid.uuid4().hex + '.tmp')
-      try:
-        with temporary.open('x', encoding='utf-8') as stream:
-          json.dump({'schema': 1, 'values': values}, stream, allow_nan=False)
-          stream.flush()
-          os.fsync(stream.fileno())
-        os.replace(temporary, self.path)
-        if os.name == 'posix':
-          fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
-          try: os.fsync(fd)
-          finally: os.close(fd)
-      finally:
-        temporary.unlink(missing_ok=True)
+      return self._write(values)[name]
+
+  def reset_defaults(self):
+    with _PREFERENCE_LOCK:
       self.signature = None
-      return self.read()[name]
+      self.read()
+      if self.error and (self.path.exists() or self.path.is_symlink()):
+        os.replace(self.path, self.path.with_name(self.path.name+'.invalid.'+uuid.uuid4().hex))
+      return self._write({k:v[2] for k,v in DRIVING_PREFERENCES.items()})
+
+  def _write(self, values):
+    self.path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = self.path.with_name(self.path.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+      with temporary.open('x', encoding='utf-8') as stream:
+        json.dump({'schema': 1, 'values': values}, stream, allow_nan=False)
+        stream.flush()
+        os.fsync(stream.fileno())
+      os.replace(temporary, self.path)
+      if os.name == 'posix':
+        fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    finally:
+      temporary.unlink(missing_ok=True)
+    self.signature = None
+    return self.read()
 
 
 class LaunchFollow:

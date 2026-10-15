@@ -214,6 +214,7 @@ def main():
     parser.error('--url is required for collection')
   args.out.mkdir(parents=True, exist_ok=True)
   while True:
+    started=time.monotonic()
     try:
       count = 0 if args.analyze_only else sync(args.url, args.out)
       result = analyze(args.out)
@@ -226,7 +227,23 @@ def main():
         import sys
         cmd=[sys.executable,str(Path(__file__).with_name('lx3_drive_quality.py')),'--input',str(args.out),'--out',str(args.out/'quality'),'--recent-chunks','400']
         if args.video:cmd.append('--video')
-        subprocess.run(cmd,check=True,timeout=300)
+        # The receiver owns the entire process tree. Leave headroom below its
+        #290s budget; an inner timeout must terminate its decoder children too.
+        remaining=max(1.,270.-(time.monotonic()-started))
+        supervised=os.environ.get('CARROT_ANALYSIS_SUPERVISED')=='1'
+        process=subprocess.Popen(cmd,start_new_session=os.name!='nt' and not supervised)
+        try:
+          code=process.wait(timeout=remaining)
+          if code:raise subprocess.CalledProcessError(code,cmd)
+        except subprocess.TimeoutExpired:
+          if os.name=='nt':subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],capture_output=True,timeout=10)
+          else:
+            import signal
+            # Under the receiver this kills only its dedicated analysis group,
+            # including this parent, never the receiver or unrelated processes.
+            os.killpg(os.getpgid(process.pid),signal.SIGKILL)
+          process.wait()
+          raise
       print(json.dumps({'downloaded': count, 'analysis_pending_chunks':result['analysis_pending_chunks'], **result['coverage']}), flush=True)
     except (OSError, ValueError, KeyError) as exc:
       print(f'Sync incomplete; records preserved: {exc}', flush=True)

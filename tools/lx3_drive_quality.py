@@ -490,7 +490,9 @@ def main():
   media,video_errors=media_prepare(videos,indexes,offsets,args.out,max(0,min(200,args.max_new_videos))) if args.video else ({},[])
   for r in routes:
     for event in r['events']:event['video']=match_video(event,media)
-  result={'schema':1,'recent_chunk_limit':max(0,args.recent_chunks),'routes':routes,'source_sha256':hashes,'read_errors':errors,'video_errors':video_errors,
+  result={'schema':1,'recent_chunk_limit':max(0,args.recent_chunks),
+          'window_order':'PC receipt/file modification time, not necessarily driving date',
+          'routes':routes,'source_sha256':hashes,'read_errors':errors,'video_errors':video_errors,
           'detailed_evidence_frames':len(frames),'video_segments_matched':len(media),
           'evaluation_scope':'observational_metrics_and_video_review_not_ground_truth_or_placebo_detector',
           'control_changes':False,'raw_data_uploaded':False}

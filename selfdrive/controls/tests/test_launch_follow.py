@@ -169,7 +169,7 @@ def test_defaults_reset_virtual_store_and_parked_rejection_precedes_native_reset
   scope={'web':web,'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'HAS_PARAMS':True,
     'get_settings_cached':lambda: ({},{},metadata,[]),
     '_is_carrot_default_reset_param':lambda *args:True,
-    'set_param_value':p.set,'restore_param_values_validated':restore}
+    'driving_preferences':p,'restore_param_values_validated':restore}
   exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),scope)
   async def blocked(_):raise web.HTTPConflict(text='PARKED_REQUIRED')
   scope['require_parked']=blocked
@@ -180,3 +180,13 @@ def test_defaults_reset_virtual_store_and_parked_rejection_precedes_native_reset
   response=asyncio.run(scope['api_set_default'](None))
   assert response.status==200 and native==[{'stock':1}]
   assert p.read()['YellowLineBiasCm']==0 and p.read()['LateralMarginShadow']==1
+
+
+def test_explicit_defaults_preserves_corrupt_preference_file(tmp_path):
+  path=tmp_path/'prefs.json';path.write_bytes(b'broken')
+  p=DrivingPreferences(path)
+  assert p.read()['YellowLineBiasCm']==0 and p.error
+  defaults=p.reset_defaults()
+  assert defaults['LaunchFollowStrength']==defaults['YellowLineBiasCm']==0
+  assert defaults['LateralMarginShadow']==1 and not p.error
+  assert next(tmp_path.glob('prefs.json.invalid.*')).read_bytes()==b'broken'

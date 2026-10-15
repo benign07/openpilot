@@ -123,6 +123,18 @@ def test_shadow_computes_laneless_candidates_without_application():
   assert h.value==pytest.approx(-.05) and h.evidence['qualified']
 
 
+@pytest.mark.parametrize('veto',['oem','cutin','narrow_corridor'])
+def test_hard_veto_overrides_smoothing_even_with_unqualified_lines(veto):
+  h=engine();r=radar();s={'YellowLineBiasCm':10,'NearbyVehicleBiasCm':0,'LateralMarginShadow':0}
+  for i in range(200):apply(h,r,i,settings=s)
+  assert h.value<-.099
+  changes={'probabilities':[.79,.95]}
+  if veto=='oem':changes['left_occupied']=True
+  elif veto=='cutin':r.leadsCutIn=[NS(status=True,dRel=20.,yRel=1.)]
+  else:changes['corridor']=[(-1.42,1.7,0.,0.)]*3
+  assert apply(h,r,200,settings=s,**changes)==0.
+
+
 def test_legacy_total_and_final_path_bound_override_filter_history():
   h=engine();r=radar();s={'YellowLineBiasCm':10,'NearbyVehicleBiasCm':0,'LateralMarginShadow':0}
   for i in range(180):apply(h,r,i,settings=s,legacy_offset=-.39)
