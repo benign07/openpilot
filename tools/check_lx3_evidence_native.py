@@ -82,6 +82,21 @@ def main():
     try:
       planner.update(sm,carrot)
       assert planner.long_evidence_pending is not None,planner.long_evidence.last_error
+      # Below0.1 the turn helper aliases its input list. Force the real
+      # approach to lower the limit and require the recorded table to stay1.3.
+      from openpilot.selfdrive.controls.lib.approach_comfort import ApproachRequest
+      original_update=planner.approach.update
+      planner.approach.update=lambda *a,**kw:ApproachRequest(0.8)
+      original_accel=carrot.get_carrot_accel
+      carrot.get_carrot_accel=lambda _:1.3
+      try:
+        planner.update(sm,carrot)
+        bounds=planner.long_evidence_pending['bounds']
+        assert bounds['table_max']==1.3 and bounds['after_approach']<1.3,bounds
+      finally:
+        planner.approach.update=original_update
+        carrot.get_carrot_accel=original_accel
+      result['standstill_table_max_before_alias_mutation']=True
       original=planner.long_evidence_pending['state']['v_ego']
       sm['carState'].vEgo=99.  # A lazy closure would silently change the evidence.
       planner.publish(sm,NS(send=lambda *args:sent.append(args)),carrot)

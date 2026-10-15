@@ -8,6 +8,9 @@ import sys
 import threading
 import zlib
 from typing import Any, Dict, List, Optional
+from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, DrivingPreferences
+
+driving_preferences = DrivingPreferences()
 
 try:
   import brotli
@@ -140,6 +143,8 @@ def _read_param_value(params: "Params", name: str, default: Any) -> Any:
 # Single-key get/set (used by features/params and tools)
 # -----------------------
 def get_param_value(name: str, default: Any) -> Any:
+  if name in DRIVING_PREFERENCES:
+    return driving_preferences.read()[name]
   # 'GitPullTime' is a synthetic key backed by services/git_state.py.
   # Imported lazily to avoid a circular import at module load.
   from .git_state import read_custom_meta_value
@@ -161,8 +166,12 @@ def get_param_values(names: list[str], defaults: Optional[Dict[str, Any]] = None
   from .git_state import read_custom_meta_value
 
   values: Dict[str, Any] = {}
+  virtual_values = driving_preferences.read() if any(n in DRIVING_PREFERENCES for n in names) else {}
   if not HAS_PARAMS:
     for name in names:
+      if name in virtual_values:
+        values[name] = virtual_values[name]
+        continue
       custom_value = read_custom_meta_value(name)
       if custom_value is not None:
         values[name] = custom_value
@@ -170,12 +179,17 @@ def get_param_values(names: list[str], defaults: Optional[Dict[str, Any]] = None
         values[name] = _mem_store.get(name, defaults.get(name, 0))
     return values
 
-  params = Params()
+  params = None
   for name in names:
+    if name in virtual_values:
+      values[name] = virtual_values[name]
+      continue
     custom_value = read_custom_meta_value(name)
     if custom_value is not None:
       values[name] = custom_value
       continue
+    if params is None:
+      params = Params()
     values[name] = _read_param_value(params, name, defaults.get(name, 0))
   return values
 
@@ -257,6 +271,9 @@ def put_typed(params: "Params", key: str, value: Any, p: Optional[Dict[str, Any]
 
 
 def set_param_value(name: str, value: Any, p: Optional[Dict[str, Any]] = None) -> None:
+  if name in DRIVING_PREFERENCES:
+    driving_preferences.set(name, value)
+    return
   if not HAS_PARAMS:
     _mem_store[name] = str(value)
     return

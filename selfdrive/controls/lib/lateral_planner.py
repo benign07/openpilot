@@ -11,7 +11,8 @@ from cereal import log
 
 from openpilot.common.params import Params
 #from openpilot.selfdrive.controls.lib.lane_planner import LanePlanner
-from openpilot.selfdrive.controls.lib.lane_planner_2 import LanePlanner
+from openpilot.selfdrive.controls.lib.lane_planner_2 import LanePlanner, LateralMargin
+from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences
 from collections import deque
 
 TRAJECTORY_SIZE = 33
@@ -73,6 +74,13 @@ class LateralPlanner:
     self.curve_speed = 0
     self.lanemode_possible_count = 0
     self.laneless_only = True
+    self.margin_supported = str(CP.carFingerprint) == 'HYUNDAI_PALISADE_LX3_HEV'
+    self.margin_preferences = DrivingPreferences()
+    self.margin_settings = self.margin_preferences.values.copy()
+    self.margin = LateralMargin()
+    self.margin_last_log = 0
+    self.margin_applied = 0.0
+    self.lane_curve_threshold = 0
 
   def reset_mpc(self, x0=None):
     if x0 is None:
@@ -92,6 +100,9 @@ class LateralPlanner:
       LATERAL_ACCEL_COST = self.params.get_float("LatMpcAccelCost") * 0.01
       LATERAL_JERK_COST = self.params.get_float("LatMpcJerkCost") * 0.01
       STEERING_RATE_COST = self.params.get_float("LatMpcSteeringRateCost")
+      if self.margin_supported:
+        self.margin_settings = self.margin_preferences.read()
+        self.lane_curve_threshold = self.params.get_int('UseLaneLineCurveSpeed')
 
     # clip speed , lateral planning is not possible at 0 speed
     measured_curvature = sm['controlsState'].curvature
@@ -161,6 +172,59 @@ class LateralPlanner:
     #self.lanelines_active = True if self.LP.d_prob > 0.3 and self.LP.lanefull_mode else False
 
     self.path_xyz[:, 1] += self.pathOffset
+
+    self.margin_applied = 0.0
+    if self.margin_supported and any(self.margin_settings[k] for k in ('YellowLineBiasCm','NearbyVehicleBiasCm')):
+      cs=sm['carState'];now_ns=time.monotonic_ns()
+      valid=(cs.canValid and not cs.canTimeout and model_active and
+             all(sm.valid[k] and sm.alive[k] and 0<=now_ns-int(sm.logMonoTime[k])<=200_000_000
+                 for k in ('carState','carControl','radarState','modelV2')) and
+             abs(int(sm.logMonoTime['radarState'])-int(sm.logMonoTime['modelV2']))<=200_000_000)
+      corridor=[]
+      if (valid and len(md.laneLines)>=3 and
+          all(len(md.laneLines[i].x)==TRAJECTORY_SIZE and len(md.laneLines[i].y)==TRAJECTORY_SIZE
+              and np.all(np.diff(md.laneLines[i].x)>0) for i in (1,2))):
+        # Align final base path (including stock offsets) to actual line x.
+        left=np.interp(self.path_xyz[:,0],md.laneLines[1].x,md.laneLines[1].y)
+        right=np.interp(self.path_xyz[:,0],md.laneLines[2].x,md.laneLines[2].y)
+        if len(md.roadEdges)>=2 and len(md.roadEdgeStds)>=2:
+          for i in (0,1):
+            edge=md.roadEdges[i]
+            if (np.isfinite(md.roadEdgeStds[i]) and md.roadEdgeStds[i]<=0.2 and
+                len(edge.x)==TRAJECTORY_SIZE and len(edge.y)==TRAJECTORY_SIZE and np.all(np.diff(edge.x)>0)):
+              y=np.interp(self.path_xyz[:,0],edge.x,edge.y)
+              if i==0:left=np.maximum(left,y)
+              else:right=np.minimum(right,y)
+        corridor=[(float(l),float(r),float(p),float(yaw)) for l,r,p,yaw,t in
+                  zip(left,right,self.path_xyz[:,1],self.plan_yaw,self.t_idxs) if 0<=t<=2.0]
+        if len(corridor)<3:corridor=[]
+      self.margin_applied=self.margin.update(self.margin_settings,sm['radarState'],now_ns=now_ns,
+        radar_ns=int(sm.logMonoTime['radarState']),valid=valid,
+        lane_mode=self.lanelines_active and abs(self.curve_speed)>self.lane_curve_threshold,
+        lat_active=sm['carControl'].latActive,blinkers=cs.leftBlinker or cs.rightBlinker,
+        steering_pressed=cs.steeringPressed,maneuver=md.meta.desire!=log.Desire.none or carrot.atc_active,
+        speed=v_ego_car,curvature=measured_curvature,left_code=int(cs.leftLaneLine),right_code=int(cs.rightLaneLine),
+        left_occupied=cs.leftBlindspot,right_occupied=cs.rightBlindspot,
+        probabilities=list(md.laneLineProbs)[1:3],stds=list(md.laneLineStds)[1:3],
+        corridor=corridor,legacy_offset=float(self.LP.offset_total+self.pathOffset))
+      if self.margin_applied != 0.0:
+        self.path_xyz[:,1] += self.margin_applied
+      if now_ns-self.margin_last_log>=500_000_000 and any(self.margin_settings[k] for k in ('YellowLineBiasCm','NearbyVehicleBiasCm')):
+        self.margin_last_log=now_ns
+        try:
+          cloudlog.debug({'lx3_lateral_margin':{'schema':1,'mono_ns':now_ns,
+            'settings':dict(self.margin_settings),'target':self.margin.target,'filtered':self.margin.value,
+            'applied':self.margin_applied,'reason':self.margin.reason,
+            'lane_mode':self.lanelines_active,'left_code':int(cs.leftLaneLine),'right_code':int(cs.rightLaneLine),
+            'left_occupied':bool(cs.leftBlindspot),'right_occupied':bool(cs.rightBlindspot),
+            'legacy_offset':float(self.LP.offset_total+self.pathOffset),
+            'probabilities':list(md.laneLineProbs)[1:3],'stds':list(md.laneLineStds)[1:3],
+            'radar_mono_ns':int(sm.logMonoTime['radarState']),'model_mono_ns':int(sm.logMonoTime['modelV2']),
+            'scope':'bounded_preference_not_collision_avoidance_or_free_space_proof'}})
+        except Exception:
+          pass  # Diagnostic output cannot change the planner result.
+    else:
+      self.margin.reset('off')
 
     self.lat_mpc.set_weights(self.lateralPathCost, self.lateralMotionCost,
                              LATERAL_ACCEL_COST, LATERAL_JERK_COST,
@@ -265,6 +329,8 @@ class LateralPlanner:
     )
 
     lateralPlan.latDebugText = debugText
+    if self.margin_supported and any(self.margin_settings[k] for k in ('YellowLineBiasCm','NearbyVehicleBiasCm')):
+      lateralPlan.latDebugText += f" | margin={'shadow' if self.margin_settings['LateralMarginShadow'] else 'test'} {self.margin.value*100:.1f}cm {self.margin.reason}"
     #lateralPlan.latDebugText = self.latDebugText
     #lateralPlan.laneWidthLeft = float(self.DH.lane_width_left)
     #lateralPlan.laneWidthRight = float(self.DH.lane_width_right)

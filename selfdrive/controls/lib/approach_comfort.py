@@ -11,6 +11,148 @@ import json
 import math
 import time
 import uuid
+import os
+from pathlib import Path
+import threading
+
+
+# These are versioned application preferences, not native Params keys. A source
+# OTA must never bypass Params.check_key or require a new native Params binary.
+DRIVING_PREFERENCES = {
+  'LaunchFollowStrength': (0, 20, 0),
+  'YellowLineBiasCm': (0, 10, 0),
+  'NearbyVehicleBiasCm': (0, 10, 0),
+  'LateralMarginShadow': (0, 1, 1),
+}
+_PREFERENCE_LOCK = threading.RLock()
+
+
+class DrivingPreferences:
+  def __init__(self, path='/data/community/driving_preferences.json'):
+    self.path = Path(path)
+    self.signature = None
+    self.values = {k: v[2] for k, v in DRIVING_PREFERENCES.items()}
+    self.error = None
+
+  def read(self):
+    defaults = {k: v[2] for k, v in DRIVING_PREFERENCES.items()}
+    try:
+      stat = self.path.stat()
+      signature = (stat.st_mtime_ns, stat.st_size)
+      if signature == self.signature:
+        return dict(self.values)
+      if self.path.is_symlink() or not 0 < stat.st_size <= 8192:
+        raise ValueError('invalid driving preference file')
+      row = json.loads(self.path.read_text(encoding='utf-8'))
+      if not isinstance(row, dict) or row.get('schema') != 1 or not isinstance(row.get('values'), dict):
+        raise ValueError('unsupported driving preference schema')
+      values = row['values']
+      if set(values) - set(defaults):
+        raise ValueError('unknown driving preference')
+      for name, value in values.items():
+        lo, hi, _ = DRIVING_PREFERENCES[name]
+        if type(value) is not int or not lo <= value <= hi:
+          raise ValueError('invalid driving preference value')
+      self.values = {**defaults, **values}
+      self.error = None
+      self.signature = signature
+    except FileNotFoundError:
+      self.values, self.signature, self.error = defaults, None, None
+    except (OSError, ValueError, TypeError):
+      self.values, self.signature, self.error = defaults, None, 'invalid_preferences_features_off'
+    return dict(self.values)
+
+  def set(self, name, value):
+    if name not in DRIVING_PREFERENCES:
+      raise ValueError('unknown driving preference')
+    lo, hi, _ = DRIVING_PREFERENCES[name]
+    if type(value) is not int or not lo <= value <= hi:
+      raise ValueError('invalid driving preference value')
+    with _PREFERENCE_LOCK:
+      self.signature = None
+      values = self.read()
+      if self.error:
+        raise ValueError('driving preference file needs repair; preserved original')
+      values[name] = value
+      self.path.parent.mkdir(parents=True, exist_ok=True)
+      temporary = self.path.with_name(self.path.name + '.' + uuid.uuid4().hex + '.tmp')
+      try:
+        with temporary.open('x', encoding='utf-8') as stream:
+          json.dump({'schema': 1, 'values': values}, stream, allow_nan=False)
+          stream.flush()
+          os.fsync(stream.fileno())
+        os.replace(temporary, self.path)
+        if os.name == 'posix':
+          fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+          try: os.fsync(fd)
+          finally: os.close(fd)
+      finally:
+        temporary.unlink(missing_ok=True)
+      self.signature = None
+      return self.read()[name]
+
+
+class LaunchFollow:
+  """Optional positive ceiling allowance behind a confirmed opening lead.
+
+  It never changes starting permission, hold, physical obstacles or braking.
+  An increased capability is not a guaranteed command or reduced road gap.
+  """
+  def __init__(self, dt=0.05):
+    self.dt = dt
+    self.track = None
+    self.since_ns = self.last_ns = 0
+    self.stopped_ns = 0
+    self.extra = 0.0
+    self.reason = 'off'
+
+  def update(self, strength, radar, *, stamp_ns, eligible, should_stop, v_ego,
+             desired_distance, table_max, approach_active):
+    self.reason = 'off'
+    previous_extra, self.extra = self.extra, 0.0
+    lead = radar.leadOne
+    stamp_ok = stamp_ns > 0 and stamp_ns >= self.last_ns
+    lead_ok = (lead.status and lead.radar and lead.radarTrackId >= 0 and
+               all(math.isfinite(x) for x in (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK)))
+    if not stamp_ok or not lead_ok or lead.radarTrackId != self.track or stamp_ns-self.last_ns > 200_000_000:
+      self.track = lead.radarTrackId if lead_ok and stamp_ok else None
+      self.since_ns = stamp_ns
+    self.last_ns = stamp_ns
+    if not strength or not eligible:
+      self.track = None
+      self.stopped_ns = 0
+      return table_max
+    if v_ego <= 0.15:
+      self.stopped_ns = stamp_ns
+    if not lead_ok or not stamp_ok or stamp_ns-self.since_ns < 1_000_000_000:
+      self.reason = 'track_unqualified'
+      return table_max
+    self.reason = 'hold_or_approach'
+    if should_stop or v_ego <= 0.5 or approach_active:
+      return table_max
+    if not self.stopped_ns or not 0 <= stamp_ns-self.stopped_ns < 25_000_000_000:
+      self.reason = 'outside_launch_window'
+      return table_max
+    self.reason = 'lead_not_opening'
+    if lead.vRel <= 0.5 or lead.vLead <= 1.0 or lead.aLeadK < 0.0 or lead.dRel <= desired_distance+2.0:
+      return table_max
+    other = radar.leadTwo
+    self.reason = 'second_lead_or_cutin'
+    if other.status and (not all(math.isfinite(x) for x in (other.dRel, other.vRel, other.aLeadK)) or
+                         other.dRel < lead.dRel or other.vRel < 0.0 or other.aLeadK < 0.0):
+      return table_max
+    if any(t.status and (not math.isfinite(t.dRel) or 0 < t.dRel < 50) for t in radar.leadsCutIn):
+      return table_max
+    if not all(math.isfinite(x) for x in (v_ego, desired_distance, table_max)) or table_max <= 0:
+      self.reason = 'invalid_limits'
+      return table_max
+    amount = clamp(strength, 0, 20) * 0.01 * clamp((lead.vRel-0.5)/2.5, 0., 1.)
+    amount *= clamp((60/3.6-v_ego)/(20/3.6), 0., 1.)
+    allowed = min(1.6, table_max*(1.+amount))
+    self.reason = 'opening_allowance' if allowed > table_max else 'speed_or_stock_limit'
+    # A higher stock table must never be lowered by this optional allowance.
+    self.extra = min(max(0., allowed-table_max), previous_extra+0.15*self.dt)
+    return table_max+self.extra if self.extra else table_max
 
 
 def clamp(value, low, high):

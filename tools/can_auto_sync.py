@@ -172,7 +172,7 @@ def analyze(output):
 
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
-  parser.add_argument('--url', default='http://100.98.217.122:7000')
+  parser.add_argument('--url', help='Explicit source device; no implicit protected-device default')
   parser.add_argument('--out', type=Path, required=True)
   parser.add_argument('--watch', action='store_true')
   parser.add_argument('--analyze-only', action='store_true')
@@ -180,6 +180,8 @@ def main():
   parser.add_argument('--video', action='store_true', help='Remux local qcamera files for the quality report')
   parser.add_argument('--media-url', help='Read completed videos from this fixed Tailscale OP endpoint')
   args = parser.parse_args()
+  if not args.analyze_only and not args.url:
+    parser.error('--url is required for collection')
   args.out.mkdir(parents=True, exist_ok=True)
   while True:
     try:

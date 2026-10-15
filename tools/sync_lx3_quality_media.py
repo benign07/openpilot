@@ -42,47 +42,65 @@ def completed_segments(route, rows, current_route):
   return clean[:-1] if route == current_route else clean
 
 
+def cached(target, manifest):
+  if not target.is_file() or not manifest.is_file():return False
+  try:
+    m=json.loads(manifest.read_text(encoding='utf-8'))
+    return target.stat().st_size==m['bytes'] and hashlib.sha256(target.read_bytes()).hexdigest()==m['sha256']
+  except (OSError,ValueError,KeyError):return False
+
+
+def retrieve(base, segment, kind, directory, root, deadline):
+  names=('qcamera.ts',) if kind=='qcamera' else ('qlog.zst','qlog.bz2')
+  for name in names:
+    if cached(directory/name,directory/(name+'.source.json')):return False
+  url=base+'/api/dashcam/download/'+quote(segment,safe='')+'/'+kind
+  partial=directory/(kind+'.partial')
+  with OPENER.open(Request(url),timeout=15) as response:
+    if response.url!=url or response.status!=200:raise ValueError('Media source changed')
+    length=int(response.headers.get('Content-Length','0'))
+    disposition=response.headers.get('Content-Disposition','')
+    name=next((n for n in names if disposition.endswith('--'+n+'"')),None)
+    if not name or not 0<length<=32*1024*1024:raise ValueError('Unsupported media length/format')
+    if shutil.disk_usage(root).free<3*1024**3+length:raise OSError('Secondary media reserve reached')
+    h=hashlib.sha256();received=0
+    with partial.open('wb') as output:
+      while block:=response.read(65536):
+        if time.monotonic()>deadline:raise TimeoutError('Media pass budget reached; retry next pass')
+        received+=len(block)
+        if received>length:raise ValueError('Media grew beyond closed response size')
+        output.write(block);h.update(block)
+    if received!=length:raise ValueError('Incomplete media remains partial; retry next sync')
+  target=directory/name;partial.replace(target)
+  manifest=directory/(name+'.source.json');temp=manifest.with_suffix('.tmp')
+  temp.write_text(json.dumps({'bytes':length,'sha256':h.hexdigest(),'segment':segment,'kind':kind}),encoding='utf-8');temp.replace(manifest)
+  return True
+
+
 def sync(base, root, maximum=4):
-  base = checked_base(base)
-  routes=set()
+  base=checked_base(base);routes={}
   for path in root.glob('*.jsonl.gz'):
     with gzip.open(path,'rt',encoding='utf-8') as stream:
       header=json.loads(stream.readline(2*1024*1024))
-      if header.get('kind')=='header' and isinstance(header.get('route'),str): routes.add(header['route'])
-  state=fetch(base,'/api/params_bulk?names=CurrentRoute')
-  current=state.get('values',{}).get('CurrentRoute')
-  if not current: raise ValueError('Current route identity unavailable; do not guess the active encoder')
-  result={'downloaded':[],'scope':'completed_qcamera_only_local_hash_not_remote_signed_hash'}
+      if header.get('kind')=='header' and isinstance(header.get('route'),str):
+        routes.setdefault(header['route'],set()).add(header.get('device_dongle_id'))
+  state=fetch(base,'/api/params_bulk?names=CurrentRoute,DongleId')
+  values=state.get('values',{});current=values.get('CurrentRoute');dongle=values.get('DongleId')
+  if not current or not dongle:raise ValueError('Current route/device identity unavailable')
+  result={'downloaded':[],'pending_identity':[],
+          'scope':'completed_qcamera_and_qlog_same_device_local_hash_not_remote_signed_hash'}
   deadline=time.monotonic()+30
   for route in sorted(routes,reverse=True)[:5]:
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,110}',route):continue
+    if routes[route]!={dongle}:
+      result['pending_identity'].append(route);continue
     data=fetch(base,'/api/dashcam/segments/'+quote(route,safe='')+'?limit=2000')
-    if not data.get('ok') or data.get('route') != route:continue
+    if not data.get('ok') or data.get('route')!=route:continue
     for segment in completed_segments(route,data.get('segments',[]),current):
       directory=root/'video_segments'/segment;directory.mkdir(parents=True,exist_ok=True)
-      target=directory/'qcamera.ts';manifest=directory/'qcamera.source.json'
-      if target.is_file() and manifest.is_file():
-        m=json.loads(manifest.read_text())
-        if target.stat().st_size==m['bytes'] and hashlib.sha256(target.read_bytes()).hexdigest()==m['sha256']:continue
       if len(result['downloaded'])>=maximum or time.monotonic()>=deadline:return result
-      path='/api/dashcam/download/'+quote(segment,safe='')+'/qcamera';url=base+path
-      partial=directory/'qcamera.partial'
-      with OPENER.open(Request(url),timeout=15) as response:
-        if response.url!=url or response.status!=200:raise ValueError('Video source changed')
-        length=int(response.headers.get('Content-Length','0'))
-        filename=response.headers.get('Content-Disposition','')
-        if not 0<length<=32*1024*1024 or not filename.endswith('--qcamera.ts"'):
-          raise ValueError('Unsupported video length/format')
-        if shutil.disk_usage(root).free<3*1024**3+length:raise OSError('Secondary video reserve reached; primary chunk space preserved')
-        h=hashlib.sha256();received=0
-        with partial.open('wb') as output:
-          while block:=response.read(65536):
-            if time.monotonic()>deadline:raise TimeoutError('Video pass budget reached; resume report without new video')
-            received+=len(block)
-            if received>length:raise ValueError('Video grew beyond closed response size')
-            output.write(block);h.update(block)
-        if received!=length:raise ValueError('Incomplete video remains partial; retry on next sync')
-      partial.replace(target)
-      temp=manifest.with_suffix('.tmp');temp.write_text(json.dumps({'bytes':length,'sha256':h.hexdigest(),'segment':segment}),encoding='utf-8');temp.replace(manifest)
-      result['downloaded'].append(segment)
+      # Both artifacts are necessary. Retry qlog even if its video was cached.
+      changed=retrieve(base,segment,'qlog',directory,root,deadline)
+      changed=retrieve(base,segment,'qcamera',directory,root,deadline) or changed
+      if changed:result['downloaded'].append(segment)
   return result

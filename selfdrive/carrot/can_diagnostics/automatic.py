@@ -40,16 +40,40 @@ class ChunkStore:
     self.stream = None
     self.error = None
     self.dropped_no_stream = 0
+    self.recovery_quarantined = 0
     self.root.mkdir(parents=True, exist_ok=True)
     self.recover()
-    self.usage = sum(p.stat().st_size for p in self.root.iterdir() if p.is_file())
+    # Preserved bad records still consume space; quarantine is not free quota.
+    self.usage = sum(p.stat().st_size for p in self.root.rglob('*') if p.is_file())
+
+  def quarantine(self, path):
+    directory = self.root / 'recovery_quarantine'
+    directory.mkdir(exist_ok=True)
+    target = directory / path.name
+    if target.exists():
+      target = directory / (path.name + '.' + uuid.uuid4().hex)
+    os.replace(path, target)
+    self.recovery_quarantined += 1
+
+  @staticmethod
+  def valid_header(stream):
+    line = stream.readline(65537)
+    if not line.endswith(b'\n') or len(line) > 65536:
+      return False
+    try:
+      row = json.loads(line)
+      return isinstance(row, dict) and row.get('kind') == 'header' and row.get('schema') == 1
+    except (ValueError, UnicodeError):
+      return False
 
   def recover(self):
     # Keep complete JSON lines after abrupt power loss; never claim uninterrupted coverage.
     for path in self.root.glob('*.partial'):
       end = 0
       with path.open('rb') as stream:
-        for line in stream:
+        header_ok = self.valid_header(stream)
+        stream.seek(0)
+        for line in stream if header_ok else ():
           try:
             if not line.endswith(b'\n'):
               break
@@ -57,15 +81,28 @@ class ChunkStore:
             end = stream.tell()
           except (ValueError, UnicodeError):
             break
+      if not header_ok:
+        self.quarantine(path)
+        continue
       with path.open('r+b') as stream:
         stream.truncate(end)
       target = path.with_suffix('.jsonl')
       os.replace(path, target)
       self.compress(target, 'power_loss_recovered')
     for path in self.root.glob('*.jsonl'):
+      with path.open('rb') as stream:
+        header_ok = self.valid_header(stream)
+      if not header_ok:
+        self.quarantine(path)
+        continue
       self.compress(path, 'interrupted_seal_recovered')
     for path in self.root.glob('*.jsonl.gz'):
       if not self.manifest_path(path).exists():
+        with gzip.open(path, 'rb') as stream:
+          header_ok = self.valid_header(stream)
+        if not header_ok:
+          self.quarantine(path)
+          continue
         self.manifest(path, 'interrupted_seal_recovered')
 
   @staticmethod
@@ -105,6 +142,13 @@ class ChunkStore:
     self.stream = self.path.open('xb')
     self.started, self.size, self.last_flush = now, 0, now
     self.append({'kind': 'header', 'schema': 1, **metadata}, now)
+    # A power cut before the periodic data flush must not leave an empty chunk.
+    self.stream.flush()
+    os.fsync(self.stream.fileno())
+    if os.name == 'posix':
+      fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+      try: os.fsync(fd)
+      finally: os.close(fd)
     return True
 
   def append(self, row, now):
@@ -774,6 +818,8 @@ class AutoRecorder:
             'error': self.store.error, 'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
             'stale_can_frames': self.stale_can_frames, 'stale_panda_snapshots': self.stale_panda_snapshots,
             'storage_dropped': self.storage_dropped, 'dropped_no_stream': self.store.dropped_no_stream,
+            'recovery_quarantined': self.store.recovery_quarantined,
+            'video_index_source': 'completed_qlog_on_pc_not_live_published',
             'chunk_rotations': self.chunk_rotations, 'max_chunk_rotation_ms': self.max_chunk_rotation_ms,
             'button_traces': self.trace_count, 'button_trace_active': self.trace is not None,
             'button_trace_pre_evicted': self.trace_pre_evicted,

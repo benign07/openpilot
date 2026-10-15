@@ -37,6 +37,139 @@ def lerp(start, end, t):
 def max_abs(a, b):
   return a if abs(a) > abs(b) else b
 
+
+class LateralMargin:
+  """Small optional path preference, not obstacle avoidance or free-space proof.
+
+  Model path y is right-positive; radar yRel/dPath are left-positive. OEM side
+  occupancy vetoes movement toward that side; display icons/vehicle sizes never
+  enter this calculation. Only previously verified forward tracks trigger an
+  away preference. Rear/alongside radar coverage and CAN color age are unknown.
+  """
+  def __init__(self, dt=DT_MDL):
+    self.dt = dt
+    self.value = self.target = 0.0
+    self.reason = 'off'
+    self.tracks = {}
+    self.last_radar = 0
+    self.yellow_since = None
+    self.last_steer = -10_000_000_000
+    self.hold = [0, 0]
+    self.previous_shadow = None
+
+  def reset(self, reason):
+    self.value = self.target = 0.0
+    self.reason = reason
+    self.tracks.clear()
+    self.last_radar = 0
+    self.yellow_since = None
+    self.hold = [0, 0]
+    return 0.0
+
+  def update(self, settings, radar, *, now_ns, radar_ns, valid, lane_mode, lat_active,
+             blinkers, steering_pressed, maneuver, speed, curvature, left_code,
+             right_code, left_occupied, right_occupied, probabilities, stds,
+             corridor, legacy_offset):
+    yellow_cm, nearby_cm = settings['YellowLineBiasCm'], settings['NearbyVehicleBiasCm']
+    shadow = bool(settings['LateralMarginShadow'])
+    if not yellow_cm and not nearby_cm:
+      return self.reset('off')
+    if self.previous_shadow != shadow:
+      self.previous_shadow = shadow
+      return self.reset('shadow_mode_changed')
+    if not lat_active or not lane_mode:
+      return self.reset('inactive_laneless_or_control_off')
+    if not valid or not 0 <= now_ns-radar_ns <= 200_000_000:
+      return self.reset('stale_or_invalid_inputs')
+    if steering_pressed:self.last_steer = now_ns
+    if (len(probabilities)!=2 or len(stds)!=2 or not corridor or
+        not all(math.isfinite(v) for v in (*probabilities, *stds, speed, curvature, legacy_offset)) or
+        min(probabilities)<0.8 or max(stds)>0.15 or not 30/3.6<=speed<=110/3.6 or abs(curvature)>0.001):
+      return self.reset('lane_or_curve_unqualified')
+    # Every row is (left/right line y, final base path y, path heading), aligned
+    # spatially for the now..2s path. A conservative2.24m lateral envelope plus
+    #0.30m line margin and heading projection is used; not a mirror-clearance proof.
+    lower, upper = -0.10, 0.10
+    for left, right, path, yaw in corridor:
+      if not all(math.isfinite(v) for v in (left,right,path,yaw)) or not 3.0<=right-left<=4.0:
+        return self.reset('corridor_unqualified')
+      footprint = 1.12+2.53*abs(math.sin(yaw))
+      lower = max(lower, left+footprint+0.30-path)
+      upper = min(upper, right-footprint-0.30-path)
+    # Do not repair an already out-of-corridor stock path through this preference.
+    # No new term is permitted to extend the legacy total0.4m offset bound.
+    lower, upper = max(lower,-0.4-legacy_offset), min(upper,0.4-legacy_offset)
+    if not lower<=0.0<=upper:
+      return self.reset('base_path_outside_margin')
+    occupied = [bool(left_occupied), bool(right_occupied)]
+    verified = [False, False]
+    uncertain = False
+    new_tracks = {}
+    new_radar = radar_ns != self.last_radar
+    for side, leads in enumerate((radar.leadsLeft, radar.leadsRight)):
+      sign = 1 if side==0 else -1
+      for lead in leads:
+        if not lead.status or not lead.radar or lead.radarTrackId<0:continue
+        values = (lead.dRel,lead.dPath,lead.yRel,lead.vLead,lead.vRel,lead.vLat)
+        if not all(math.isfinite(v) for v in values):
+          uncertain=True;continue
+        if not 0<lead.dRel<50:continue
+        # A sign-binned track is not automatically an adjacent-lane vehicle.
+        if lead.dPath*sign<=0 or lead.yRel*sign<=0:
+          uncertain=True;continue
+        if not 2.0<lead.dPath*sign<5.0:continue
+        occupied[side]=True
+        key=(side,int(lead.radarTrackId))
+        previous=self.tracks.get(key)
+        since=radar_ns
+        if previous:
+          stamp,start,d,path,velocity=previous
+          dt=(radar_ns-stamp)/1e9
+          if (0<=dt<=0.2 and abs(lead.dRel-d-lead.vRel*dt)<1.5
+              and abs(lead.dPath-path)<0.5 and abs(lead.vLead-velocity)<5.0):
+            since=start
+          else:
+            self.hold[side]=0  # A reused radar slot is not the old vehicle.
+        new_tracks[key]=(radar_ns,since,lead.dRel,lead.dPath,lead.vLead)
+        if (5.0<lead.dRel<25.0 and lead.vLead>3.0 and abs(lead.vLat)<0.8
+            and radar_ns-since>=1_000_000_000):
+          verified[side]=True
+          if new_radar:self.hold[side]=now_ns+3_000_000_000
+    self.tracks = new_tracks
+    self.last_radar = radar_ns
+    if uncertain or any(t.status and (not math.isfinite(t.dRel) or 0<t.dRel<40) for t in radar.leadsCutIn):
+      return self.reset('side_geometry_or_cutin_uncertain')
+    # Retain a just-observed same-direction car briefly as it leaves front radar.
+    # OEM occupancy prevents a contradictory movement, not a metric distance.
+    away = [verified[i] or now_ns<self.hold[i] for i in (0,1)]
+    occupied = [occupied[i] or away[i] for i in (0,1)]
+    yellow = (left_code in (20,21,24,25) and right_code//10!=2 and not occupied[0]
+              and legacy_offset<=0.0 and curvature>=-0.0002)
+    if yellow:
+      if self.yellow_since is None:self.yellow_since=now_ns
+    else:self.yellow_since=None
+    self.target=0.0;self.reason='no_persistent_target'
+    if blinkers or maneuver or now_ns-self.last_steer<3_000_000_000:
+      self.reason='maneuver_or_driver_holdoff'
+      self.yellow_since=None
+      self.hold=[0,0]
+    elif all(occupied):
+      self.reason='both_sides_occupied'
+    elif nearby_cm and away[0] and not occupied[1]:
+      self.target=nearby_cm*0.01;self.reason='away_from_left_vehicle'
+    elif nearby_cm and away[1] and not occupied[0]:
+      self.target=-nearby_cm*0.01;self.reason='away_from_right_vehicle'
+    elif yellow_cm and self.yellow_since is not None and now_ns-self.yellow_since>=2_000_000_000:
+      self.target=-yellow_cm*0.01;self.reason='toward_left_yellow'
+    # Occupancy/corridor constraints override the smoothing history.
+    if occupied[0]:lower=max(0.0,lower)
+    if occupied[1]:upper=min(0.0,upper)
+    self.target=max(lower,min(upper,self.target))
+    rate=0.02 if abs(self.target)>abs(self.value) and self.target*self.value>=0 else 0.05
+    self.value += max(-rate*self.dt,min(rate*self.dt,self.target-self.value))
+    self.value=max(lower,min(upper,self.value))
+    return 0.0 if shadow else self.value
+
 class LanePlanner:
   def __init__(self):
     self.ll_t = np.zeros((TRAJECTORY_SIZE,))

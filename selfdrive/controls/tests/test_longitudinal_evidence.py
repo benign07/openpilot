@@ -171,15 +171,16 @@ def test_media_sync_uses_actual_catalog_and_never_finalizes_truncation(tmp_path,
   import io
   from types import SimpleNamespace
   from tools import sync_lx3_quality_media as media
-  (tmp_path/'a.jsonl.gz').write_bytes(gzip.compress(b'{"kind":"header","route":"r"}\n'))
+  (tmp_path/'a.jsonl.gz').write_bytes(gzip.compress(b'{"kind":"header","route":"r","device_dongle_id":"device"}\n'))
   called=[]
   def reply(request,timeout):
     url=request.full_url;called.append(url)
-    if 'params_bulk' in url:raw=b'{"values":{"CurrentRoute":"r"}}'
+    if 'params_bulk' in url:raw=b'{"values":{"CurrentRoute":"r","DongleId":"device"}}'
     elif '/segments/' in url:raw=b'{"ok":true,"route":"r","segments":["r--0","r--1"]}'
     else:raw=b'123' if truncate else b'123456'
     response=io.BytesIO(raw);response.url=url;response.status=200
-    response.headers={'Content-Length':'6','Content-Disposition':'attachment; filename="r--0--qcamera.ts"'}
+    name='qlog.zst' if url.endswith('/qlog') else 'qcamera.ts'
+    response.headers={'Content-Length':'6','Content-Disposition':f'attachment; filename="r--0--{name}"'}
     return response
   monkeypatch.setattr(media.OPENER,'open',reply)
   monkeypatch.setattr(media.shutil,'disk_usage',lambda _:SimpleNamespace(free=4*1024**3))
@@ -189,6 +190,7 @@ def test_media_sync_uses_actual_catalog_and_never_finalizes_truncation(tmp_path,
   else:
     assert media.sync('http://100.71.19.14:7000',tmp_path)['downloaded']==['r--0']
     assert (tmp_path/'video_segments/r--0/qcamera.ts').read_bytes()==b'123456'
+    assert (tmp_path/'video_segments/r--0/qlog.zst').read_bytes()==b'123456'
     assert media.sync('http://100.71.19.14:7000',tmp_path)['downloaded']==[]
   assert not any('/download/r--1/' in path for path in called)
 

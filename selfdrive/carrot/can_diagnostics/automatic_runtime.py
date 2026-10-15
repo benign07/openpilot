@@ -44,6 +44,8 @@ PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFol
 PARAMS += tuple('CruiseMaxVals'+str(i) for i in range(7)) + (
   'AChangeCostStarting', 'CruiseEcoControl', 'LongActuatorDelay', 'VEgoStopping', 'StoppingAccel',
   'LongTuningKpV', 'LongTuningKiV', 'LongTuningKf')
+PARAMS += ('UseLaneLineSpeed', 'UseLaneLineCurveSpeed', 'PathOffset', 'AdjustLaneOffset',
+           'LatMpcInputOffset', 'LaneLineCheck')
 
 
 def recording_storage_status(root, usage=None):
@@ -205,15 +207,19 @@ class AutomaticController:
   def live_loop(self):
     from cereal import car, messaging
     from openpilot.common.params import Params
+    from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences
 
     params = Params()
+    driving_preferences = DrivingPreferences()
     sm = messaging.SubMaster(list(FIELDS))
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
     panda_socket = messaging.sub_sock('pandaStates', timeout=0, conflate=True)
     evidence_socket = messaging.sub_sock('logMessage', timeout=0, conflate=False)
-    camera_index_socket = messaging.sub_sock('qRoadEncodeIdx', timeout=0, conflate=False)
+    # loggerd writes qRoadEncodeIdx into qlog/rlog, but does not publish it.
+    # The PC imports that completed log alongside qcamera; no dead live socket.
     boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     metadata = {'boot_id': boot, 'route': None, 'car_fingerprint': None,
+                'device_dongle_id': read_param(params, 'DongleId'),
                 'rate_hz': 5, 'can_per_key_max_hz': 10, 'panda_max_hz': 20, 'panda_periodic_max_hz': 2,
                 'host_tx_identity_scope': 'sendcan_intent_not_native_admission_or_ecu_ack',
                 'panda_state_changes': 'received_valid_lx3_snapshots_bypass_periodic_limit',
@@ -296,6 +302,7 @@ class AutomaticController:
         self.recorder.observer_tick(now)
       if now - last_metadata >= 5:
         metadata['settings'] = {key: read_param(params, key) for key in PARAMS}
+        metadata['settings']['driving_preferences'] = driving_preferences.read()
         if metadata['car_fingerprint'] is None:
           raw = params.get('CarParams')
           if raw:
@@ -371,18 +378,4 @@ class AutomaticController:
           continue
         with self.lock:
           self.recorder.longitudinal_evidence(row, int(event.logMonoTime), time.monotonic())
-      for _ in range(16):
-        raw = camera_index_socket.receive(non_blocking=True)
-        if raw is None:
-          break
-        event = messaging.log_from_bytes(raw)
-        if event.valid and event.which() == 'qRoadEncodeIdx':
-          now = time.monotonic()
-          if self.recorder.state != 'recording':
-            continue
-          route_observed_ns = time.monotonic_ns()
-          current_route = read_param(params, 'CurrentRoute') or None
-          with self.lock:
-            self.recorder.video_index(event.qRoadEncodeIdx.to_dict(), int(event.logMonoTime), now,
-                                      current_route, route_observed_ns, native_offset_ns)
       self.shutdown.wait(.05)

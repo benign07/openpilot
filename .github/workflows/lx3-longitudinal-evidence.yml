@@ -16,11 +16,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install pytest numpy aiohttp cryptography requests
+      - run: python -m pip install pytest numpy aiohttp cryptography requests pycapnp zstandard
       - name: Evidence, recorder and signed updater contracts
         run: |
           set -o pipefail
-          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_longitudinal_evidence.py selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_preview.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_approach_composition.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=evidence.xml 2>&1 | tee evidence.log
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_longitudinal_evidence.py selfdrive/controls/tests/test_diagnostic_recovery.py selfdrive/controls/tests/test_quality_qlog.py selfdrive/controls/tests/test_launch_follow.py selfdrive/controls/tests/test_lateral_margin.py selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_preview.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_approach_composition.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=evidence.xml 2>&1 | tee evidence.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -45,13 +45,14 @@ jobs:
       - name: Build actual longitudinal solver and runtime bindings
         run: |
           set -o pipefail
-          uv run --no-sync scons --minimal -j2 common/params_pyx.so msgq_repo/msgq/ipc_pyx.so selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so 2>&1 | tee build.log
+          uv run --no-sync scons --minimal -j2 common/params_pyx.so msgq_repo/msgq/ipc_pyx.so selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so selfdrive/controls/lib/lateral_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so 2>&1 | tee build.log
       - name: Real schema and linked solver comparisons
         run: |
           set -o pipefail
           uv run --no-sync python -m pytest --noconftest -o addopts= selfdrive/carrot/can_diagnostics/test_runtime_schema.py -q --junitxml=schema.xml 2>&1 | tee schema.log
           uv run --no-sync python tools/check_lx3_evidence_native.py --output native-evidence.json 2>&1 | tee native-evidence.log
           uv run --no-sync python tools/check_lx3_approach_native.py --output native-comfort.json 2>&1 | tee native-comfort.log
+          uv run --no-sync python tools/check_lx3_preferences_native.py --output native-preferences.json 2>&1 | tee native-preferences.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -64,3 +65,5 @@ jobs:
             native-evidence.log
             native-comfort.json
             native-comfort.log
+            native-preferences.json
+            native-preferences.log

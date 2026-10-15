@@ -98,6 +98,7 @@ def summarize_frames(rows, native=False):
 def collect(inputs, schema_dir):
   streams = defaultdict(lambda:defaultdict(list))
   frames, videos, indexes, offsets, hashes, errors = [], {}, defaultdict(list), {}, {}, []
+  route_boots, encoder_offsets = defaultdict(set), defaultdict(set)
   paths = sorted({p for root in inputs for p in root.rglob('*') if p.is_file()})
   for path in paths:
     if path.name.endswith('.jsonl.gz'):
@@ -114,6 +115,8 @@ def collect(inputs, schema_dir):
           raise ValueError('missing header')
         header = rows[0]
         route = header.get('route')
+        if route:
+          route_boots[route].add(header.get('boot_id'))
         hashes[str(path)] = sha(path)
         # Legacy collectors could leave one route's header over the next
         # route's rows. Unstamped legacy records remain readable, but an
@@ -174,7 +177,10 @@ def collect(inputs, schema_dir):
         videos[route,int(seg)] = path
       except ValueError:
         pass
-  rlogs = [p for p in paths if p.name in ('rlog.zst','rlog.bz2')]
+  # The small qlog contains every encode index. Prefer a full rlog when both
+  # exist in a directory, without reading the same segment twice.
+  rlogs = [p for p in paths if p.name in ('rlog.zst','rlog.bz2','qlog.zst','qlog.bz2')
+           and (p.name.startswith('rlog') or not any((p.parent/n).exists() for n in ('rlog.zst','rlog.bz2')))]
   if rlogs:
     import capnp
     import zstandard
@@ -228,10 +234,18 @@ def collect(inputs, schema_dir):
             row['lane_center_y_m']=center
           elif k == 'qRoadEncodeIdx':
             p=e.qRoadEncodeIdx
-            indexes[route,int(p.segmentNum)].append({'native_sof':int(p.timestampSof),'native_eof':int(p.timestampEof),'received_t':t,'frameId':int(p.frameId),'segmentId':int(p.segmentId)})
+            encoder_offsets[route].add(int(p.segmentNum)-int(seg))
+            # loggerd subtracts encoderd_segment_offset when naming files.
+            # Presentation identities belong to this log/video directory.
+            indexes[route,int(seg)].append({'native_sof':int(p.timestampSof),'native_eof':int(p.timestampEof),'received_t':t,'frameId':int(p.frameId),'segmentId':int(p.segmentId)})
             continue
           elif k == 'logMessage':
             text=str(e.logMessage)
+            if 'lx3_lateral_margin' in text:
+              record=json.loads(text)
+              msg=record.get('msg',record)
+              if isinstance(msg,dict) and isinstance(msg.get('lx3_lateral_margin'),dict):
+                streams[route]['lateralMargin'].append({'t':t,**msg['lx3_lateral_margin']})
             if KEY in text:
               f=unwrap(json.loads(text))
               if f:
@@ -244,6 +258,16 @@ def collect(inputs, schema_dir):
         print(json.dumps({'parsed':path.parent.name}),flush=True)
       except (OSError,ValueError,KeyError,RuntimeError) as exc:
         errors.append({'path':str(path),'error':str(exc)[:180]})
+  for route, values in encoder_offsets.items():
+    if len(values)!=1 or next(iter(values))<0:
+      errors.append({'route':route,'error':'encoder/log segment offset changed; alignment rejected'})
+      for key in list(indexes):
+        if key[0]==route:del indexes[key]
+  for route, boots in route_boots.items():
+    if len(boots)!=1 or None in boots:
+      offsets[route]=None
+      if any(key[0]==route for key in videos):
+        errors.append({'route':route,'error':'single boot identity unavailable; video alignment rejected'})
   for route,ss in streams.items():
     for k,rows in ss.items():
       ss[k]=sorted({r['t']:r for r in rows}.values(),key=lambda r:r['t'])

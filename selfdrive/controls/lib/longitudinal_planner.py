@@ -17,7 +17,8 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.approach_comfort import (ApproachComfort, ApproachSettings, apply_approach_ceiling,
-                                                            LongitudinalEvidence, traffic_ceiling_comparison)
+                                                            LongitudinalEvidence, traffic_ceiling_comparison,
+                                                            DrivingPreferences, LaunchFollow)
 from openpilot.selfdrive.controls.lib.flexible_gap import FlexibleGapSettings
 
 
@@ -113,6 +114,9 @@ class LongitudinalPlanner:
 
     self.params = Params()
     self.approach = ApproachComfort(dt)
+    self.driving_preferences = DrivingPreferences()
+    self.drive_settings = self.driving_preferences.values.copy()
+    self.launch_follow = LaunchFollow(dt)
     self.approach_settings = ApproachSettings()
     self.flex_gap_settings = FlexibleGapSettings()
     self.approach_param_time = 1.0
@@ -146,6 +150,7 @@ class LongitudinalPlanner:
       self.approach_param_time = 0.0
       self.approach_settings = ApproachSettings.read(self.params)
       self.flex_gap_settings = FlexibleGapSettings.read(self.params)
+      self.drive_settings = self.driving_preferences.read()
     self.mpc.mode = 'blended' if sm['selfdriveState'].experimentalMode else 'acc'
 
     if len(sm['carControl'].orientationNED) == 3:
@@ -188,6 +193,9 @@ class LongitudinalPlanner:
       accel_limits = [ACCEL_MIN, ACCEL_MAX]
       accel_limits_turns = [ACCEL_MIN, ACCEL_MAX]
 
+    # The low-speed turn limiter aliases accel_limits. Save the evidence value
+    # before any approach/turn array can be overwritten; this is not a limit.
+    evidence_table_maximum = float(accel_limits[1])
     if reset_state:
       self.v_desired_filter.x = v_ego
       # Clip aEgo to cruise limits to prevent large accelerations when becoming active
@@ -252,6 +260,25 @@ class LongitudinalPlanner:
       maximum_accel=accel_limits_turns[1], comfort_brake=carrot.comfort_brake,
       cruise_speed=v_cruise, planned_accel=self.a_desired,
     )
+    now_ns = time.monotonic_ns()
+    launch_eligible = (approach_eligible and sm['carControl'].longActive and sm['carState'].canValid
+                       and not sm['carState'].canTimeout and self.allow_throttle
+                       and all(0 <= now_ns-int(sm.logMonoTime[k]) <= 200_000_000
+                               for k in ('carState', 'carControl', 'radarState', 'modelV2')))
+    launch_table_maximum = self.launch_follow.update(
+      self.drive_settings['LaunchFollowStrength'], sm['radarState'], stamp_ns=int(sm.logMonoTime['radarState']),
+      eligible=launch_eligible, should_stop=self.output_should_stop, v_ego=v_ego,
+      desired_distance=carrot.stop_distance+v_ego*max(0.3, carrot.t_follow_last),
+      table_max=evidence_table_maximum,
+      approach_active=(approach_request.accel_ceiling is not None or
+                       self.approach.coast_weight > 0.0 or self.approach.traffic_weight > 0.0
+                       or approach_request.extra_tf > 0.0 or approach_request.jerk_factor > 1.0))
+    if launch_table_maximum > evidence_table_maximum:
+      # Optional capability still passes through the stock turn limiter and
+      # feasibility clamp. Never multiply the potentially aliased limit list.
+      launch_turn = limit_accel_in_turns(v_ego, curvature_future, [accel_limits[0], launch_table_maximum], a_lat_max)[1]
+      accel_limits_turns[1] = max(launch_turn, self.a_desired-0.05)
+      evidence_maximum = float(accel_limits_turns[1])
     accel_limits_turns[1] = apply_approach_ceiling(accel_limits_turns[1], self.a_desired, approach_request, self.dt)
 
     evidence_due = False
@@ -333,7 +360,8 @@ class LongitudinalPlanner:
                      'accel_table': [float(getattr(carrot, 'cruiseMaxVals'+str(i))) for i in range(7)],
                      'stop_distance': float(carrot.stop_distance), 'starting_cost': float(carrot.aChangeCostStarting),
                      'time_gaps': [float(getattr(carrot, 'tFollowGap'+str(i))) for i in range(1, 5)],
-                     'flexible_enabled': bool(self.flex_gap_settings.enabled), 'flexible_minimum': int(self.flex_gap_settings.minimum_ratio)},
+                     'flexible_enabled': bool(self.flex_gap_settings.enabled), 'flexible_minimum': int(self.flex_gap_settings.minimum_ratio),
+                     'driving_preferences': dict(self.drive_settings)},
         'state': {'v_ego': float(v_ego), 'a_ego': float(sm['carState'].aEgo),
                   'standstill': bool(sm['carState'].standstill), 'cruise_standstill': bool(sm['carState'].cruiseState.standstill),
                   'soft_hold': bool(carrot.soft_hold_active), 'brake': bool(sm['carState'].brakePressed),
@@ -348,7 +376,9 @@ class LongitudinalPlanner:
                     'lane_x0': [float(line.x[0]) if len(line.x) else None for line in sm['modelV2'].laneLines],
                     'lane_probs': list(sm['modelV2'].laneLineProbs)},
         'leads': [lead.to_dict() for lead in (sm['radarState'].leadOne, sm['radarState'].leadTwo)],
-        'bounds': {'table_max': float(accel_limits[1]), 'before_approach': evidence_maximum,
+        'bounds': {'table_max': evidence_table_maximum, 'before_approach': evidence_maximum,
+                   'launch_table_max': float(launch_table_maximum), 'launch_extra': float(self.launch_follow.extra),
+                   'launch_reason': self.launch_follow.reason,
                    'after_approach': float(accel_limits_turns[1]), 'mpc_max': float(self.mpc.max_a),
                    'cruise_min': float(accel_limits_turns[0]), 'a_desired_before': float(a_prev),
                    'base_tf_before': evidence_base_tf, 'jerk_factor': float(carrot.jerk_factor_apply),

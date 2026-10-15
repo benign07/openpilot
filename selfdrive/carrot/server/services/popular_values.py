@@ -207,7 +207,7 @@ def build_snapshot_payload() -> dict[str, Any] | None:
     return None
 
   data, _, by_name, _ = get_settings_cached()
-  param_names = [name for name in by_name.keys() if name]
+  param_names = [name for name, meta in by_name.items() if name and not meta.get('virtual')]
   if not param_names:
     return None
 
