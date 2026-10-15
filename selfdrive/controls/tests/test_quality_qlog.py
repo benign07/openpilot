@@ -9,6 +9,27 @@ from tools.lx3_drive_quality import collect
 from tools import sync_lx3_quality_media as media
 
 
+def test_incremental_archive_cache_preserves_counts_and_rejects_changed_source(tmp_path):
+  from tools.can_auto_sync import analyze
+  import hashlib
+  for i in range(2):
+    ident=str(i)*32
+    raw=gzip.compress(('\n'.join(json.dumps(r) for r in [
+      {'kind':'header','schema':1,'boot_id':'boot','trip_id':'trip'},
+      {'kind':'event','name':'test'}])+'\n').encode())
+    (tmp_path/(ident+'.jsonl.gz')).write_bytes(raw)
+    (tmp_path/(ident+'.manifest.json')).write_text(json.dumps(
+      {'id':ident,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}))
+  pending=analyze(tmp_path,budget_seconds=0)
+  assert pending['analysis_pending_chunks']==2 and pending['events']=={}
+  fresh=analyze(tmp_path);cached=analyze(tmp_path,budget_seconds=0)
+  assert fresh['events']==cached['events']=={'test':2}
+  assert cached['cached_chunks']==2 and cached['analysis_pending_chunks']==0
+  (tmp_path/('0'*32+'.jsonl.gz')).write_bytes(b'corrupt')
+  broken=analyze(tmp_path)
+  assert broken['events']=={'test':1} and broken['coverage']['corrupt_chunks']==1
+
+
 def fixture(tmp_path, segments=(5,), boots=('boot',)):
   capnp = pytest.importorskip('capnp')
   zstandard = pytest.importorskip('zstandard')

@@ -89,7 +89,38 @@ def test_stale_radar_and_lane_exit_clear_history():
   assert apply(h,r,150,lane_mode=False)==0.
   assert apply(h,r,151)==0.
   for i in range(152,300):apply(h,r,i)
-  assert apply(h,r,300,radar_ns=1_000_000_000)==0.
+  before=h.value
+  assert abs(apply(h,r,300,radar_ns=1_000_000_000)-before)<=.0025+1e-12
+
+
+def test_routine_confidence_loss_withdraws_gradually_and_reacquires():
+  h=engine();r=radar()
+  for i in range(180):apply(h,r,i)
+  before=h.value
+  assert before<-.049
+  assert apply(h,r,180,probabilities=[.79,.95])==pytest.approx(before+.0025)
+  assert apply(h,r,181)==pytest.approx(before+.005)
+
+
+def test_straddling_vehicle_is_occupied_even_when_not_an_away_trigger():
+  h=engine();r=radar(True,True);r.leadsRight[0].dPath=-1.8;r.leadsRight[0].yRel=-1.8
+  assert not any(apply(h,r,i) for i in range(180))
+  h=engine();r=radar(True);r.leadsLeft[0].dPath=1.8;r.leadsLeft[0].yRel=1.8
+  assert not any(apply(h,r,i) for i in range(180))
+
+
+@pytest.mark.parametrize('settings,curvature', [
+  ({'YellowLineBiasCm':0,'NearbyVehicleBiasCm':5,'LateralMarginShadow':0},0.),
+  ({'YellowLineBiasCm':5,'NearbyVehicleBiasCm':5,'LateralMarginShadow':0},-.0003)])
+def test_right_vehicle_cannot_bypass_yellow_boundary_gates(settings,curvature):
+  h=engine();r=radar(False,True)
+  assert not any(apply(h,r,i,settings=settings,curvature=curvature) for i in range(180))
+
+
+def test_shadow_computes_laneless_candidates_without_application():
+  h=engine();s={'YellowLineBiasCm':5,'NearbyVehicleBiasCm':0,'LateralMarginShadow':1}
+  assert not any(apply(h,radar(),i,settings=s,lane_mode=False) for i in range(180))
+  assert h.value==pytest.approx(-.05) and h.evidence['qualified']
 
 
 def test_legacy_total_and_final_path_bound_override_filter_history():

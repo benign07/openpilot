@@ -253,7 +253,8 @@ class AutomaticController:
                'selfdrive/carrot/manual_steering.py', 'cereal/car.capnp',
                'selfdrive/carrot/carrot_functions.py', 'selfdrive/controls/lib/approach_comfort.py',
                'selfdrive/controls/lib/flexible_gap.py', 'selfdrive/controls/lib/longitudinal_planner.py',
-               'selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py', 'selfdrive/controls/beep.py')
+               'selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py', 'selfdrive/controls/beep.py',
+               'selfdrive/controls/lib/lateral_planner.py', 'selfdrive/controls/lib/lane_planner_2.py')
     metadata['source_hashes'] = {rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest()
                                for rel in sources if (repo / rel).is_file()}
     dbc = repo / 'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc'

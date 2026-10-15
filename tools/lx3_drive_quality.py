@@ -7,7 +7,7 @@ at a time, not a closed-loop simulation or a detector of subjective placebo.
 """
 import argparse
 import bisect
-from collections import defaultdict
+from collections import defaultdict, Counter
 import gzip
 import hashlib
 import html
@@ -95,13 +95,16 @@ def summarize_frames(rows, native=False):
   return result
 
 
-def collect(inputs, schema_dir):
+def collect(inputs, schema_dir, recent_chunks=0):
   streams = defaultdict(lambda:defaultdict(list))
   frames, videos, indexes, offsets, hashes, errors = [], {}, defaultdict(list), {}, {}, []
   route_boots, encoder_offsets = defaultdict(set), defaultdict(set)
   paths = sorted({p for root in inputs for p in root.rglob('*') if p.is_file()})
+  chunks=[p for p in paths if p.name.endswith('.jsonl.gz')]
+  selected=set(sorted(chunks,key=lambda p:p.stat().st_mtime_ns,reverse=True)[:recent_chunks]) if recent_chunks else set(chunks)
   for path in paths:
     if path.name.endswith('.jsonl.gz'):
+      if path not in selected:continue
       try:
         # Standard phone/PC manifests are mandatory if present. Bulk collectors
         # may instead provide manifest.json; all actual bytes are hashed below.
@@ -188,6 +191,7 @@ def collect(inputs, schema_dir):
     event_type = capnp.load(str(schema_dir/'log.capnp'),imports=[str(schema_dir)]).Event
     for path in rlogs:
       route,seg = path.parent.name.rsplit('--',1)
+      if recent_chunks and route not in streams:continue
       try:
         raw = path.read_bytes()
         hashes[str(path)] = hashlib.sha256(raw).hexdigest()
@@ -380,7 +384,10 @@ def evaluate_route(route, ss, frames, native=False):
     last=text
   return {'route':route,'metrics':{'jerk_abs_p95_mps3':percentile(jerks,.95),'headway_p10_s':percentile(headways,.1),
       'model_center_abs_p95_m':percentile(centers,.95),'jerk_samples':len(jerks),'center_samples':len(centers)},
-      'launches':starts,'events':sorted(events,key=lambda x:x['t']),'plot':plot}
+      'launches':starts,'events':sorted(events,key=lambda x:x['t']),'plot':plot,
+      'lateral_margin':{'records':ss.get('lateralMargin',[]),
+        'reason_counts':dict(Counter(r.get('reason','unknown') for r in ss.get('lateralMargin',[]))),
+        'scope':'recorded preference qualification; no measured physical clearance'}}
 
 
 def qualified_indexes(rows, frame_count):
@@ -475,14 +482,15 @@ def main():
   p.add_argument('--schema-dir',type=Path,default=ROOT/'cereal')
   p.add_argument('--video',action='store_true')
   p.add_argument('--native-pair',action='store_true')
+  p.add_argument('--recent-chunks',type=int,default=0,help='Explicit recent diagnostic window;0 is full archive')
   p.add_argument('--max-new-videos',type=int,default=4)
   args=p.parse_args();args.out.mkdir(parents=True,exist_ok=True)
-  streams,frames,videos,indexes,offsets,hashes,errors=collect(args.input,args.schema_dir)
+  streams,frames,videos,indexes,offsets,hashes,errors=collect(args.input,args.schema_dir,max(0,args.recent_chunks))
   routes=[evaluate_route(k,v,[r for r in frames if r.get('route')==k],args.native_pair) for k,v in streams.items()]
   media,video_errors=media_prepare(videos,indexes,offsets,args.out,max(0,min(200,args.max_new_videos))) if args.video else ({},[])
   for r in routes:
     for event in r['events']:event['video']=match_video(event,media)
-  result={'schema':1,'routes':routes,'source_sha256':hashes,'read_errors':errors,'video_errors':video_errors,
+  result={'schema':1,'recent_chunk_limit':max(0,args.recent_chunks),'routes':routes,'source_sha256':hashes,'read_errors':errors,'video_errors':video_errors,
           'detailed_evidence_frames':len(frames),'video_segments_matched':len(media),
           'evaluation_scope':'observational_metrics_and_video_review_not_ground_truth_or_placebo_detector',
           'control_changes':False,'raw_data_uploaded':False}

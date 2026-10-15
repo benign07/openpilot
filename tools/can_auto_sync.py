@@ -91,11 +91,53 @@ def fresh(services, key, now):
   return item.get('valid') is True and 0 <= now - item.get('mono_ns', 0) <= 1_000_000_000
 
 
-def analyze(output):
+def chunk_summary(rows):
+  events, modes, histograms = Counter(), Counter(), defaultdict(Counter)
+  event_trips = defaultdict(set)
+  coverage = {'invalid_samples': 0}
+  trip = (rows[0].get('boot_id'), rows[0].get('trip_id'))
+  for row in rows[1:]:
+    if row.get('kind') == 'event':
+      name = row.get('name', 'unknown')
+      if name == 'oem_fault_observation':
+        after = row.get('after') or []
+        if not any(after):
+          continue
+        name += ':' + row.get('direction', 'unknown')
+      events[name] += 1
+      event_trips[name].add(trip)
+    if row.get('kind') != 'sample':
+      continue
+    mode, services, now = row.get('mode', 'unknown'), row.get('services', {}), row['mono_ns']
+    if mode == 'unknown' or not all(fresh(services, key, now) for key in ('carState', 'carControl', 'selfdriveState')):
+      coverage['invalid_samples'] += 1
+      continue
+    cs = services['carState']['data']
+    speed, accel = cs.get('vEgo'), cs.get('aEgo')
+    if not cs.get('canValid') or not isinstance(speed, (int, float)) or not math.isfinite(speed) or speed < 2:
+      continue
+    modes[mode] += 1
+    regime = f'{mode}:{int(speed * 3.6 // 20) * 20}-{int(speed * 3.6 // 20) * 20 + 20}kmh'
+    if isinstance(accel, (int, float)) and math.isfinite(accel):
+      histograms[regime + ':accel_mps2'][f'{math.floor(accel * 4) / 4:.2f}'] += 1
+    if fresh(services, 'radarState', now):
+      lead = services['radarState']['data'].get('leadOne') or {}
+      distance = lead.get('dRel')
+      if lead.get('status') and isinstance(distance, (int, float)) and math.isfinite(distance) and 0 < distance < 200:
+        histograms[regime + ':gap_seconds'][f'{math.floor(distance / speed * 4) / 4:.2f}'] += 1
+  return {'trip':list(trip),'events':dict(events),'modes':dict(modes),
+          'histograms':{k:dict(v) for k,v in histograms.items()},
+          'invalid_samples':coverage['invalid_samples']}
+
+
+def analyze(output, budget_seconds=120):
   events, modes, histograms = Counter(), Counter(), defaultdict(Counter)
   trips, event_trips = set(), defaultdict(set)
   seen = set()
   coverage = {'verified_chunks': 0, 'corrupt_chunks': 0, 'recovered_chunks': 0, 'invalid_samples': 0}
+  cache_dir=output/'analysis_cache';cache_dir.mkdir(exist_ok=True)
+  processor=digest(Path(__file__))
+  deadline=time.monotonic()+budget_seconds;pending=0;cached_count=0
   for manifest in sorted(output.rglob('*.manifest.json')):
     try:
       meta = json.loads(manifest.read_text(encoding='utf-8'))
@@ -107,46 +149,34 @@ def analyze(output):
       identity = (meta['id'], meta['sha256'])
       if identity in seen:
         continue
-      # Validate before counting; malformed chunks must not contribute partial statistics.
-      with gzip.open(path, 'rt', encoding='utf-8') as stream:
-        rows = [json.loads(line) for line in stream]
-      if not rows or rows[0].get('kind') != 'header' or rows[0].get('schema') != 1:
-        raise ValueError('Unsupported chunk schema')
-      header = rows[0]
+      cache_path=cache_dir/(meta['id']+'.json')
+      cached=None
+      try:
+        candidate=json.loads(cache_path.read_text(encoding='utf-8'))
+        if candidate.get('source_sha')==meta['sha256'] and candidate.get('processor')==processor:
+          cached=candidate['summary']
+      except (OSError,ValueError,KeyError):pass
+      if cached is None:
+        if time.monotonic()>=deadline:
+          pending+=1;continue
+        # Decode/validate once; cached aggregates are reused only after the
+        # original immutable bytes have passed their manifest hash again.
+        with gzip.open(path, 'rt', encoding='utf-8') as stream:
+          rows=[json.loads(line) for line in stream]
+        if not rows or rows[0].get('kind')!='header' or rows[0].get('schema')!=1:
+          raise ValueError('Unsupported chunk schema')
+        summary=chunk_summary(rows)
+        atomic_json(cache_path,{'processor':processor,'source_sha':meta['sha256'],'summary':summary})
+      else:
+        summary=cached;cached_count+=1
       seen.add(identity)
-      trip = (header.get('boot_id'), header.get('trip_id'))
-      trips.add(trip)
+      trip=tuple(summary['trip']);trips.add(trip)
       coverage['verified_chunks'] += 1
       coverage['recovered_chunks'] += int('recovered' in meta.get('reason', ''))
-      for row in rows[1:]:
-        if row.get('kind') == 'event':
-          name = row.get('name', 'unknown')
-          if name == 'oem_fault_observation':
-            after = row.get('after') or []
-            if not any(after):
-              continue
-            name += ':' + row.get('direction', 'unknown')
-          events[name] += 1
-          event_trips[name].add(trip)
-        if row.get('kind') != 'sample':
-          continue
-        mode, services, now = row.get('mode', 'unknown'), row.get('services', {}), row['mono_ns']
-        if mode == 'unknown' or not all(fresh(services, key, now) for key in ('carState', 'carControl', 'selfdriveState')):
-          coverage['invalid_samples'] += 1
-          continue
-        cs = services['carState']['data']
-        speed, accel = cs.get('vEgo'), cs.get('aEgo')
-        if not cs.get('canValid') or not isinstance(speed, (int, float)) or not math.isfinite(speed) or speed < 2:
-          continue
-        modes[mode] += 1
-        regime = f'{mode}:{int(speed * 3.6 // 20) * 20}-{int(speed * 3.6 // 20) * 20 + 20}kmh'
-        if isinstance(accel, (int, float)) and math.isfinite(accel):
-          histograms[regime + ':accel_mps2'][f'{math.floor(accel * 4) / 4:.2f}'] += 1
-        if fresh(services, 'radarState', now):
-          lead = services['radarState']['data'].get('leadOne') or {}
-          distance = lead.get('dRel')
-          if lead.get('status') and isinstance(distance, (int, float)) and math.isfinite(distance) and 0 < distance < 200:
-            histograms[regime + ':gap_seconds'][f'{math.floor(distance / speed * 4) / 4:.2f}'] += 1
+      events.update(summary['events']);modes.update(summary['modes'])
+      coverage['invalid_samples'] += summary['invalid_samples']
+      for name in summary['events']:event_trips[name].add(trip)
+      for name, counts in summary['histograms'].items():histograms[name].update(counts)
     except (ValueError, KeyError, TypeError, OSError, EOFError):
       coverage['corrupt_chunks'] += 1
   candidates = [{'event': name, 'observations': count, 'trips': len(event_trips[name]),
@@ -154,7 +184,7 @@ def analyze(output):
                  'parameter_change': None} for name, count in sorted(events.items())]
   result = {'schema': 1, 'trip_count': len(trips), 'coverage': coverage, 'moving_samples_by_control_mode': dict(modes),
             'events': dict(events), 'histograms': {key: dict(value) for key, value in sorted(histograms.items())},
-            'review_candidates': candidates, 'control_changes_applied': False,
+            'review_candidates': candidates, 'control_changes_applied': False, 'analysis_pending_chunks':pending, 'cached_chunks':cached_count,
             'limits': ['Sampled CAN cannot validate counters or prove absence of short events.',
                        'Driving style distributions are observations, not desired settings.',
                        'rlogs must be retrieved separately before device log rotation for full CAN replay.',
@@ -194,10 +224,10 @@ def main():
       if args.quality:
         import subprocess
         import sys
-        cmd=[sys.executable,str(Path(__file__).with_name('lx3_drive_quality.py')),'--input',str(args.out),'--out',str(args.out/'quality')]
+        cmd=[sys.executable,str(Path(__file__).with_name('lx3_drive_quality.py')),'--input',str(args.out),'--out',str(args.out/'quality'),'--recent-chunks','400']
         if args.video:cmd.append('--video')
         subprocess.run(cmd,check=True,timeout=300)
-      print(json.dumps({'downloaded': count, **result['coverage']}), flush=True)
+      print(json.dumps({'downloaded': count, 'analysis_pending_chunks':result['analysis_pending_chunks'], **result['coverage']}), flush=True)
     except (OSError, ValueError, KeyError) as exc:
       print(f'Sync incomplete; records preserved: {exc}', flush=True)
       if not args.watch:

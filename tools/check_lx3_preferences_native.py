@@ -74,11 +74,39 @@ def main():
         active_values.append(active.margin_applied)
       assert baseline.lanelines_active and active_values[-1]<-.049
       assert max(abs(v) for v in active_values)<=.05+1e-9
-      # Existing laneless mode wins; this feature does not silently switch it.
+      # Owner authorized transient30km/h pairing; never writes native Params.
       cs.useLaneLineSpeed=0
       now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm};active.readParams=0
       active.update(sm,carrot)
-      assert not active.lanelines_active and active.margin_applied==0
+      assert active.lanelines_active and active.effective_lane_speed==30
+      assert params.get_int('UseLaneLineSpeed')==5
+      active.margin_preferences.set('YellowLineBiasCm',0);active.readParams=0
+      active.update(sm,carrot)
+      assert not active.lanelines_active and active.margin_applied==0 and active.effective_lane_speed==0
+      # Shadow still observes a candidate with native lane mode0, without
+      # changing the path/solver relative to the real OTA10 implementation.
+      for i in range(160):
+        now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm}
+        baseline.update(sm,carrot);shadow.update(sm,carrot)
+        assert shadow.path_xyz.tobytes()==baseline.path_xyz.tobytes()
+        assert shadow.lat_mpc.x_sol.tobytes()==baseline.lat_mpc.x_sol.tobytes()
+      assert not shadow.lanelines_active and shadow.margin.value<-.049 and shadow.margin_applied==0
+      # Derive the sign from the exact production controlsd convention.
+      import ast, math
+      control=ast.parse((Path(__file__).parents[1]/'selfdrive/controls/controlsd.py').read_text())
+      expr=next(n.value for n in ast.walk(control) if isinstance(n,ast.Assign) and
+                any(isinstance(t,ast.Attribute) and t.attr=='curvature' for t in n.targets) and
+                isinstance(n.value,ast.UnaryOp) and isinstance(n.value.op,ast.USub))
+      # Find production -VM.calc_curvature with a left steering angle.
+      assert 'calc_curvature' in ast.unparse(expr)
+      scope={'self':NS(VM=NS(calc_curvature=lambda *args:.0003)),
+             'CS':NS(vEgo=12.),'steer_angle_without_offset':.01,'lp':NS(roll=0.),'math':math}
+      signed=eval(compile(ast.Expression(expr),'controlsd_curvature','eval'),scope)
+      assert signed<0
+      for i in range(100):
+        now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm}
+        sm['controlsState'].curvature=signed;shadow.update(sm,carrot)
+      assert abs(shadow.margin.value)<1e-9
       # A different supported vehicle never reads LX3 preference data.
       cp.carFingerprint='KIA_EV9';other=lp.LateralPlanner(cp)
       other.margin_preferences.read=lambda: (_ for _ in ()).throw(AssertionError('LX3 preferences leaked'))
@@ -90,7 +118,9 @@ def main():
       'baseline_source_sha256':hashlib.sha256(raw).hexdigest(),
       'actual_native_lateral_cycles':160,'off_path_and_solver_byte_identical':True,
       'shadow_path_and_solver_byte_identical':True,'active_shift_bounded':True,
-      'laneless_exit_reset':True,'non_lx3_isolated':True,'diagnostic_records':len(records),
+      'owner_transient_lane30_pairing':True,'laneless_exit_reset':True,
+      'laneless_shadow_byte_identical':True,'production_curvature_sign_veto':True,
+      'non_lx3_isolated':True,'diagnostic_records':len(records),
       'scope':'synthetic actual solver checks; no closed-loop vehicle or safety qualification'}
   args.output.write_text(json.dumps(result,indent=2),encoding='utf-8');print(json.dumps(result))
 

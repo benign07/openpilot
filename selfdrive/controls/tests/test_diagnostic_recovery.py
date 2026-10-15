@@ -46,6 +46,15 @@ def test_orphan_empty_gzip_does_not_get_a_manifest(tmp_path):
   assert any(p.read_bytes() == payload for p in (tmp_path / 'recovery_quarantine').iterdir())
 
 
+@pytest.mark.parametrize('payload',[b'bad gzip',b'\x1f\x8b\x08',gzip.compress(b'header')[:11]])
+def test_corrupt_orphan_gzip_is_preserved_without_a_restart_loop(tmp_path,payload):
+  source=tmp_path/('c'*32+'.jsonl.gz');source.write_bytes(payload)
+  store=ChunkStore(tmp_path,reserve=0)
+  assert store.list_chunks()==[] and store.recovery_quarantined==1
+  assert next((tmp_path/'recovery_quarantine').iterdir()).read_bytes()==payload
+  assert ChunkStore(tmp_path,reserve=0).recovery_quarantined==0
+
+
 def test_header_is_durable_before_first_periodic_flush(tmp_path):
   store = ChunkStore(tmp_path, reserve=0)
   assert store.begin({'boot_id': 'b'}, 1.)

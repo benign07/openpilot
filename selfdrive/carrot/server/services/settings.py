@@ -18,6 +18,13 @@ def inject_driving_preferences(data):
     'LateralMarginShadow': ('측방 여유 기록만 하기',
       '켜면 노란선/주변 차량 이동 후보와 해제 이유를 기록하되 조향 경로에는 적용하지 않습니다. 기본 켜짐입니다. 끄고 이동량을 설정해야 실제 적용 후보가 됩니다. 실제 적용도 차로 모드·유효한 양쪽 차선·신선한 차량/레이더 정보가 필요합니다. 시험 옵션 변경은 P·속도0·제어 해제 상태에서만 가능합니다.'),
   }
+  for name in ('YellowLineBiasCm','NearbyVehicleBiasCm'):
+    title, text = descriptions[name]
+    text = text.replace('차로 추종 사용속도가0이면 실제 조향에는 반영되지 않습니다.',
+      '기록 전용을 끄고 이동량을 켜면30km/h부터 기존 차로 추종도 함께 사용합니다(기존 속도 히스테리시스±2km/h). 끄거나 기록 전용으로 바꾸면 원래 차로 추종 설정으로 돌아갑니다.')
+    descriptions[name] = title, text
+  title, text = descriptions['LateralMarginShadow']
+  descriptions['LateralMarginShadow'] = title, text+' 기록 전용은 차로 추종이 꺼져 있어도 후보를 계산하며 경로를 바꾸지 않습니다.'
   existing = {p.get('name') for p in data.get('params', [])}
   names = []
   for name, (lo, hi, default) in DRIVING_PREFERENCES.items():

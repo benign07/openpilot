@@ -58,13 +58,19 @@ class LateralMargin:
     self.previous_shadow = None
 
   def reset(self, reason):
-    self.value = self.target = 0.0
+    self.value = 0.0
+    return self.withdraw(reason)
+
+  def withdraw(self, reason, shadow=False):
+    self.target = 0.0
     self.reason = reason
     self.tracks.clear()
     self.last_radar = 0
     self.yellow_since = None
     self.hold = [0, 0]
-    return 0.0
+    self.value += max(-0.05*self.dt, min(0.05*self.dt, -self.value))
+    self.evidence = {'qualified':False}
+    return 0.0 if shadow else self.value
 
   def update(self, settings, radar, *, now_ns, radar_ns, valid, lane_mode, lat_active,
              blinkers, steering_pressed, maneuver, speed, curvature, left_code,
@@ -77,22 +83,22 @@ class LateralMargin:
     if self.previous_shadow != shadow:
       self.previous_shadow = shadow
       return self.reset('shadow_mode_changed')
-    if not lat_active or not lane_mode:
+    if not lat_active or (not lane_mode and not shadow):
       return self.reset('inactive_laneless_or_control_off')
     if not valid or not 0 <= now_ns-radar_ns <= 200_000_000:
-      return self.reset('stale_or_invalid_inputs')
+      return self.withdraw('stale_or_invalid_inputs', shadow)
     if steering_pressed:self.last_steer = now_ns
     if (len(probabilities)!=2 or len(stds)!=2 or not corridor or
         not all(math.isfinite(v) for v in (*probabilities, *stds, speed, curvature, legacy_offset)) or
         min(probabilities)<0.8 or max(stds)>0.15 or not 30/3.6<=speed<=110/3.6 or abs(curvature)>0.001):
-      return self.reset('lane_or_curve_unqualified')
+      return self.withdraw('lane_or_curve_unqualified', shadow)
     # Every row is (left/right line y, final base path y, path heading), aligned
     # spatially for the now..2s path. A conservative2.24m lateral envelope plus
     #0.30m line margin and heading projection is used; not a mirror-clearance proof.
     lower, upper = -0.10, 0.10
     for left, right, path, yaw in corridor:
       if not all(math.isfinite(v) for v in (left,right,path,yaw)) or not 3.0<=right-left<=4.0:
-        return self.reset('corridor_unqualified')
+        return self.withdraw('corridor_unqualified', shadow)
       footprint = 1.12+2.53*abs(math.sin(yaw))
       lower = max(lower, left+footprint+0.30-path)
       upper = min(upper, right-footprint-0.30-path)
@@ -117,8 +123,9 @@ class LateralMargin:
         # A sign-binned track is not automatically an adjacent-lane vehicle.
         if lead.dPath*sign<=0 or lead.yRel*sign<=0:
           uncertain=True;continue
+        if not 0.0<lead.dPath*sign<5.0:continue
+        occupied[side]=True  # Includes a vehicle straddling our lane boundary.
         if not 2.0<lead.dPath*sign<5.0:continue
-        occupied[side]=True
         key=(side,int(lead.radarTrackId))
         previous=self.tracks.get(key)
         since=radar_ns
@@ -138,7 +145,7 @@ class LateralMargin:
     self.tracks = new_tracks
     self.last_radar = radar_ns
     if uncertain or any(t.status and (not math.isfinite(t.dRel) or 0<t.dRel<40) for t in radar.leadsCutIn):
-      return self.reset('side_geometry_or_cutin_uncertain')
+      return self.withdraw('side_geometry_or_cutin_uncertain', shadow)
     # Retain a just-observed same-direction car briefly as it leaves front radar.
     # OEM occupancy prevents a contradictory movement, not a metric distance.
     away = [verified[i] or now_ns<self.hold[i] for i in (0,1)]
@@ -161,6 +168,13 @@ class LateralMargin:
       self.target=-nearby_cm*0.01;self.reason='away_from_right_vehicle'
     elif yellow_cm and self.yellow_since is not None and now_ns-self.yellow_since>=2_000_000_000:
       self.target=-yellow_cm*0.01;self.reason='toward_left_yellow'
+    # Moving away from a right vehicle cannot bypass the protections on a
+    # yellow left boundary, including the user's separately selected amount.
+    if self.target < 0.0 and left_code//10 == 2:
+      if not yellow_cm or self.yellow_since is None or now_ns-self.yellow_since < 2_000_000_000:
+        self.target=0.0;self.reason='yellow_boundary_veto'
+      else:
+        self.target=max(self.target,-yellow_cm*0.01)
     # Occupancy/corridor constraints override the smoothing history.
     if occupied[0]:lower=max(0.0,lower)
     if occupied[1]:upper=min(0.0,upper)
@@ -168,6 +182,11 @@ class LateralMargin:
     rate=0.02 if abs(self.target)>abs(self.value) and self.target*self.value>=0 else 0.05
     self.value += max(-rate*self.dt,min(rate*self.dt,self.target-self.value))
     self.value=max(lower,min(upper,self.value))
+    self.evidence={'qualified':True,'lower':lower,'upper':upper,'occupied':occupied,
+                   'verified':verified,'hold_until_ns':list(self.hold),
+                   'tracks':[{'side':key[0],'slot':key[1],'since_ns':row[1],
+                              'distance':row[2],'d_path':row[3],'speed':row[4]}
+                             for key,row in self.tracks.items()]}
     return 0.0 if shadow else self.value
 
 class LanePlanner:

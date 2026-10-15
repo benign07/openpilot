@@ -64,6 +64,31 @@ def test_not_a_general_cruising_acceleration_boost_or_repeated_frame_timer():
   for i in range(100):assert run(h,r,2_000_000_000+i*50_000_000) == 1.3
 
 
+def test_center_queue_beyond_first_lead_wins_without_selected_second_lead():
+  h=LaunchFollow();r=scene();stopped(h,r)
+  r.leadsCenter=[NS(status=True,radarTrackId=7,dRel=35.,vLead=0.,aLeadK=0.)]
+  assert run(h,r,2_500_000_000)==1.3 and h.reason=='center_queue'
+
+
+def test_reused_slot_range_jump_must_qualify_again():
+  h=LaunchFollow();r=scene();stopped(h,r)
+  assert run(h,r,2_500_000_000)>1.3
+  r.leadOne.dRel=35.
+  assert run(h,r,2_550_000_000)==1.3 and h.reason=='track_unqualified'
+
+
+def test_mild_measurement_jitter_and_comfort_exit_do_not_snap():
+  h=LaunchFollow();r=scene();stopped(h,r)
+  for i in range(30):run(h,r,2_500_000_000+i*50_000_000)
+  for i in range(8):
+    r.leadOne.aLeadK=(-.01 if i%2 else .01)
+    assert run(h,r,4_000_000_000+i*50_000_000)>1.3
+  before=h.extra;r.leadOne.vRel=.15
+  assert run(h,r,4_400_000_000)==pytest.approx(1.3+before-.015)
+  r.leadsCutIn=[NS(status=True,dRel=30.)]
+  assert run(h,r,4_450_000_000)==1.3
+
+
 def test_preference_store_invalid_or_missing_is_all_off(tmp_path):
   f=tmp_path/'prefs.json';p=DrivingPreferences(f)
   assert p.read()['LaunchFollowStrength'] == 0 and p.read()['LateralMarginShadow'] == 1
@@ -125,3 +150,33 @@ def test_new_virtual_setting_api_requires_parked_before_writing(monkeypatch):
   async def parked(_):pass
   scope['require_parked']=parked
   assert asyncio.run(scope['api_param_set'](request)).status==200 and writes
+
+
+def test_defaults_reset_virtual_store_and_parked_rejection_precedes_native_reset(tmp_path):
+  import asyncio,ast
+  from pathlib import Path
+  from aiohttp import web
+  from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES
+  path=Path(__file__).resolve().parents[3]/'selfdrive/carrot/server/features/system.py'
+  node=next(n for n in ast.parse(path.read_text(encoding='utf-8')).body
+            if isinstance(n,ast.AsyncFunctionDef) and n.name=='api_set_default')
+  p=DrivingPreferences(tmp_path/'prefs.json');p.set('YellowLineBiasCm',5);p.set('LateralMarginShadow',0)
+  native=[]
+  metadata={k:{'default':v[2]} for k,v in DRIVING_PREFERENCES.items()}
+  metadata['stock']={'default':1}
+  def restore(values):
+    native.append(values);return {'result':{'fail_cnt':0},'preview':{'entries':[]}}
+  scope={'web':web,'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'HAS_PARAMS':True,
+    'get_settings_cached':lambda: ({},{},metadata,[]),
+    '_is_carrot_default_reset_param':lambda *args:True,
+    'set_param_value':p.set,'restore_param_values_validated':restore}
+  exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),scope)
+  async def blocked(_):raise web.HTTPConflict(text='PARKED_REQUIRED')
+  scope['require_parked']=blocked
+  with pytest.raises(web.HTTPConflict):asyncio.run(scope['api_set_default'](None))
+  assert native==[] and p.read()['YellowLineBiasCm']==5
+  async def parked(_):pass
+  scope['require_parked']=parked
+  response=asyncio.run(scope['api_set_default'](None))
+  assert response.status==200 and native==[{'stock':1}]
+  assert p.read()['YellowLineBiasCm']==0 and p.read()['LateralMarginShadow']==1

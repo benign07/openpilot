@@ -9,7 +9,9 @@ from ..live_runtime.broker import RealtimeBroker
 from ..live_runtime.normalize import to_transport_safe
 from ..config import OFFROAD_ASSETS_DIR
 from ..services.device_info import get_calibration_status, get_device_network
-from ..services.params import HAS_PARAMS, Params, restore_param_values_validated
+from ..services.params import HAS_PARAMS, Params, restore_param_values_validated, set_param_value
+from ..services.setting_safety import require_parked
+from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES
 from ..services.settings import get_settings_cached
 from ..services.time_sync import TIME_SYNC_DEBUG_DEFAULT, sync_system_time_from_browser
 
@@ -308,6 +310,13 @@ async def api_set_default(request: web.Request) -> web.Response:
       for name, meta in by_name.items()
       if _is_carrot_default_reset_param(name, meta)
     }
+    virtual = {name:values.pop(name) for name in list(values) if name in DRIVING_PREFERENCES}
+    # These optional control preferences have the same parked gate on reset
+    # as on individual changes. Reject before ANY native settings are reset.
+    if virtual:
+      await require_parked(request)
+      for name, value in virtual.items():
+        set_param_value(name, value)
     restored = restore_param_values_validated(values)
     result = restored.get("result") or {}
     ok = int(result.get("fail_cnt") or 0) == 0
@@ -316,6 +325,7 @@ async def api_set_default(request: web.Request) -> web.Response:
       for entry in restored.get("preview", {}).get("entries", [])
       if entry.get("apply")
     }
+    applied_values.update(virtual)
     status = 200 if ok else 500
     return web.json_response({
       "ok": ok,
@@ -324,6 +334,8 @@ async def api_set_default(request: web.Request) -> web.Response:
       "values": applied_values,
       **restored,
     }, status=status)
+  except web.HTTPException:
+    raise
   except Exception as e:
     return web.json_response({"ok": False, "error": str(e)}, status=500)
 

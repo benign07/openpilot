@@ -1,6 +1,7 @@
 """Isolated CI: real solver noninterference and PC replay qualification."""
 import argparse
 import json
+import hashlib
 import os
 import tempfile
 import time
@@ -111,6 +112,47 @@ def main():
     result['real_planner_real_carrot_builder']=True
     result['snapshot_not_lazy']=True
     result['diagnostic_failure_did_not_abort_planner']=True
+    # Exact OTA10 planner fixture with the current unchanged native solver.
+    # New preferences OFF must preserve the real problem and solution bytes.
+    fixture=Path(__file__).parent/'fixtures/lx3_longitudinal_ota10_before.txt'
+    raw=fixture.read_bytes();scope={'__name__':'lx3_ota10_long_baseline'}
+    exec(compile(raw,str(fixture),'exec'),scope)
+    baseline=scope['LongitudinalPlanner'](cp);off=lp.LongitudinalPlanner(cp)
+    from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences
+    off.driving_preferences=DrivingPreferences(Path(directory)/'off.json')
+    carrots=[]
+    for _ in range(2):
+      item=CarrotPlanner();item.update=lambda *args:30.;item.mode='acc';item.v_cruise=30/3.6;item.stop_dist=1000.
+      carrots.append(item)
+    for i in range(120):
+      sm.logMonoTime={k:time.monotonic_ns() for k in sm}
+      sm['carState'].vEgo=0. if i<30 else min(8.,(i-30)*.1)
+      sm['carState'].standstill=i<30
+      for instance,item in zip((baseline,off),carrots):instance.update(sm,item)
+      for attr in ('params','yref','x_sol','u_sol'):
+        assert getattr(baseline.mpc,attr).tobytes()==getattr(off.mpc,attr).tobytes(),(i,attr)
+      assert baseline.output_a_target==off.output_a_target and baseline.output_should_stop==off.output_should_stop
+    result['longitudinal_off_baseline_cycles_byte_identical']=120
+    result['longitudinal_baseline_source_sha256']=hashlib.sha256(raw).hexdigest()
+    # Integration precedence: force an optional capability and inspect the
+    # actual planner's turn limiter, feasibility clamp and approach override.
+    original_launch=off.launch_follow.update
+    off.launch_follow.update=lambda *args,**kw:kw['table_max']*1.2
+    carrots[1].get_carrot_accel=lambda _:1.3
+    sm['carState'].vEgo=12.;sm['carState'].standstill=False
+    sm['controlsState'].desiredCurvature=.03
+    off.approach.update=lambda *a,**kw:ApproachRequest()
+    off.long_evidence.due=lambda *args:True
+    sm.logMonoTime={k:time.monotonic_ns() for k in sm};off.update(sm,carrots[1])
+    b=off.long_evidence_pending['bounds']
+    expected=lp.limit_accel_in_turns(12.,.03,[-2.,1.56],3.)[1]
+    assert abs(b['before_approach']-max(expected,b['a_desired_before']-.05))<1e-9,b
+    off.approach.update=lambda *a,**kw:ApproachRequest(.4)
+    sm.logMonoTime={k:time.monotonic_ns() for k in sm};off.update(sm,carrots[1])
+    b=off.long_evidence_pending['bounds']
+    assert b['after_approach']<=b['before_approach'] and b['after_approach']==b['mpc_max'],b
+    off.launch_follow.update=original_launch
+    result['actual_launch_turn_feasibility_approach_precedence']=True
   args.output.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 
 

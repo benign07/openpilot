@@ -875,6 +875,9 @@ const SETTING_DISPLAY_UNIT_TYPES = Object.freeze({
 });
 
 const SETTING_PARAM_DISPLAY_TYPES = Object.freeze({
+  LaunchFollowStrength: "percent",
+  YellowLineBiasCm: "distanceCm",
+  NearbyVehicleBiasCm: "distanceCm",
   PathOffset: "distanceCm",
   CruiseOnDist: "distanceCm",
   CruiseEcoControl: "speedKph",

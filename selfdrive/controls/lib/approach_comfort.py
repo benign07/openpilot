@@ -105,53 +105,79 @@ class LaunchFollow:
     self.stopped_ns = 0
     self.extra = 0.0
     self.reason = 'off'
+    self.previous_lead = None
+
+  def withdraw(self, table_max, reason, *, immediate=False):
+    self.reason = reason
+    self.extra = 0.0 if immediate else max(0.0, self.extra-0.3*self.dt)
+    return table_max+self.extra if self.extra else table_max
 
   def update(self, strength, radar, *, stamp_ns, eligible, should_stop, v_ego,
              desired_distance, table_max, approach_active):
     self.reason = 'off'
-    previous_extra, self.extra = self.extra, 0.0
     lead = radar.leadOne
     stamp_ok = stamp_ns > 0 and stamp_ns >= self.last_ns
     lead_ok = (lead.status and lead.radar and lead.radarTrackId >= 0 and
                all(math.isfinite(x) for x in (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK)))
-    if not stamp_ok or not lead_ok or lead.radarTrackId != self.track or stamp_ns-self.last_ns > 200_000_000:
+    continuous = False
+    if lead_ok and self.previous_lead is not None:
+      d, velocity = self.previous_lead
+      delta = (stamp_ns-self.last_ns)/1e9
+      continuous = (0 <= delta <= .2 and abs(lead.dRel-d-lead.vRel*delta)<1.5 and
+                    abs(lead.vLead-velocity)<5.)
+    if not stamp_ok or not lead_ok or lead.radarTrackId != self.track or not continuous:
       self.track = lead.radarTrackId if lead_ok and stamp_ok else None
       self.since_ns = stamp_ns
+      self.extra = 0.0
+    self.previous_lead = (lead.dRel, lead.vLead) if lead_ok else None
     self.last_ns = stamp_ns
     if not strength or not eligible:
       self.track = None
       self.stopped_ns = 0
-      return table_max
+      return self.withdraw(table_max, 'off_or_ineligible', immediate=True)
     if v_ego <= 0.15:
       self.stopped_ns = stamp_ns
     if not lead_ok or not stamp_ok or stamp_ns-self.since_ns < 1_000_000_000:
-      self.reason = 'track_unqualified'
-      return table_max
-    self.reason = 'hold_or_approach'
+      return self.withdraw(table_max, 'track_unqualified', immediate=True)
     if should_stop or v_ego <= 0.5 or approach_active:
-      return table_max
+      return self.withdraw(table_max, 'hold_or_approach', immediate=True)
     if not self.stopped_ns or not 0 <= stamp_ns-self.stopped_ns < 25_000_000_000:
-      self.reason = 'outside_launch_window'
-      return table_max
-    self.reason = 'lead_not_opening'
-    if lead.vRel <= 0.5 or lead.vLead <= 1.0 or lead.aLeadK < 0.0 or lead.dRel <= desired_distance+2.0:
-      return table_max
-    other = radar.leadTwo
-    self.reason = 'second_lead_or_cutin'
-    if other.status and (not all(math.isfinite(x) for x in (other.dRel, other.vRel, other.aLeadK)) or
-                         other.dRel < lead.dRel or other.vRel < 0.0 or other.aLeadK < 0.0):
-      return table_max
-    if any(t.status and (not math.isfinite(t.dRel) or 0 < t.dRel < 50) for t in radar.leadsCutIn):
-      return table_max
+      return self.withdraw(table_max, 'outside_launch_window')
     if not all(math.isfinite(x) for x in (v_ego, desired_distance, table_max)) or table_max <= 0:
-      self.reason = 'invalid_limits'
-      return table_max
+      return self.withdraw(table_max, 'invalid_limits', immediate=True)
+    other = radar.leadTwo
+    # Selected slots may both name the first lead. Also inspect the exported
+    # center tracks: a stopped queue beyond it can be absent from leadTwo.
+    duplicate = other.status and getattr(other, 'radarTrackId', None) == lead.radarTrackId
+    if other.status and not duplicate and (
+        not all(math.isfinite(x) for x in (other.dRel, other.vRel, other.aLeadK)) or
+        other.dRel < lead.dRel or other.vRel < 0.0 or other.aLeadK < 0.0):
+      return self.withdraw(table_max, 'second_lead_or_cutin', immediate=True)
+    for center in getattr(radar, 'leadsCenter', ()):
+      if not center.status or getattr(center, 'radarTrackId', None) == lead.radarTrackId:
+        continue
+      if (not all(math.isfinite(x) for x in (center.dRel, center.vLead, center.aLeadK)) or
+          (1.0 < center.dRel-lead.dRel < 60.0 and
+           (center.vLead < 3.0 or center.vLead < lead.vLead-1.0 or center.aLeadK < -.15))):
+        return self.withdraw(table_max, 'center_queue', immediate=True)
+    if any(t.status and (not math.isfinite(t.dRel) or 0 < t.dRel < 50) for t in radar.leadsCutIn):
+      return self.withdraw(table_max, 'second_lead_or_cutin', immediate=True)
+    # Material closing/deceleration is a hard exit; mild measurement jitter
+    # uses hysteresis and withdraws the optional capability gradually.
+    if lead.vRel < 0.0 or lead.aLeadK < -.15 or lead.dRel <= desired_distance:
+      return self.withdraw(table_max, 'closing_lead', immediate=True)
+    active = self.extra > 0.0
+    if (lead.vRel <= (.2 if active else .5) or lead.vLead <= 1.0 or
+        lead.aLeadK < (-.05 if active else 0.0) or
+        lead.dRel <= desired_distance+(1.0 if active else 2.0)):
+      return self.withdraw(table_max, 'lead_not_opening')
     amount = clamp(strength, 0, 20) * 0.01 * clamp((lead.vRel-0.5)/2.5, 0., 1.)
     amount *= clamp((60/3.6-v_ego)/(20/3.6), 0., 1.)
     allowed = min(1.6, table_max*(1.+amount))
     self.reason = 'opening_allowance' if allowed > table_max else 'speed_or_stock_limit'
     # A higher stock table must never be lowered by this optional allowance.
-    self.extra = min(max(0., allowed-table_max), previous_extra+0.15*self.dt)
+    target = max(0., allowed-table_max)
+    self.extra += clamp(target-self.extra, -.3*self.dt, .15*self.dt)
     return table_max+self.extra if self.extra else table_max
 
 

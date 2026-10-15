@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 import hashlib
 import gzip
+import zlib
 import json
 import math
 import os
@@ -98,8 +99,11 @@ class ChunkStore:
       self.compress(path, 'interrupted_seal_recovered')
     for path in self.root.glob('*.jsonl.gz'):
       if not self.manifest_path(path).exists():
-        with gzip.open(path, 'rb') as stream:
-          header_ok = self.valid_header(stream)
+        try:
+          with gzip.open(path, 'rb') as stream:
+            header_ok = self.valid_header(stream)
+        except (gzip.BadGzipFile, EOFError, zlib.error):
+          header_ok = False
         if not header_ok:
           self.quarantine(path)
           continue

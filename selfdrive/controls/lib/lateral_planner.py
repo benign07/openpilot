@@ -138,11 +138,17 @@ class LateralPlanner:
     #lane_change_prob = self.LP.l_lane_change_prob + self.LP.r_lane_change_prob
     #self.DH.update(sm['carState'], md, sm['carControl'].latActive, lane_change_prob, sm)
 
-    if self.useLaneLineSpeedApply == 0 or self.laneless_only:
+    # Owner opt-in: actual margin mode temporarily selects stock lane following
+    # from30km/h (including its existing +/-2km/h hysteresis). Native Params
+    # remain unchanged, so off/shadow and an OTA rollback restore that setting.
+    margin_active = (self.margin_supported and not self.margin_settings['LateralMarginShadow'] and
+                     any(self.margin_settings[k] for k in ('YellowLineBiasCm','NearbyVehicleBiasCm')))
+    self.effective_lane_speed = 30 if margin_active else self.useLaneLineSpeedApply
+    if self.effective_lane_speed == 0 or self.laneless_only:
       self.useLaneLineMode = False
-    elif speed_kph >= self.useLaneLineSpeedApply + 2:
+    elif speed_kph >= self.effective_lane_speed + 2:
       self.useLaneLineMode = True
-    elif speed_kph < self.useLaneLineSpeedApply - 2:
+    elif speed_kph < self.effective_lane_speed - 2:
       self.useLaneLineMode = False
 
     # Turn off lanes during lane change
@@ -216,6 +222,9 @@ class LateralPlanner:
             'settings':dict(self.margin_settings),'target':self.margin.target,'filtered':self.margin.value,
             'applied':self.margin_applied,'reason':self.margin.reason,
             'lane_mode':self.lanelines_active,'left_code':int(cs.leftLaneLine),'right_code':int(cs.rightLaneLine),
+            'native_lane_speed':float(self.useLaneLineSpeedApply),'effective_lane_speed':float(self.effective_lane_speed),
+            'speed_mps':float(v_ego_car),'curvature':float(measured_curvature),
+            'corridor':corridor,'qualification':self.margin.evidence,
             'left_occupied':bool(cs.leftBlindspot),'right_occupied':bool(cs.rightBlindspot),
             'legacy_offset':float(self.LP.offset_total+self.pathOffset),
             'probabilities':list(md.laneLineProbs)[1:3],'stds':list(md.laneLineStds)[1:3],
