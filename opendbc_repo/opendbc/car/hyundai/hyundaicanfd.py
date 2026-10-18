@@ -1,4 +1,5 @@
 import copy
+import math
 import numpy as np
 from opendbc.car import CanBusBase
 from opendbc.car.crc import CRC16_XMODEM
@@ -695,9 +696,107 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control,
     if blink_pairs:
       _apply_radar_blink(values, blink_pairs, frame, t=blink_t)
 
+
+class LX3SurroundDisplay:
+  """Fresh stable forward-side radar objects for a display-only empty-slot fill.
+
+  No object classification is inferred. Rear/alongside coverage is not claimed.
+  Missing/stale packets and reused slots clear history instead of holding icons.
+  """
+  def __init__(self):
+    self.tracks = {}
+    self.last_stamp = 0
+    self.objects = {}
+    self.reason = 'off'
+
+  def clear(self, reason):
+    self.tracks = {}
+    self.last_stamp = 0
+    self.objects = {}
+    self.reason = reason
+    return {}
+
+  def update(self, context, now_ns, enabled):
+    if not enabled:
+      return self.clear('off_or_invalid_can')
+    if context is None:
+      return self.clear('missing_context')
+    radar, stamp = context
+    if not 0 < stamp <= now_ns or now_ns - stamp > 200_000_000:
+      return self.clear('stale_radar')
+    if any(radar.radarErrors.to_dict().values()):
+      return self.clear('radar_error')
+    if stamp < self.last_stamp:
+      return self.clear('clock_reversed')
+    if stamp == self.last_stamp:
+      return dict(self.objects)
+    current, objects = {}, {}
+    duplicate_ids = set()
+    seen_ids = set()
+    candidates = []
+    for side, leads in enumerate((radar.leadsLeft, radar.leadsRight)):
+      sign = 1 if side == 0 else -1
+      for index, lead in enumerate(leads):
+        if index >= 16:
+          break
+        if not lead.status or not lead.radar or lead.radarTrackId < 0:
+          continue
+        values = (lead.dRel, lead.yRel, lead.dPath, lead.vRel, lead.vLead, lead.vLat)
+        if not all(math.isfinite(v) for v in values):
+          continue
+        if not (0.5 < lead.dRel < 50 and 2 < lead.yRel * sign < 5 and
+                2 < lead.dPath * sign < 5 and abs(lead.yRel - lead.dPath) < .75 and
+                lead.vLead >= -1 and abs(lead.vLat) < 1):
+          continue
+        slot = int(lead.radarTrackId)
+        if slot in seen_ids:
+          duplicate_ids.add(slot)
+        seen_ids.add(slot)
+        candidates.append((side, slot, lead))
+    for side, slot, lead in candidates:
+      if slot in duplicate_ids:
+        continue
+      key = side, slot
+      since = stamp
+      previous = self.tracks.get(key)
+      if previous:
+        old_stamp, old_since, old_d, old_y, old_v = previous
+        dt = (stamp - old_stamp) / 1e9
+        if (0 < dt <= .2 and abs(lead.dRel - old_d - lead.vRel * dt) < 1.5 and
+            abs(lead.yRel - old_y) < .5 and abs(lead.vLead - old_v) < 5):
+          since = old_since
+      current[key] = stamp, since, lead.dRel, lead.yRel, lead.vLead
+      if stamp - since >= 1_000_000_000:
+        name = 'LF' if side == 0 else 'RF'
+        if name not in objects or lead.dRel < objects[name][0]:
+          objects[name] = float(lead.dRel), abs(float(lead.yRel))
+    self.tracks, self.objects, self.last_stamp = current, objects, stamp
+    self.reason = 'visible' if objects else 'tracking_or_no_target'
+    return dict(objects)
+
+
+def _apply_lx3_surround_display(values, CS, objects):
+  # Both OEM formats have first refusal. A hidden object with nonzero geometry
+  # is not an empty slot. Fill only LF/RF, never front lead, rear, state or faults.
+  sources = (CS.adrv_0x1ea, CS.ccnc_0x162)
+  if any(source is None for source in sources):
+    return
+  for side in ('LF', 'RF'):
+    candidate = objects.get(side)
+    names = [side + suffix for suffix in ('_DETECT', '_DETECT_DISTANCE', '_DETECT_LATERAL')]
+    if candidate is None or not all(name in values for name in names):
+      continue
+    if any(any(name not in source or source[name] != 0 for name in names) for source in sources):
+      continue
+    distance, lateral = candidate
+    if not (math.isfinite(distance) and math.isfinite(lateral) and .5 < distance < 50 and 2 < lateral < 5):
+      continue
+    values.update({names[0]: 1, names[1]: distance, names[2]: lateral})
+
+
 def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
                          disp_angle, left_lane_warning, right_lane_warning,
-                         enable_corner_radar, stopping, canfd_debug, notification_vibrate=False):
+                         enable_corner_radar, stopping, canfd_debug, notification_vibrate=False, surround_objects=None):
   ret = []
 
   md = CS.modelV2
@@ -878,6 +977,8 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           blink_t=1.0
         )
 
+        if CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' and enable_corner_radar > 0:
+          _apply_lx3_surround_display(values, CS, surround_objects or {})
         ret.append(packer.make_can_msg("ADRV_0x1ea", CAN.ECAN, values, rx_counter = rx_counter))
 
       if CS.ccnc_0x162 is not None:
@@ -913,6 +1014,8 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           values["FAULT_LSS"] = 0
           values["FAULT_DAS"] = 0
 
+        if CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' and enable_corner_radar > 0:
+          _apply_lx3_surround_display(values, CS, surround_objects or {})
         ret.append(packer.make_can_msg("CCNC_0x162", CAN.ECAN, values))
 
     # --- NEW_MSG_4B9 (corner radar keep-alive?) ---

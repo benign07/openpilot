@@ -31,6 +31,20 @@ EventName = log.OnroadEvent.EventName
 carlog.addHandler(ForwardingHandler(cloudlog))
 
 
+def surround_display_context(sm, now_nanos):
+  """Reuse card's existing subscriptions; display data never grants control."""
+  for service in ('radarState', 'modelV2'):
+    if not (sm.valid[service] and sm.alive[service] and
+            0 < int(sm.logMonoTime[service]) <= now_nanos and
+            now_nanos - int(sm.logMonoTime[service]) <= 200_000_000):
+      return None
+  radar = sm['radarState']
+  if not (0 < int(radar.mdMonoTime) <= now_nanos and
+          now_nanos - int(radar.mdMonoTime) <= 200_000_000):
+    return None
+  return radar, int(sm.logMonoTime['radarState'])
+
+
 def obd_callback(params: Params) -> ObdCallback:
   def set_obd_multiplexing(obd_multiplexing: bool):
     if params.get_bool("ObdMultiplexingEnabled") != obd_multiplexing:
@@ -270,7 +284,11 @@ class Car:
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       model_v2 = self.sm['modelV2'] if self.sm.valid['modelV2'] and self.sm.alive['modelV2'] else None
-      self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, model_v2)
+      if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
+        self.last_actuators_output, can_sends = self.CI.apply(
+          CC, now_nanos, model_v2, display_context=surround_display_context(self.sm, now_nanos))
+      else:
+        self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, model_v2)
       authority = CC.lx3Authority if uses_lx3_authority(self.CP) else None
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid,
                                                  lx3_authority=authority))

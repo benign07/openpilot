@@ -187,6 +187,7 @@ class CarController(CarControllerBase):
     self.camera_scc_params = Params().get_int("HyundaiCameraSCC")
     self.is_ldws_car = Params().get_bool("IsLdwsCar")
     self.enable_corner_radar = 0
+    self.lx3_surround_display = hyundaicanfd.LX3SurroundDisplay() if CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' else None
 
     self.steerDeltaUpOrg = self.steerDeltaUp = self.steerDeltaUpLC = self.params.STEER_DELTA_UP
     self.steerDeltaDownOrg = self.steerDeltaDown = self.steerDeltaDownLC = self.params.STEER_DELTA_DOWN
@@ -246,6 +247,12 @@ class CarController(CarControllerBase):
       self.params.STEER_DELTA_UP = self.steerDeltaUp
       self.params.STEER_DELTA_DOWN = self.steerDeltaDown
     
+    surround_objects = {}
+    if self.lx3_surround_display is not None and self.frame % 5 == 0:
+      surround_objects = self.lx3_surround_display.update(
+        getattr(CS, 'lx3_surround_context', None), now_nanos,
+        self.enable_corner_radar > 0 and CS.out.canValid and not CS.out.canTimeout)
+
     angle_control = self.CP.flags & HyundaiFlags.ANGLE_CONTROL
     lx3_guard = uses_lx3_authority(self.CP)
     notification_vibrate = self.haptic_notifications.update(
@@ -510,7 +517,7 @@ class CarController(CarControllerBase):
         self.hyundai_jerk.check_carrot_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
 
         if True: #not camera_scc:
-          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar, stopping, self.canfd_debug, notification_vibrate=notification_vibrate))
+          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar, stopping, self.canfd_debug, notification_vibrate=notification_vibrate, surround_objects=surround_objects))
           if hda2:
             can_sends.extend(hyundaicanfd.create_adrv_messages(self.CP, self.packer, self.CAN, self.frame))
           else:

@@ -47,6 +47,16 @@ def inject_driving_preferences(data):
        'ApproachStopSmooth','ApproachTrafficCalm','ApproachFlexibleGap','ApproachFlexibleGapMin']),
   ]
   definitions = {p.get('name'):p for p in data.get('params',[])}
+  # Reuse the existing switch; do not introduce an unknown native Params key
+  # or a virtual preference that older rollback readers would reject.
+  if 'EnableCornerRadar' in definitions:
+    option = definitions['EnableCornerRadar']
+    description = 'LX3에서는 오파 제어 여부와 무관하게 순정 주변 정보를 우선 표시합니다. 순정 항목이 비면 신선하고 1초 이상 안정적으로 추적된 전방 측방 레이더 대상을 회색 상자로 보완합니다. 후방·바로 옆의 전체 감지와 차종 인식은 보장하지 않습니다. 0은 보완 끄기, 1은 표시 보완, 2는 기존 끼어들기 검출 설정도 유지합니다. 차선 내 미세조정은 아래의 별도 옵션과 차선·제어 조건을 따릅니다.'
+    option.update(title='주변 대상 상시 표시', etitle='Surrounding object display',
+      ctitle='周围目标持续显示', descr=description,
+      edescr='LX3 keeps OEM surrounding objects first, whether openpilot controls are active or not. Empty forward-side slots may use fresh radar tracks stable for at least one second, shown as generic gray objects. Full rear/alongside coverage and vehicle classification are not provided. 0 disables filling; 1 enables it; 2 also keeps existing cut-in detection. Within-lane adjustment has separate options and lane/control requirements.',
+      cdescr='LX3优先保留原厂周围目标，不要求openpilot控制已启用。前侧空白位置可由持续稳定至少一秒的新鲜雷达轨迹补充为灰色通用目标。不提供完整侧后方覆盖或车型识别。0关闭补充，1开启补充，2同时保留现有切入检测。车道内微调仍需单独选项及车道和控制条件。')
+    sections.insert(0, ('surround_display','주변 대상 표시','Surrounding objects',['EnableCornerRadar']))
   development = {name for _,_,_,items in sections for name in items if name in definitions}
   for name in development:
     definitions[name].update(group='개발 중 기능',egroup='Development features',cgroup='Development features')

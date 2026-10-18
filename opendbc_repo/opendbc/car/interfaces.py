@@ -402,10 +402,12 @@ class CarInterfaceBase(ABC):
     return self.lat_torque_nn_model is not None
     
 
-  def apply(self, c: structs.CarControl, now_nanos: int | None = None, model_v2=None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
+  def apply(self, c: structs.CarControl, now_nanos: int | None = None, model_v2=None, *, display_context=None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
     if now_nanos is None:
       now_nanos = int(time.monotonic() * 1e9)
     self.CS.modelV2 = model_v2
+    if self.CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV':
+      self.CS.lx3_surround_context = display_context
     return self.CC.update(c, self.CS, now_nanos)
 
   @staticmethod
