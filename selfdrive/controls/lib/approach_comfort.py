@@ -16,6 +16,20 @@ from pathlib import Path
 import threading
 
 
+def speed_gap_reduction(v_ego, nominal_distance, stop_distance):
+  """LX3 comfort target: 100% at rest, 90% at/above 100 km/h.
+
+  The caller retains physical obstacles, braking constraints and any extra
+  deceleration headroom. This is a reduction in metres, never a TF multiplier.
+  Existing flexible-gap reduction is combined by max(), rather than added.
+  """
+  if (not all(math.isfinite(x) for x in (v_ego, nominal_distance, stop_distance))
+      or v_ego <= 0.0 or stop_distance < 0.0 or nominal_distance <= stop_distance):
+    return 0.0
+  fraction = 0.10 * min(1.0, v_ego * 3.6 / 100.0)
+  return min(nominal_distance - stop_distance, nominal_distance * fraction)
+
+
 # These are versioned application preferences, not native Params keys. A source
 # OTA must never bypass Params.check_key or require a new native Params binary.
 DRIVING_PREFERENCES = {

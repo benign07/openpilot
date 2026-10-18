@@ -343,6 +343,14 @@ class LateralPlanner:
     lateralPlan.latDebugText = debugText
     if self.margin_supported and any(self.margin_settings[k] for k in ('YellowLineBiasCm','NearbyVehicleBiasCm')):
       lateralPlan.latDebugText += f" | margin={'shadow' if self.margin_settings['LateralMarginShadow'] else 'test'} {self.margin.value*100:.1f}cm {self.margin.reason}"
+      # UI telemetry uses the actually applied path shift, not the filtered
+      # shadow target or merely the option being enabled. No schema change.
+      lateralPlan.latDebugText += (f" | lx3_margin_v1={self.margin_applied*100:.4f},"
+                                   f"{self.margin.reason},{int(bool(self.margin_settings['LateralMarginShadow']))}")
+    if self.margin_supported:
+      stamp, mask = getattr(carrot, 'lx3_comfort_ui', (0, 0))
+      if 0 <= time.monotonic_ns()-stamp <= 200_000_000:
+        lateralPlan.latDebugText += f" | lx3_comfort_v1={stamp},{mask}"
     #lateralPlan.latDebugText = self.latDebugText
     #lateralPlan.laneWidthLeft = float(self.DH.lane_width_left)
     #lateralPlan.laneWidthRight = float(self.DH.lane_width_right)

@@ -12,7 +12,7 @@ from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 # from openpilot.selfdrive.carrot.carrot_functions import CarrotPlanner
 from openpilot.selfdrive.carrot.carrot_functions import XState
 from openpilot.selfdrive.controls.lib.flexible_gap import FlexibleGap, FlexibleGapSettings, MIN_FLEX_TF
-from openpilot.selfdrive.controls.lib.approach_comfort import additional_approach_tf
+from openpilot.selfdrive.controls.lib.approach_comfort import additional_approach_tf, speed_gap_reduction
 
 if __name__ == '__main__':  # generating code
   from openpilot.third_party.acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -368,8 +368,11 @@ class LongitudinalMpc:
     self.max_a = max_a
 
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, approach_extra_tf=0.0,
-             flex_gap_settings=FlexibleGapSettings(), flex_gap_eligible=False, observed_a_ego=0.0, flex_gap_gentle_stop=False):
+             flex_gap_settings=FlexibleGapSettings(), flex_gap_eligible=False, observed_a_ego=0.0, flex_gap_gentle_stop=False,
+             speed_gap_eligible=False):
     self.evidence_problem = None
+    self.speed_gap_reduction_m = 0.0
+    self.approach_margin_applied_m = 0.0
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -478,14 +481,15 @@ class LongitudinalMpc:
 
     # Comfort target only: preserve physical x_obstacles and all constraint params.
     self.yref[:,0] = 0.0
-    if mode == 'acc' and not reset_state and (approach_extra_tf > 0.0 or reduce_tf > 0.0):
+    if mode == 'acc' and not reset_state and (approach_extra_tf > 0.0 or reduce_tf > 0.0 or speed_gap_eligible):
       gap_v = np.maximum(0.0, self.x_sol[:,1] + v_ego - self.x_sol[0,1])
       preferred = x_obstacles.copy()
+      without_early = x_obstacles.copy()
       extra = additional_approach_tf(t_follow, nominal_tf, approach_extra_tf)
       for index, lead in enumerate((radarstate.leadOne, radarstate.leadTwo)):
         if lead.status and lead.radar and lead.radarTrackId >= 0:
           preferred[:,index] -= gap_v * extra
-          if index == 0 and reduce_tf > 0.0:
+          if index == 0 and (reduce_tf > 0.0 or speed_gap_eligible):
             # Only the primary's comfort reference is relaxed: legacy radard
             # may move leadTwo up to 8 m closer. The original obstacle and
             # asymmetric danger cost stay intact. Leave 5% headroom outside
@@ -500,7 +504,24 @@ class LongitudinalMpc:
               reduction = np.where(gap_v < 6.0, np.minimum(reduction, gap_v * limit_tf), 0.0)
             else:
               reduction = np.minimum(reduction, gap_v * max(0.0, t_follow - MIN_FLEX_TF))
+            if speed_gap_eligible:
+              # Scale the nominal following distance, not the whole stopped
+              # obstacle. Preserve stock decel/dynamic TF headroom and the
+              # separate early-braking preference. A limiting secondary lead
+              # still wins unchanged through min(x_obstacles).
+              nominal = desired_follow_distance(gap_v, lead_xv_0[:, 1], comfort_brake,
+                                                stop_distance, min(t_follow, nominal_tf) if nominal_tf > 0.0 else t_follow)
+              speed_reduction = np.array([speed_gap_reduction(float(vv), float(dd), stop_distance)
+                                          for vv, dd in zip(gap_v, nominal)])
+              speed_reduction = np.minimum(speed_reduction,
+                                           np.maximum(0.0, (1.0 - LEAD_DANGER_FACTOR - 0.05) * full_distance))
+              self.speed_gap_reduction_m = float(speed_reduction[0])
+              # Both features describe relaxation from the same stock target.
+              # Taking the greater qualified reduction avoids 0.9*0.7 stacking.
+              reduction = np.maximum(reduction, speed_reduction)
             preferred[:,index] += reduction
+            without_early[:,index] += reduction
+      self.approach_margin_applied_m = float(max(0.0, np.max(np.min(without_early, axis=1)-np.min(preferred, axis=1))))
       shift = np.min(x_obstacles, axis=1) - np.min(preferred, axis=1)
       self.yref[:,0] = shift / (gap_v + 10.0)
       # desired_distance describes leadOne; do not inflate its display for a
@@ -535,7 +556,10 @@ class LongitudinalMpc:
                     'weights': self.evidence_cost_weights, 'constraint_weights': self.evidence_constraint_weights,
                     'obstacles': x_obstacles.tolist(), 't_idxs': T_IDXS.tolist(), 't_diffs': T_DIFFS.tolist(),
                     'v_cruise': float(v_cruise), 'cruise_min_a': float(self.cruise_min_a), 'max_a': float(self.max_a),
-                    'reference_modifiers_active': bool(approach_extra_tf > 0. or reduce_tf > 0.),
+                    'reference_modifiers_active': bool(approach_extra_tf > 0. or reduce_tf > 0. or self.speed_gap_reduction_m > 0.),
+                    'speed_gap': {'eligible': bool(speed_gap_eligible),
+                                  'requested_reduction_m': float(self.speed_gap_reduction_m),
+                                  'ratio_at_100_kph': .9},
                     'warm_x': self.x_sol.tolist(), 'warm_u': self.u_sol.tolist(),
                     'warm_scope': 'previous_primal_solution_not_internal_dual_state',
                     'flex': {'eligible': bool(flex_gap_eligible), 'gentle_stop': bool(gentle_stop),

@@ -54,14 +54,14 @@ def main():
                 vLead=vl, vRel=vl-v, aLeadK=al, aLeadTau=1.5, jLead=0., modelProb=.99)
       return NS(leadOne=lead, leadTwo=NS(**{**vars(lead), 'status':False}))
 
-    def solve(m, c, r, v, a, request, flexible=False):
+    def solve(m, c, r, v, a, request, flexible=False, speed_gap=False):
       m.set_cur_state(v, a)
       m.set_weights(jerk_factor=c.jerk_factor_apply*request.jerk_factor)
       m.set_accel_limits(-1.2, apply_approach_ceiling(c.get_carrot_accel(v), a, request))
       m.update(c, False, r, c.v_cruise, *[np.zeros(N+1) for _ in range(4)],
                personality=personality, approach_extra_tf=request.extra_tf,
                flex_gap_settings=FlexibleGapSettings(flexible, 80), flex_gap_eligible=flexible,
-               observed_a_ego=a, flex_gap_gentle_stop=True)
+               observed_a_ego=a, flex_gap_gentle_stop=True, speed_gap_eligible=speed_gap)
       assert m.solution_status == 0, ('solver_status', m.solution_status)
       assert np.isfinite(m.x_sol).all() and np.isfinite(m.u_sol).all()
       assert (m.v_solution >= -1e-3).all()
@@ -126,6 +126,30 @@ def main():
     solve(m, c, r, 3., -.3, ApproachRequest(), flexible=True)
     assert m.flex_gap.reduction == 0.
     records.append({'case':'native_mild_stop_and_identity_reset','acquired':acquired,'reset':True})
+
+    # Requested speed preference with the real linked solver. Idealised fixed
+    # lead/plant only; this is not physical headway or road qualification.
+    from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import desired_follow_distance
+    comparisons = []
+    for enabled in (False, True):
+      c,m = carrot(4,.7),LongitudinalMpc()
+      c.v_cruise=110/3.6
+      v,vl,a=100/3.6,100/3.6,0.
+      distance=desired_follow_distance(v,vl,c.comfort_brake,c.stop_distance,.7)
+      gaps=[];minimum=distance
+      for frame in range(800):
+        r=radar(v,vl,distance,0.)
+        next_a=solve(m,c,r,v,a,ApproachRequest(),speed_gap=enabled)
+        next_v=max(0.,v+next_a*.05)
+        distance+=(2*vl-v-next_v)*.025
+        minimum=min(minimum,distance)
+        assert distance>0.,('speed_gap_ideal_collision',enabled,frame)
+        v,a=next_v,next_a
+        if frame>=700:gaps.append(distance)
+      comparisons.append({'enabled':enabled,'mean_final_gap':float(np.mean(gaps)),
+                          'minimum_gap':minimum,'t_follow':m.t_follow,'solver_status':m.solution_status})
+    assert comparisons[1]['mean_final_gap'] < comparisons[0]['mean_final_gap'], comparisons
+    records.append({'case':'speed_gap_100_kph_ideal_comparison','comparisons':comparisons})
 
     root = Path(__file__).resolve().parents[1]
     paths = ['selfdrive/controls/lib/approach_comfort.py','selfdrive/controls/lib/flexible_gap.py',

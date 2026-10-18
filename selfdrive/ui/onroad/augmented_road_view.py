@@ -1,4 +1,6 @@
 import time
+import math
+import re
 import numpy as np
 import pyray as rl
 from cereal import log, messaging
@@ -32,6 +34,150 @@ ROAD_CAM_MIN_SPEED = 15.0  # m/s (34 mph)
 INF_POINT = np.array([1000.0, 0.0, 0.0])
 
 
+def _oem_bits(raw, start, size, little=True):
+  if little:
+    return (int.from_bytes(raw, 'little') >> start) & ((1 << size)-1)
+  value = 0
+  for _ in range(size):
+    value = (value << 1) | ((raw[start//8] >> (start % 8)) & 1)
+    start = start+15 if start % 8 == 0 else start-1
+  return value
+
+
+def _decode_oem_surround(address, raw):
+  """Only actual OEM slots; 1EA cannot identify vehicle type. CRC checked by caller."""
+  if len(raw) != 32 or address not in (0x1EA, 0x162):
+    return {}
+  layout = ({'LF':(74,46,70),'RF':(98,75,94),'LR':(162,139,152),'RR':(186,163,172)}
+            if address == 0x1EA else {'LF':(112,117,128),'RF':(136,141,152),'LR':(163,175,176),'RR':(192,197,205)})
+  result = {}
+  for side, (typ, distance, lateral) in layout.items():
+    code = _oem_bits(raw, typ, 3 if address == 0x1EA else 5, address != 0x1EA)
+    # Keep hidden/unknown object codes distinct from a generic visible object.
+    if not (1 <= code <= (3 if address == 0x1EA else 12)):
+      if code:
+        result[side] = None  # Hidden/unsupported class wins over a generic slot.
+      continue
+    d = .1*_oem_bits(raw, distance, 11 if side.endswith('F') else 8, not (address == 0x162 and side == 'LR'))
+    lat = .1*_oem_bits(raw, lateral, 6 if address == 0x1EA and side.endswith('R') else 7,
+                       not (address == 0x1EA and side.endswith('F')))
+    if 0.0 < d <= 100.0 and 0.0 < lat <= 8.0:
+      result[side] = {'distance':d,'lateral':lat,'class':0 if address == 0x1EA else code,
+                      'white':code in (2,3) if address == 0x1EA else code % 2 == 0}
+  return result
+
+
+def _oem_margin_status(text):
+  match = re.search(r'(?:^| \| )lx3_margin_v1=(-?\d+(?:\.\d+)?),([a-z_]+),([01])(?:$| \| )', text)
+  if match is None:
+    return None
+  cm, reason, shadow = float(match[1]), match[2], match[3] == '1'
+  if shadow or not math.isfinite(cm) or not .005 <= abs(cm) <= 10.001:
+    return None
+  if (reason == 'away_from_left_vehicle' and cm > 0 or
+      reason == 'away_from_right_vehicle' and cm < 0):
+    return cm
+  return None
+
+
+def _oem_comfort_status(text, now_ns):
+  match = re.search(r'(?:^| \| )lx3_comfort_v1=(\d+),([0-7])(?:$| \| )', text)
+  if match is None or not 0 <= now_ns-int(match[1]) <= 200_000_000:
+    return 0
+  return int(match[2])
+
+
+class OemSurroundOverlay:
+  """Small receive-only OEM relative-position map; never a control input."""
+  def __init__(self):
+    self.socket = None
+    self.frames = {}
+    self.last_poll = 0.0
+    self.param_at = 0.0
+    self.enabled = False
+    self.bus = None
+    self.checksum = None
+    self.warned = False
+
+  def render(self, rect):
+    sm = ui_state.sm
+    cp = ui_state.CP
+    if cp is None or str(cp.carFingerprint) != 'HYUNDAI_PALISADE_LX3_HEV':
+      return
+    now = time.monotonic()
+    if now >= self.param_at:
+      self.enabled = ui_state.params.get_int('EnableCornerRadar') > 0
+      self.param_at = now+2.0
+    if not self.enabled:
+      self.frames.clear()
+      self.socket = None
+    fresh = lambda k: sm.valid[k] and sm.alive[k] and 0 <= now-sm.logMonoTime[k]/1e9 <= .2
+    if not fresh('carState') or not sm['carState'].canValid or sm['carState'].canTimeout:
+      self.frames.clear()
+      return
+    if self.enabled and self.socket is None:
+      from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
+      self.bus = CanBus(cp).CAM
+      self.checksum = hkg_can_fd_checksum
+      self.socket = messaging.sub_sock('can')
+    if self.enabled and now-self.last_poll >= .04:
+      self.last_poll = now
+      # Bound work per rendered frame. Queued old messages cannot refresh a
+      # slot because Event timestamps are checked, rather than receive time.
+      for _ in range(12):
+        event = messaging.recv_one_or_none(self.socket)
+        if event is None:
+          break
+        stamp = int(event.logMonoTime)/1e9
+        if not event.valid or not 0 <= time.monotonic()-stamp <= .2:
+          continue
+        for packet in event.can:
+          if int(packet.src) != self.bus or packet.address not in (0x1EA, 0x162):
+            continue
+          raw = bytes(packet.dat)
+          if len(raw) == 32 and int.from_bytes(raw[:2], 'little') == self.checksum(packet.address, None, raw):
+            self.frames[int(packet.address)] = (stamp, _decode_oem_surround(int(packet.address), raw))
+    targets = {}
+    # Prefer the wider CCNC classes; do not infer a type from 1EA colour.
+    for address in (0x1EA, 0x162):
+      stamp, values = self.frames.get(address, (0.0, {}))
+      if 0 <= now-stamp <= .2:
+        targets.update(values)
+    targets = {side:target for side,target in targets.items() if target is not None}
+    cm = None
+    comfort = 0
+    if fresh('lateralPlan') and fresh('carControl') and sm['carControl'].latActive and sm['lateralPlan'].mpcSolutionValid:
+      cm = _oem_margin_status(str(sm['lateralPlan'].latDebugText))
+    if fresh('lateralPlan') and fresh('longitudinalPlan') and fresh('carControl') and sm['carControl'].longActive:
+      comfort = _oem_comfort_status(str(sm['lateralPlan'].latDebugText), time.monotonic_ns())
+    if not targets and cm is None and not comfort:
+      return
+    width, height = 235., 350.
+    x, y = rect.x+rect.width-width-24., rect.y+rect.height-height-100.
+    rl.draw_rectangle_rounded(rl.Rectangle(x, y, width, height), .12, 8, rl.Color(10,20,30,185))
+    draw_text_ui_style('순정 주변', x+width/2, y+22, 20, rl.WHITE, align='center', shadow_offset=0)
+    cx, cy = x+width/2, y+height*.60
+    rl.draw_rectangle_lines_ex(rl.Rectangle(cx-11,cy-20,22,40), 2, rl.SKYBLUE)
+    for side, target in targets.items():
+      dx = min(84., max(38., target['lateral']*19.)) * (-1 if side.startswith('L') else 1)
+      dy = min(104. if side.endswith('F') else 48., max(28., target['distance']*2.4)) * (-1 if side.endswith('F') else 1)
+      tx, ty = cx+dx, cy+dy
+      colour = rl.WHITE if target['white'] else rl.Color(165,175,185,255)
+      truck = target['class'] in (5,6)
+      rl.draw_rectangle_lines_ex(rl.Rectangle(tx-12,ty-15,24,30 if truck else 23), 2, colour)
+      # Explicit type only exists in CCNC; all 1EA targets stay generic boxes.
+      if truck:
+        rl.draw_line(int(tx-10),int(ty+4),int(tx+10),int(ty+4),colour)
+      draw_text_ui_style(f"{target['distance']:.0f}m",tx,ty+22,17,colour,align='center',shadow_offset=0)
+    label = ('거리두기 적용 중 '+('→' if cm > 0 else '←')+f' {abs(cm):.1f}cm') if cm is not None else '거리두기 미적용'
+    draw_text_ui_style(label,x+width/2,y+height-54,18,rl.GREEN if cm is not None else rl.LIGHTGRAY,
+                       align='center',shadow_offset=0)
+    if comfort:
+      draw_text_ui_style('부드러운 감속 적용 중',x+width/2,y+height-32,18,rl.SKYBLUE,align='center',shadow_offset=0)
+      parts = [name for bit,name in ((1,'타력'),(2,'미리 감속'),(4,'정차')) if comfort & bit]
+      draw_text_ui_style(' · '.join(parts),x+width/2,y+height-12,16,rl.WHITE,align='center',shadow_offset=0)
+
+
 class AugmentedRoadView(CameraView):
   def __init__(self, stream_type: VisionStreamType = VisionStreamType.VISION_STREAM_ROAD):
     super().__init__("camerad", stream_type)
@@ -49,6 +195,7 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
+    self.oem_surround_overlay = OemSurroundOverlay()
 
     # debug
     self._pm = messaging.PubMaster(['uiDebug'])
@@ -89,6 +236,15 @@ class AugmentedRoadView(CameraView):
     # Draw all UI overlays
     self.model_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
+    try:
+      self.oem_surround_overlay.render(self._content_rect)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+      # Optional display failure must not take down the road/alert UI.
+      self.oem_surround_overlay.frames.clear()
+      if not self.oem_surround_overlay.warned:
+        from openpilot.common.swaglog import cloudlog
+        cloudlog.warning('OEM surround overlay unavailable: '+type(exc).__name__)
+        self.oem_surround_overlay.warned = True
     self.alert_renderer.render(self._content_rect)
     self.driver_state_renderer.render(self._content_rect)
 

@@ -261,6 +261,10 @@ class LongitudinalPlanner:
       cruise_speed=v_cruise, planned_accel=self.a_desired,
     )
     now_ns = time.monotonic_ns()
+    speed_gap_eligible = (approach_eligible and sm['carControl'].longActive and sm['carState'].canValid
+                         and not sm['carState'].canTimeout
+                         and all(0 <= now_ns-int(sm.logMonoTime[k]) <= 200_000_000
+                                 for k in ('carState', 'carControl', 'radarState', 'modelV2')))
     launch_eligible = (approach_eligible and sm['carControl'].longActive and sm['carState'].canValid
                        and not sm['carState'].canTimeout and self.allow_throttle
                        and all(0 <= now_ns-int(sm.logMonoTime[k]) <= 200_000_000
@@ -303,7 +307,22 @@ class LongitudinalPlanner:
                     flex_gap_settings=self.flex_gap_settings,
                     flex_gap_eligible=approach_eligible and self.approach_settings.enabled,
                     observed_a_ego=sm['carState'].aEgo,
-                    flex_gap_gentle_stop=self.approach_settings.smooth > 0)
+                    flex_gap_gentle_stop=self.approach_settings.smooth > 0,
+                    speed_gap_eligible=speed_gap_eligible)
+
+    # Passive UI telemetry, carried by the next lateralPlan from the shared
+    # CarrotPlanner object. It is never read by the control calculation.
+    comfort_mask = 0
+    if (self.approach_supported and self.approach_settings.enabled and approach_eligible
+        and sm['carControl'].longActive and self.mpc.mode == 'acc' and not reset_state):
+      if (max(0.0, accel_limits_turns[1]) < max(0.0, evidence_maximum)-1e-5
+          and max(0.0, self.mpc.max_a) >= max(0.0, accel_limits_turns[1])-1e-5):
+        comfort_mask |= 1  # The approach ceiling, not a stricter flex limit, binds.
+      if self.mpc.approach_margin_applied_m > 1e-5:
+        comfort_mask |= 2
+      if approach_request.jerk_factor > 1.00001 and carrot.jerk_factor_apply > 0.0:
+        comfort_mask |= 4
+    carrot.lx3_comfort_ui = (time.monotonic_ns(), comfort_mask)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
@@ -356,6 +375,9 @@ class LongitudinalPlanner:
         'services': {k: {'mono_ns': int(sm.logMonoTime[k]), 'valid': bool(sm.valid[k]), 'alive': bool(sm.alive[k])}
                      for k in ('carState', 'controlsState', 'carControl', 'radarState', 'modelV2', 'selfdriveState')},
         'settings': {**vars(self.approach_settings), 'mode': int(carrot.myDrivingMode.value),
+                     'speed_gap_ratio_at_100_kph': .90 if self.approach_supported else 1.0,
+                     'speed_gap_eligible': bool(speed_gap_eligible),
+                     'speed_gap_reduction_m': float(self.mpc.speed_gap_reduction_m),
                      'personality': str(sm['selfdriveState'].personality),
                      'accel_table': [float(getattr(carrot, 'cruiseMaxVals'+str(i))) for i in range(7)],
                      'stop_distance': float(carrot.stop_distance), 'starting_cost': float(carrot.aChangeCostStarting),

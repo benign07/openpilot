@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 import numpy as np
 import pytest
 from openpilot.selfdrive.controls.lib.flexible_gap import FlexibleGap, FlexibleGapSettings, MIN_FLEX_TF
-from openpilot.selfdrive.controls.lib.approach_comfort import additional_approach_tf
+from openpilot.selfdrive.controls.lib.approach_comfort import additional_approach_tf, speed_gap_reduction
 
 
 def production_mpc():
@@ -19,7 +19,7 @@ def production_mpc():
     log=NS(LongitudinalPersonality=NS(standard=1,relaxed=2,aggressive=0,moreRelaxed=3)),
     index_function=lambda idx,max_val,max_idx:max_val*(idx/max_idx)**2,
     FlexibleGap=FlexibleGap,FlexibleGapSettings=FlexibleGapSettings,MIN_FLEX_TF=MIN_FLEX_TF,
-    additional_approach_tf=additional_approach_tf)
+    additional_approach_tf=additional_approach_tf,speed_gap_reduction=speed_gap_reduction)
   exec(compile(tree,str(path),'exec'),ns)
   m=ns['LongitudinalMpc'].__new__(ns['LongitudinalMpc'])
   m.x0=np.array([0.,20.,0.]);m.x_sol=np.tile([0.,20.,0.],(13,1))
