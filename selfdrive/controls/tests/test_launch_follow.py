@@ -211,13 +211,16 @@ def test_development_menu_keeps_parameter_contract_and_has_no_duplicate_entries(
   moved=set(names([data['menu'][0]]))
   assert set(DrivingPreferences().values)<=moved
   assert {'ApproachComfortEnabled','ApproachFlexibleGap','ApproachTrafficCalm'}<=moved
-  assert 'EnableCornerRadar' in moved
+  assert {'EnableCornerRadar','ManualSteerWithBlinker'} <= moved
   by_name={p['name']:p for p in data['params']}
   for item in original['params']:
     presentation={'group','egroup','cgroup'}
     if item['name']=='EnableCornerRadar':
       presentation.update(('title','etitle','ctitle','descr','edescr','cdescr'))
       assert by_name[item['name']]['title']=='주변 대상 상시 표시'
+    if item['name']=='ManualSteerWithBlinker':
+      presentation.update(('descr','edescr','cdescr'))
+      assert '0.5초' in by_name[item['name']]['descr']
     assert {k:v for k,v in item.items() if k not in presentation}=={
       k:v for k,v in by_name[item['name']].items() if k not in presentation}
   categories=build_menu_categories(data,by_name)

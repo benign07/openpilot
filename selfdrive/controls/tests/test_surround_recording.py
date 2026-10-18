@@ -39,10 +39,10 @@ def test_empty_oem_slots_are_not_invented_and_legacy_format_stays_legacy():
   formatter()(values,NS(),False,0,NS(),lane_line=False)
   assert all(values[s+'_DETECT']==1 for s in ('LF','RF','LR','RR'))
 
-def test_real_caller_uses_ccnc_flag_only_for_lx3_162_not_1ea():
+def test_real_caller_preserves_lx3_classes_and_hidden_slots_in_both_formats():
   tree=ast.parse((ROOT/'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py').read_text(encoding='utf8'))
   fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='create_ccnc_messages')
-  for attr,expected in (('ccnc_0x162',True),('adrv_0x1ea',False)):
+  for attr,expected in (('ccnc_0x162',True),('adrv_0x1ea',True)):
     branch=next(n for n in ast.walk(fn) if isinstance(n,ast.If) and
       isinstance(n.test,ast.Compare) and isinstance(n.test.left,ast.Attribute) and n.test.left.attr==attr)
     call=next(n for n in ast.walk(branch) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='_make_ccnc_values')

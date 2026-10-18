@@ -3,6 +3,8 @@ from math import isfinite
 
 
 class ManualSteeringCeiling:
+  RESUME_SECONDS = 0.5
+
   def __init__(self, dt=0.01):
     self.previous = 0.0
     self.anchor = 0.0
@@ -19,7 +21,7 @@ class ManualSteeringCeiling:
     elif resuming or (self.recovering and scale >= 1.0):
       # A partial fade can have an anchor below today's baseline. Continue
       # limiting from actual output even after the host's ramp flag clears.
-      result = min(baseline * scale, self.previous + baseline * self.dt)
+      result = min(baseline * scale, self.previous + baseline * self.dt / self.RESUME_SECONDS)
       self.recovering = result < baseline
     elif scale < 1.0:
       self.recovering = False

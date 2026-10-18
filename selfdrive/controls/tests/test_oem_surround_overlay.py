@@ -10,8 +10,8 @@ UI=ROOT/'selfdrive/ui/onroad/augmented_road_view.py'
 
 
 def overlay_scope(extra=None):
-  return load(UI,{'_oem_bits','_decode_oem_surround','_oem_margin_status','_oem_comfort_status','OemSurroundOverlay'},
-              {'math':math,'re':re,**(extra or {})})
+  return load(UI,{'_oem_bits','_decode_oem_surround','_oem_margin_status','_oem_comfort_status','_oem_native_clock_offset_ns','OemSurroundOverlay'},
+              {'math':math,'re':re,'CALIBRATED':1,**(extra or {})})
 
 
 @pytest.mark.parametrize('name,address', [('ADRV_0x1ea',0x1EA),('CCNC_0x162',0x162)])
@@ -49,22 +49,26 @@ def test_indicator_requires_actual_nonshadow_away_offset(text,expected):
 
 def render_fixture(codec,**changes):
   packer,_,checksum=codec;clock=NS(now=2.)
-  raw=packer.make_can_msg('ADRV_0x1ea',2,{'LF_DETECT':1,'LF_DETECT_DISTANCE':12.,'LF_DETECT_LATERAL':3.})[1]
-  packet=NS(src=2,address=0x1EA,dat=raw)
+  raw=packer.make_can_msg('CCNC_0x162',2,{'LF_DETECT':4,'LF_DETECT_DISTANCE':12.,'LF_DETECT_LATERAL':3.})[1]
+  packet=NS(src=2,address=0x162,dat=raw)
   event=NS(logMonoTime=1_990_000_000,valid=True,can=[packet]);queue=[event];draws=[]
   class SM(dict):pass
   sm=SM(carState=NS(canValid=True,canTimeout=False),carControl=NS(latActive=True,longActive=True),longitudinalPlan=NS(),
+    modelV2=NS(position=NS(x=[0.,60.],z=[0.,0.])),liveCalibration=NS(calStatus=1,rpyCalib=[0.,0.,0.]),
+    roadCameraState=NS(),wideRoadCameraState=NS(),
     lateralPlan=NS(mpcSolutionValid=True,latDebugText='debug | lx3_margin_v1=3.0000,away_from_left_vehicle,0'))
   sm.valid={k:True for k in sm};sm.alive=dict(sm.valid);sm.logMonoTime={k:1_990_000_000 for k in sm}
   ui=NS(sm=sm,CP=NS(carFingerprint='HYUNDAI_PALISADE_LX3_HEV'),params=NS(get_int=lambda _:1))
   rl=NS(Rectangle=lambda x,y,width,height:NS(x=x,y=y,width=width,height=height),Color=lambda *v:v,
     WHITE=1,SKYBLUE=2,GREEN=3,LIGHTGRAY=4,
-    draw_rectangle_rounded=lambda *a:draws.append(('panel',a)),draw_rectangle_lines_ex=lambda *a:None,
+    draw_rectangle_rounded=lambda *a:draws.append(('panel',a)),draw_rectangle_lines_ex=lambda *a:draws.append(('icon',a)),
     draw_line=lambda *a:None)
   env=overlay_scope({'ui_state':ui,'time':NS(monotonic=lambda:clock.now,monotonic_ns=lambda:int(clock.now*1e9)),'rl':rl,
     'messaging':NS(recv_one_or_none=lambda _:queue.pop(0) if queue else None),
     'draw_text_ui_style':lambda text,*a,**kw:draws.append(('text',text))})
-  obj=env['OemSurroundOverlay']();obj.socket=object();obj.bus=2;obj.checksum=checksum
+  obj=env['OemSurroundOverlay']();obj.socket=object();obj.bus=2;obj.echo_bus=128;obj.checksum=checksum
+  renderer=NS(_car_space_transform=[[960.,1000.,0.],[540.,0.,1000.],[1.,0.,0.]],_path_offset_z=1.22)
+  render=obj.render;obj.render=lambda rect,**kw:render(rect,renderer,**kw)
   return obj,sm,ui,clock,event,packet,queue,draws,rl.Rectangle(0,0,1920,1080)
 
 
@@ -82,10 +86,10 @@ def test_invalid_source_never_draws_an_object(codec,condition):
   if condition=='stale':event.logMonoTime=1_000_000_000
   elif condition=='future':event.logMonoTime=2_100_000_000
   elif condition=='bad_crc':packet.dat=packet.dat[:8]+bytes([packet.dat[8]^1])+packet.dat[9:]
-  elif condition=='wrong_bus':packet.src=128
+  elif condition=='wrong_bus':packet.src=129
   else:sm['carState'].canValid=False
   obj.render(rect)
-  assert not draws
+  assert not any(kind=='icon' or kind=='text' and text=='12m' for kind,text in draws)
 
 
 @pytest.mark.parametrize('condition', ['control_off','plan_stale','plan_invalid','shadow','zero'])
@@ -98,7 +102,7 @@ def test_target_visible_does_not_imply_away_adjustment(codec,condition):
   else:sm['lateralPlan'].latDebugText='lx3_margin_v1=0.0000,away_from_left_vehicle,0'
   obj.render(rect)
   assert ('text','12m') in draws
-  assert ('text','거리두기 미적용') in draws
+  assert not any(kind=='text' and '거리두기 적용 중' in text for kind,text in draws)
 
 
 def test_slots_expire_without_reusing_receive_time(codec):
@@ -106,7 +110,7 @@ def test_slots_expire_without_reusing_receive_time(codec):
   sm['carControl'].latActive=False;obj.render(rect);assert draws
   draws.clear();clock.now=2.3
   sm.logMonoTime={k:2_290_000_000 for k in sm}
-  obj.render(rect);assert not draws
+  obj.render(rect);assert not any(kind=='icon' or kind=='text' and text=='12m' for kind,text in draws)
 
 
 def test_overlay_has_no_transmit_calls_and_alerts_draw_after_it():
@@ -131,8 +135,7 @@ def test_comfort_can_show_without_surround_display_or_lateral_control(codec):
   ui.params.get_int=lambda _:0;sm['carControl'].latActive=False
   sm['lateralPlan'].latDebugText='lx3_comfort_v1=1990000000,3'
   obj.render(rect)
-  assert ('text','부드러운 감속 적용 중') in draws
-  assert ('text','타력 · 미리 감속') in draws
+  assert ('text','부드러운 감속 적용 중 · 타력 · 미리 감속') in draws
   assert ('text','12m') not in draws
 
 
@@ -157,3 +160,94 @@ def test_passive_producer_marks_only_a_binding_approach_ceiling(change,expected)
     'approach_request':NS(jerk_factor=values.get('jerk',1.)),'carrot':carrot,'time':NS(monotonic_ns=lambda:2_000_000_000)}
   exec(compile(ast.Module(body=nodes,type_ignores=[]),'actual-comfort-ui-producer','exec'),scope)
   assert carrot.lx3_comfort_ui==(2_000_000_000,expected)
+
+
+def test_actual_tx_echo_can_place_a_known_car_on_the_camera(codec):
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  packet.src=128;sm['carControl'].latActive=False
+  obj.render(rect)
+  body=next(value[0] for kind,value in draws if kind=='icon')
+  assert body.x+body.width/2==pytest.approx(710.)
+  assert body.y+body.height==pytest.approx(540.+1000.*1.22/12.)
+  assert not any(kind=='panel' for kind,value in draws)  # No minimap.
+
+
+def test_fresh_empty_tx_clears_original_objects_instead_of_merging_them_back(codec):
+  packer,_,_=codec
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  empty=packer.make_can_msg('CCNC_0x162',0,{})[1]
+  queue.append(NS(logMonoTime=1_995_000_000,valid=True,can=[NS(src=128,address=0x162,dat=empty)]))
+  obj.render(rect)
+  assert not any(kind=='icon' for kind,value in draws)
+
+
+@pytest.mark.parametrize('code,visible',[(1,False),(2,False),(3,True),(4,True),(5,True),(6,True),
+  (7,False),(8,False),(9,True),(10,True),(11,True),(12,True),(13,False),(14,False),(31,False)])
+def test_tx_only_unknown_boxes_people_and_cones_are_not_camera_cars(codec,code,visible):
+  packer,_,_=codec
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  packet.src=128
+  packet.dat=packer.make_can_msg('CCNC_0x162',0,{'LF_DETECT':code,'LF_DETECT_DISTANCE':12.,'LF_DETECT_LATERAL':3.})[1]
+  obj.render(rect)
+  assert any(kind=='icon' for kind,value in draws) is visible
+
+
+def test_original_oem_colour_may_draw_only_a_neutral_marker(codec):
+  packer,_,_=codec
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  packet.address=0x1EA
+  packet.dat=packer.make_can_msg('ADRV_0x1ea',2,{'LF_DETECT':2,'LF_DETECT_DISTANCE':12.,'LF_DETECT_LATERAL':3.})[1]
+  obj.render(rect)
+  assert len([value for kind,value in draws if kind=='icon'])==1  # No invented car silhouette.
+  assert ('text','12m') in draws
+
+
+@pytest.mark.parametrize('condition',['uncalibrated','old_calib','bad_rpy','stale_model','stale_camera','future_camera'])
+def test_camera_icons_require_real_calibration_model_and_camera_freshness(codec,condition):
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  if condition=='uncalibrated':sm['liveCalibration'].calStatus=0
+  elif condition=='old_calib':sm.logMonoTime['liveCalibration']=500_000_000
+  elif condition=='bad_rpy':sm['liveCalibration'].rpyCalib=[0.,float('nan'),0.]
+  elif condition=='stale_model':sm.logMonoTime['modelV2']=1_500_000_000
+  elif condition=='stale_camera':sm.logMonoTime['roadCameraState']=1_500_000_000
+  else:sm.logMonoTime['roadCameraState']=2_100_000_000
+  obj.render(rect)
+  assert not any(kind=='icon' for kind,value in draws)
+
+
+def test_native_boot_time_is_normalized_without_renewing_old_packets(codec):
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  env=obj.project_icon.__globals__
+  env['time'].CLOCK_BOOTTIME=7
+  env['time'].clock_gettime_ns=lambda _:int(clock.now*1e9)+5_000_000_000
+  event.logMonoTime+=5_000_000_000
+  sm.logMonoTime['roadCameraState']+=5_000_000_000
+  obj.render(rect);assert ('text','12m') in draws
+  draws.clear();clock.now=2.3
+  sm.logMonoTime={k:2_290_000_000 for k in sm};sm.logMonoTime['roadCameraState']+=5_000_000_000
+  queue.append(event)  # Same old source timestamp, received again.
+  obj.render(rect);assert not any(kind=='icon' for kind,value in draws)
+
+
+def test_projection_moves_with_distance_and_never_places_rear_or_off_camera_objects():
+  obj=overlay_scope()['OemSurroundOverlay'];model=NS(position=NS(x=[0.,60.],z=[0.,0.]))
+  renderer=NS(_car_space_transform=[[960.,1000.,0.],[540.,0.,1000.],[1.,0.,0.]],_path_offset_z=1.22)
+  rect=NS(x=0.,y=0.,width=1920.,height=1080.)
+  a=obj.project_icon('LF',{'distance':12.,'lateral':3.,'class':4},renderer,model,rect)
+  b=obj.project_icon('LF',{'distance':24.,'lateral':3.,'class':4},renderer,model,rect)
+  assert a[0]<b[0]<960. and a[1]>b[1]  # Receding target approaches vanishing point.
+  for side,target in [('LR',{'distance':12.,'lateral':3.,'class':4}),
+                      ('LF',{'distance':1.,'lateral':3.,'class':4}),
+                      ('LF',{'distance':12.,'lateral':30.,'class':4})]:
+    assert obj.project_icon(side,target,renderer,model,rect) is None
+  renderer._car_space_transform=[[0.,0.,0.]]*3
+  assert obj.project_icon('LF',{'distance':12.,'lateral':3.,'class':4},renderer,model,rect) is None
+
+
+def test_wide_camera_requires_its_own_valid_calibration(codec):
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  obj.render(rect,camera_service='wideRoadCameraState')
+  assert not any(kind=='icon' for kind,value in draws)
+  sm['liveCalibration'].wideFromDeviceEuler=[0.,0.,0.]
+  draws.clear();obj.render(rect,camera_service='wideRoadCameraState')
+  assert ('text','12m') in draws

@@ -87,8 +87,21 @@ def _oem_comfort_status(text, now_ns):
   return int(match[2])
 
 
+def _oem_native_clock_offset_ns():
+  # Panda's C++ can publisher uses BOOTTIME; UI/control plans use MONOTONIC.
+  # Re-read after suspend. Keep packet age limits; never replace source age
+  # with receive time to make an old object look fresh.
+  boot = getattr(time, 'CLOCK_BOOTTIME', None)
+  if boot is None:
+    return 0
+  before = time.monotonic_ns()
+  native = time.clock_gettime_ns(boot)
+  after = time.monotonic_ns()
+  return max(0, native-(before+after)//2)
+
+
 class OemSurroundOverlay:
-  """Small receive-only OEM relative-position map; never a control input."""
+  """Receive-only icons projected onto the real camera image; no control input."""
   def __init__(self):
     self.socket = None
     self.frames = {}
@@ -96,10 +109,49 @@ class OemSurroundOverlay:
     self.param_at = 0.0
     self.enabled = False
     self.bus = None
+    self.echo_bus = None
     self.checksum = None
     self.warned = False
 
-  def render(self, rect):
+  @staticmethod
+  def project_icon(side, target, renderer, model, rect):
+    # Rear/alongside slots outside the forward camera must never be clamped
+    # onto an invented position in front. These are symbols, not image boxes.
+    if not side.endswith('F') or renderer is None:
+      return None
+    try:
+      distance = float(target['distance'])
+      lateral = float(target['lateral'])*(-1 if side.startswith('L') else 1)
+      if not 0 < abs(lateral) <= 8.0 or float(target['lateral']) <= 0:
+        return None
+      xs, zs = list(model.position.x), list(model.position.z)
+      height = float(renderer._path_offset_z)
+      matrix = [[float(v) for v in row] for row in renderer._car_space_transform]
+      if (not 2 <= len(xs) == len(zs) <= 33 or len(matrix) != 3 or any(len(r) != 3 for r in matrix) or
+          not all(math.isfinite(v) for v in (*xs,*zs,distance,lateral,height,*sum(matrix,[]))) or
+          any(a >= b for a,b in zip(xs,xs[1:])) or not max(2.,xs[0]) <= distance <= xs[-1]):
+        return None
+      i = next(i for i in range(len(xs)-1) if distance <= xs[i+1])
+      z = zs[i]+(distance-xs[i])/(xs[i+1]-xs[i])*(zs[i+1]-zs[i])+height
+      def project(y):
+        values = [sum(a*b for a,b in zip(row,(distance,y,z))) for row in matrix]
+        if not all(math.isfinite(v) for v in values) or values[2] <= 1e-6:
+          return None
+        return values[0]/values[2],values[1]/values[2]
+      point,left,right = project(lateral),project(lateral-.8),project(lateral+.8)
+      if point is None or left is None or right is None:
+        return None
+      x,y = point
+      width = min(96.,max(18.,abs(right[0]-left[0])))
+      h = width*(1.0 if target['class'] in (5,6) else .7)
+      if not (rect.x <= x-width/2 and x+width/2 <= rect.x+rect.width and
+              rect.y <= y-h and y+22 <= rect.y+rect.height):
+        return None
+      return x,y,width,h
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError, OverflowError):
+      return None
+
+  def render(self, rect, renderer=None, camera_service='roadCameraState'):
     sm = ui_state.sm
     cp = ui_state.CP
     if cp is None or str(cp.carFingerprint) != 'HYUNDAI_PALISADE_LX3_HEV':
@@ -118,64 +170,101 @@ class OemSurroundOverlay:
     if self.enabled and self.socket is None:
       from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
       self.bus = CanBus(cp).CAM
+      self.echo_bus = CanBus(cp).ECAN | 0x80
       self.checksum = hkg_can_fd_checksum
       self.socket = messaging.sub_sock('can')
     if self.enabled and now-self.last_poll >= .04:
       self.last_poll = now
+      native_offset_ns = _oem_native_clock_offset_ns()
       # Bound work per rendered frame. Queued old messages cannot refresh a
       # slot because Event timestamps are checked, rather than receive time.
       for _ in range(12):
         event = messaging.recv_one_or_none(self.socket)
         if event is None:
           break
-        stamp = int(event.logMonoTime)/1e9
+        stamp = (int(event.logMonoTime)-native_offset_ns)/1e9
         if not event.valid or not 0 <= time.monotonic()-stamp <= .2:
           continue
         for packet in event.can:
-          if int(packet.src) != self.bus or packet.address not in (0x1EA, 0x162):
+          if int(packet.src) not in (self.bus, self.echo_bus) or packet.address not in (0x1EA, 0x162):
             continue
           raw = bytes(packet.dat)
           if len(raw) == 32 and int.from_bytes(raw[:2], 'little') == self.checksum(packet.address, None, raw):
-            self.frames[int(packet.address)] = (stamp, _decode_oem_surround(int(packet.address), raw))
+            self.frames[(int(packet.src), int(packet.address))] = (stamp, _decode_oem_surround(int(packet.address), raw))
     targets = {}
+    # Mirror the cluster's actual emitted display when Panda confirms TX.
+    # sendcan intent alone is never used. A fresh empty TX frame also clears
+    # original targets; do not merge an older/source icon back into that slot.
+    display_bus = self.echo_bus if any(
+      0 <= now-self.frames.get((self.echo_bus, address), (0.0, {}))[0] <= .2
+      for address in (0x1EA, 0x162)) else self.bus
     # Prefer the wider CCNC classes; do not infer a type from 1EA colour.
     for address in (0x1EA, 0x162):
-      stamp, values = self.frames.get(address, (0.0, {}))
+      stamp, values = self.frames.get((display_bus, address), (0.0, {}))
       if 0 <= now-stamp <= .2:
         targets.update(values)
     targets = {side:target for side,target in targets.items() if target is not None}
+    # A 1EA colour/CCNC BOX is not a vehicle class. A neutral marker is allowed
+    # only if the original camera module itself displayed the matching slot.
+    # Old host-generated fills in a completely empty source cannot qualify.
+    original = {}
+    for address in (0x1EA,0x162):
+      stamp,values = self.frames.get((self.bus,address),(0.0,{}))
+      if 0 <= now-stamp <= .2:
+        original.update(values)
+    def original_visible(side,target):
+      source = original.get(side)
+      return (source is not None and source['class'] in (0,1,2,3,4,5,6,9,10,11,12) and
+              abs(source['distance']-target['distance']) <= max(2.,target['distance']*.1) and
+              abs(source['lateral']-target['lateral']) <= .6)
+    targets = {side:target for side,target in targets.items() if target['class'] in (3,4,5,6,9,10,11,12) or
+               (target['class'] in (0,1,2) and original_visible(side,target))}
     cm = None
     comfort = 0
     if fresh('lateralPlan') and fresh('carControl') and sm['carControl'].latActive and sm['lateralPlan'].mpcSolutionValid:
       cm = _oem_margin_status(str(sm['lateralPlan'].latDebugText))
     if fresh('lateralPlan') and fresh('longitudinalPlan') and fresh('carControl') and sm['carControl'].longActive:
       comfort = _oem_comfort_status(str(sm['lateralPlan'].latDebugText), time.monotonic_ns())
-    if not targets and cm is None and not comfort:
+    if not self.enabled and cm is None and not comfort:
       return
-    width, height = 235., 350.
-    x, y = rect.x+rect.width-width-24., rect.y+rect.height-height-100.
-    rl.draw_rectangle_rounded(rl.Rectangle(x, y, width, height), .12, 8, rl.Color(10,20,30,185))
-    draw_text_ui_style('순정 주변', x+width/2, y+22, 20, rl.WHITE, align='center', shadow_offset=0)
-    cx, cy = x+width/2, y+height*.60
-    rl.draw_rectangle_lines_ex(rl.Rectangle(cx-11,cy-20,22,40), 2, rl.SKYBLUE)
+    # Reuse the exact active road/wide-camera transform and model ground plane
+    # used by the existing path/lead renderer. No separate map or screen-edge
+    # placement, no lateral multiplier and no forced projection without calib.
+    camera_age = now-(int(sm.logMonoTime[camera_service])-_oem_native_clock_offset_ns())/1e9
+    wide_euler = getattr(sm['liveCalibration'],'wideFromDeviceEuler',[])
+    wide_ready = camera_service != 'wideRoadCameraState' or (
+      len(wide_euler) == 3 and all(math.isfinite(v) for v in wide_euler))
+    projection_ready = (renderer is not None and fresh('modelV2') and sm.alive[camera_service] and
+      sm.valid[camera_service] and 0 <= camera_age <= .2 and wide_ready and
+      sm.alive['liveCalibration'] and sm.valid['liveCalibration'] and
+      0 <= now-sm.logMonoTime['liveCalibration']/1e9 <= 1.0 and
+      sm['liveCalibration'].calStatus == CALIBRATED and len(sm['liveCalibration'].rpyCalib) == 3 and
+      all(math.isfinite(v) for v in sm['liveCalibration'].rpyCalib))
+    visible = 0
     for side, target in targets.items():
-      dx = min(84., max(38., target['lateral']*19.)) * (-1 if side.startswith('L') else 1)
-      dy = min(104. if side.endswith('F') else 48., max(28., target['distance']*2.4)) * (-1 if side.endswith('F') else 1)
-      tx, ty = cx+dx, cy+dy
+      projected = self.project_icon(side,target,renderer,sm['modelV2'],rect) if projection_ready else None
+      if projected is None:
+        continue
+      tx,ty,w,h = projected
+      visible += 1
       colour = rl.WHITE if target['white'] else rl.Color(165,175,185,255)
-      truck = target['class'] in (5,6)
-      rl.draw_rectangle_lines_ex(rl.Rectangle(tx-12,ty-15,24,30 if truck else 23), 2, colour)
-      # Explicit type only exists in CCNC; all 1EA targets stay generic boxes.
-      if truck:
-        rl.draw_line(int(tx-10),int(ty+4),int(tx+10),int(ty+4),colour)
-      draw_text_ui_style(f"{target['distance']:.0f}m",tx,ty+22,17,colour,align='center',shadow_offset=0)
-    label = ('거리두기 적용 중 '+('→' if cm > 0 else '←')+f' {abs(cm):.1f}cm') if cm is not None else '거리두기 미적용'
-    draw_text_ui_style(label,x+width/2,y+height-54,18,rl.GREEN if cm is not None else rl.LIGHTGRAY,
-                       align='center',shadow_offset=0)
+      # Known OEM car/truck types get a silhouette. Original OEM-visible slots
+      # without a vehicle type stay neutral boxes; raw radar fills are excluded.
+      rl.draw_rectangle_lines_ex(rl.Rectangle(tx-w/2,ty-h,w,h), 2, colour)
+      if target['class'] in (3,4,5,6):
+        rl.draw_rectangle_lines_ex(rl.Rectangle(tx-w*.30,ty-h*.9,w*.6,h*.3), 2, colour)
+        rl.draw_line(int(tx-w*.4),int(ty-h*.18),int(tx+w*.4),int(ty-h*.18),colour)
+      draw_text_ui_style(f"{target['distance']:.0f}m",tx,ty+14,17,colour,align='center',shadow_offset=0)
+    x,y = rect.x+24,rect.y+rect.height-130
+    if self.enabled:
+      state = f'주변 표시 {visible}대' if projection_ready else '주변 표시 · 영상 정보 확인 중'
+      draw_text_ui_style(state,x,y,18,rl.LIGHTGRAY,align='left_center',shadow_offset=0)
+    if cm is not None:
+      label = '거리두기 적용 중 '+('→' if cm > 0 else '←')+f' {abs(cm):.1f}cm'
+      draw_text_ui_style(label,x,y-30,20,rl.GREEN,align='left_center',shadow_offset=0)
     if comfort:
-      draw_text_ui_style('부드러운 감속 적용 중',x+width/2,y+height-32,18,rl.SKYBLUE,align='center',shadow_offset=0)
       parts = [name for bit,name in ((1,'타력'),(2,'미리 감속'),(4,'정차')) if comfort & bit]
-      draw_text_ui_style(' · '.join(parts),x+width/2,y+height-12,16,rl.WHITE,align='center',shadow_offset=0)
+      draw_text_ui_style('부드러운 감속 적용 중 · '+' · '.join(parts),x,y-60,20,rl.SKYBLUE,align='left_center',shadow_offset=0)
 
 
 class AugmentedRoadView(CameraView):
@@ -237,7 +326,8 @@ class AugmentedRoadView(CameraView):
     self.model_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
     try:
-      self.oem_surround_overlay.render(self._content_rect)
+      self.oem_surround_overlay.render(self._content_rect, self.model_renderer,
+                                      'wideRoadCameraState' if self.stream_type == WIDE_CAM else 'roadCameraState')
     except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
       # Optional display failure must not take down the road/alert UI.
       self.oem_surround_overlay.frames.clear()

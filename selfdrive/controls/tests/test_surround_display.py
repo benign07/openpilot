@@ -201,27 +201,16 @@ def test_incomplete_oem_source_does_not_imply_an_empty_slot():
   assert values == original
 
 
-@pytest.mark.parametrize('valid,timeout,setting,frame,should_call', [
-  (True,False,1,100,True),(False,False,1,100,True),
-  (True,True,1,100,True),(True,False,0,100,True),(True,False,1,101,False),
-])
-def test_actual_controller_display_gate_uses_can_health_without_granting_control(
-    valid,timeout,setting,frame,should_call):
+def test_actual_controller_does_not_synthesize_icons_from_unclassified_tracks():
   tree=ast.parse((ROOT/'opendbc_repo/opendbc/car/hyundai/carcontroller.py').read_text(encoding='utf8'))
   cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='CarController')
   update=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='update')
-  node=next(n for n in update.body if isinstance(n,ast.If) and
-            'self.lx3_surround_display' in ast.unparse(n.test))
-  calls=[]
-  selector=NS(update=lambda *args: (calls.append(args),{'LF':(15.,3.2)})[1])
-  context=object(); cs=NS(out=NS(canValid=valid,canTimeout=timeout),lx3_surround_context=context)
-  controller=NS(lx3_surround_display=selector,frame=frame,enable_corner_radar=setting)
-  scope={'self':controller,'CS':cs,'now_nanos':2_000_000_000,'surround_objects':{}}
-  exec(compile(ast.Module(body=[node],type_ignores=[]),'actual-controller-display-gate','exec'),scope)
-  assert bool(calls) is should_call
-  if should_call:
-    assert calls==[(context,2_000_000_000,bool(setting and valid and not timeout))]
-    assert scope['surround_objects']=={'LF':(15.,3.2)}
+  assert not any(isinstance(n,ast.Call) and 'lx3_surround_display.update' in ast.unparse(n.func)
+                 for n in ast.walk(update))
+  constructor=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='__init__')
+  node=next(n for n in ast.walk(constructor) if isinstance(n,ast.Assign) and
+            any(ast.unparse(t)=='self.lx3_surround_display' for t in n.targets))
+  assert isinstance(node.value,ast.Constant) and node.value.value is None
 
 
 def test_apply_extension_keeps_actuators_and_non_lx3_call_contract():
@@ -284,10 +273,10 @@ def minimal_cs():
 
 
 @pytest.mark.parametrize('fingerprint,setting,enabled,expected',[
-  (LX3,1,False,1),(LX3,1,True,1),(LX3,2,False,1),
+  (LX3,1,False,0),(LX3,1,True,0),(LX3,2,False,0),
   (LX3,0,True,0),('KIA_EV9',1,True,0),
 ])
-def test_real_formatter_packs_empty_oem_fallback_with_crc_and_preserves_other_fields(
+def test_real_formatter_ignores_unclassified_fill_with_crc_and_preserves_other_fields(
     codec,fingerprint,setting,enabled,expected):
   packer,decode,checksum = codec
   cs = minimal_cs(); cs.ccnc_0x162.update(FAULT_LSS=1,FAULT_DAS=1,FF_DETECT=3,FF_DISTANCE=12.)
@@ -330,3 +319,29 @@ def test_new_menu_uses_existing_native_switch_once_and_preserves_range_default()
     return [key for n in nodes for key in [*n.get('params',[]),*entries(n.get('groups',[]))]]
   assert entries(data['menu']).count('EnableCornerRadar')==1
   assert 'EnableCornerRadar' in entries(data['menu'][:1])
+
+
+@pytest.mark.parametrize('frame',[100,150,300])
+def test_lx3_formatter_never_revives_hidden_source_geometry(codec,frame):
+  packer,decode,_=codec;cs=minimal_cs()
+  cs.adrv_0x1ea.update(LF_DETECT=4,LF_DETECT_DISTANCE=20.,LF_DETECT_LATERAL=3.,
+                      LR_DETECT=0,LR_DETECT_DISTANCE=20.,LR_DETECT_LATERAL=3.)
+  cs.ccnc_0x162.update(LR_DETECT=7,LR_DETECT_DISTANCE=20.,LR_DETECT_LATERAL=3.)
+  messages=display_scope()['create_ccnc_messages'](NS(carFingerprint=LX3,flags=1),packer,NS(ECAN=0,CAM=2),frame,
+    NS(enabled=False,latActive=False),cs,NS(leadDistance=0.),0.,False,False,1,False,0,
+    surround_objects={'LF':(10.,3.),'RF':(15.,3.)})
+  for address,raw,_ in messages:
+    values=decode(packer.dbc.addr_to_msg[address].name,raw)
+    source=cs.adrv_0x1ea if address==0x1EA else cs.ccnc_0x162
+    for side in ('LF','RF','LR','RR'):
+      for suffix in ('_DETECT','_DETECT_DISTANCE','_DETECT_LATERAL'):
+        assert values[side+suffix]==pytest.approx(source[side+suffix])
+
+
+def test_other_car_keeps_its_existing_1ea_formatting(codec):
+  packer,decode,_=codec;cs=minimal_cs()
+  cs.adrv_0x1ea.update(LF_DETECT=4,LF_DETECT_DISTANCE=20.,LF_DETECT_LATERAL=3.)
+  messages=display_scope()['create_ccnc_messages'](NS(carFingerprint='KIA_EV9',flags=1),packer,NS(ECAN=0,CAM=2),100,
+    NS(enabled=False,latActive=False),cs,NS(leadDistance=0.),0.,False,False,1,False,0)
+  original=next(raw for addr,raw,_ in messages if addr==0x1EA)
+  assert decode('ADRV_0x1ea',original)['LF_DETECT']==1

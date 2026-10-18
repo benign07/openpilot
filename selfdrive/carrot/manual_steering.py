@@ -4,7 +4,8 @@ import math
 
 class ManualSteeringPause:
   FADE_SECONDS = 1.0
-  RESUME_SECONDS = 1.0
+  CLEAR_SECONDS = 0.5
+  RESUME_SECONDS = 0.5
   RESUME_ANGLE_DEG = 15.0
 
   def __init__(self, dt):
@@ -41,10 +42,12 @@ class ManualSteeringPause:
       clear = (not signalling and not steering_pressed and can_valid and not can_timeout and
                math.isfinite(steering_angle) and abs(steering_angle) < self.RESUME_ANGLE_DEG)
       self.clear_seconds = self.clear_seconds + self.dt if clear else 0.0
-      if self.clear_seconds >= self.RESUME_SECONDS:
+      if self.clear_seconds >= self.CLEAR_SECONDS:
         self.paused = False
         self.clear_seconds = 0.0
-        self.scale = 1.0
+        # Automatic return must use the same gradual envelope as a newly
+        # accepted physical resume. Preserve the actual partial/zero level.
+        self.resuming = True
     elif self.resuming:
       if not lateral_active or not can_valid or can_timeout:
         self.scale = 0.0

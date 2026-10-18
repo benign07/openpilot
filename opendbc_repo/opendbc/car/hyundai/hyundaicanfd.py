@@ -698,10 +698,10 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control,
 
 
 class LX3SurroundDisplay:
-  """Fresh stable forward-side radar objects for a display-only empty-slot fill.
+  """Historical offline track selector; no production display/control consumer.
 
-  No object classification is inferred. Rear/alongside coverage is not claimed.
-  Missing/stale packets and reused slots clear history instead of holding icons.
+  Retained for comparison tools. Stability is not vehicle classification, so
+  the controller and formatter no longer use these objects to fill OEM slots.
   """
   def __init__(self):
     self.tracks = {}
@@ -776,6 +776,7 @@ class LX3SurroundDisplay:
 
 
 def _apply_lx3_surround_display(values, CS, objects):
+  # Historical offline formatter probe only. Not called by production senders.
   # Both OEM formats have first refusal. A hidden object with nonzero geometry
   # is not an empty slot. Fill only LF/RF, never front lead, rear, state or faults.
   sources = (CS.adrv_0x1ea, CS.ccnc_0x162)
@@ -974,11 +975,11 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           # 기존대로 LR/RR만 깜빡임
           blink_pairs=[('LR_DETECT', 'LR_DETECT_DISTANCE'),
                        ('RR_DETECT', 'RR_DETECT_DISTANCE')],
-          blink_t=1.0
+          blink_t=1.0,
+          # Keep hidden code4 and hidden rear geometry hidden on this LX3.
+          preserve_corner_types=CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV',
         )
 
-        if CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' and enable_corner_radar > 0:
-          _apply_lx3_surround_display(values, CS, surround_objects or {})
         ret.append(packer.make_can_msg("ADRV_0x1ea", CAN.ECAN, values, rx_counter = rx_counter))
 
       if CS.ccnc_0x162 is not None:
@@ -1014,8 +1015,6 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           values["FAULT_LSS"] = 0
           values["FAULT_DAS"] = 0
 
-        if CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' and enable_corner_radar > 0:
-          _apply_lx3_surround_display(values, CS, surround_objects or {})
         ret.append(packer.make_can_msg("CCNC_0x162", CAN.ECAN, values))
 
     # --- NEW_MSG_4B9 (corner radar keep-alive?) ---

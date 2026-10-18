@@ -31,7 +31,7 @@ def test_new_accepted_lat_request_after_signal_ends_pause_despite_hands():
   s.leftBlinker=False
   s.lx3Authority.lateralGeneration=5
   assert c.lat_suspend_control(s,True)
-  assert 0 < c.manual_steering.scale < .011
+  assert 0 < c.manual_steering.scale < .021
   for _ in range(200):assert c.lat_suspend_control(s,True)
   s.leftBlinker=False;c.lat_suspend_control(s,True)
   s.rightBlinker=True;c.lat_suspend_control(s,True)
@@ -64,11 +64,11 @@ def test_explicit_resume_actual_ceiling_starts_immediately_and_ramps():
   s.lx3Authority.lateralGeneration=5
   active=c.lat_suspend_control(s,True)
   value=ceiling.update(250.,c.manual_steering.scale,active,resuming=c.manual_steering.resuming)
-  assert active and 0 < value <= 2.51
-  for _ in range(99):
+  assert active and 0 < value <= 5.01
+  for _ in range(49):
     active=c.lat_suspend_control(s,True)
     next_value=ceiling.update(250.,c.manual_steering.scale,active,resuming=c.manual_steering.resuming)
-    assert value <= next_value <= min(250.,value+2.51)
+    assert value <= next_value <= min(250.,value+5.01)
     value=next_value
   assert value==250.
   assert ceiling.update(250.,1.,False)==0
@@ -104,7 +104,7 @@ def test_partial_fade_resume_never_steps_up_even_when_host_ramp_finishes_early()
   for i in range(41,141):
     scale=min(1.,i/100+.2)
     next_value=ceiling.update(250.,scale,True,resuming=scale<1.)
-    assert value<=next_value<=min(250.,value+2.5)
+    assert value<=next_value<=min(250.,value+5.)
     value=next_value
   assert value==250.
   assert ceiling.update(250.,.99,True)==pytest.approx(247.5)
@@ -114,9 +114,9 @@ def test_partial_fade_resume_never_steps_up_even_when_host_ramp_finishes_early()
 def test_new_manual_handoff_during_recovery_anchors_to_actual_partial_output():
   ceiling=ManualSteeringCeiling();ceiling.update(100.,1.,True)
   for i in range(1,41):ceiling.update(250.,1-i/100,True)
-  for i in range(41,81):value=ceiling.update(250.,min(1.,i/100+.2),True,resuming=i<80)
+  for i in range(41,61):value=ceiling.update(250.,min(1.,i/100+.2),True,resuming=True)
   assert value==pytest.approx(160.) and ceiling.recovering
-  assert ceiling.update(250.,.99,True)==pytest.approx(158.4)
+  assert ceiling.update(250.,.79,True)==pytest.approx(126.4)
   assert ceiling.fading and not ceiling.recovering
 
 
@@ -162,8 +162,9 @@ def test_normal_automatic_resume_still_waits_clear_and_cannot_grant():
   c=controls();s=cs()
   for _ in range(101):c.lat_suspend_control(s,True)
   s.leftBlinker=False;s.steeringPressed=False
-  for _ in range(99):assert not c.lat_suspend_control(s,True)
+  for _ in range(49):assert not c.lat_suspend_control(s,True)
   assert c.lat_suspend_control(s,True)
+  assert c.manual_steering.scale==0 and c.manual_steering.resuming
   assert not c.lat_suspend_control(s,False)
 
 
@@ -204,7 +205,7 @@ def test_ccnc_bit_preserves_oem_warning_bits_and_other_profiles():
   try:
     for supported in (False,True):
       buttons.uses_lx3_authority=lambda cp:supported
-      result=ns['create_ccnc_messages'](NS(flags=1),packer,NS(ECAN=0),5,NS(latActive=True),s,
+      result=ns['create_ccnc_messages'](NS(flags=1,carFingerprint='HYUNDAI_PALISADE_LX3_HEV' if supported else 'KIA_EV9'),packer,NS(ECAN=0),5,NS(latActive=True),s,
               NS(leadDistance=0),0,0,0,0,False,0,notification_vibrate=True)
       values=result[0][2]
       assert values['VIBRATE']==int(supported)

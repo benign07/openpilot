@@ -47,15 +47,21 @@ def inject_driving_preferences(data):
        'ApproachStopSmooth','ApproachTrafficCalm','ApproachFlexibleGap','ApproachFlexibleGapMin']),
   ]
   definitions = {p.get('name'):p for p in data.get('params',[])}
+  if 'ManualSteerWithBlinker' in definitions:
+    definitions['ManualSteerWithBlinker'].update(
+      descr='LX3에서 자동차선변경을 끈 경우(-1), 한쪽 깜빡이를 켜면 기존 조향보조를 약1초 동안 줄여 수동조향으로 전환합니다. 깜빡이를 끈 뒤 조향입력 없음·조향각15도 미만·정상CAN이0.5초 유지되면, 현재 출력에서 약0.5초 동안 부드럽게 복귀합니다. 깜빡이를 끈 뒤 새 횡/종 제어요청이 실제 승인되면 대기 없이 같은 페이드인을 시작합니다. 깜빡이가 켜진 동안에는 자동 복귀하지 않습니다. 기존 제어권한·운전자 개입·각도·토크 제한이 우선하며 가감속 제어는 별개입니다. 취소·고장 정지는 지연하지 않습니다.',
+      edescr='LX3, automatic lane change OFF (-1): a single blinker fades assistance out over about1second. After blinkers are OFF, no steering input, angle below15degrees and healthy CAN must persist for0.5seconds. Assistance then fades in from its current level over about0.5seconds. A newly accepted lateral/longitudinal request after signals end can start the same fade-in without the clear delay. Existing permission, driver override, angle and torque limits remain; faults/cancellation stop immediately. Longitudinal control is separate.',
+      cdescr='仅LX3且自动变道关闭(-1)：单侧转向灯使辅助约1秒内减弱。关闭转向灯、无转向输入、转角小于15度且CAN正常持续0.5秒后，从当前输出约0.5秒内平顺恢复。关灯后新的横向或纵向请求获准，可立即开始同样的渐入。控制权限、驾驶员介入、角度与扭矩限制优先，取消或故障立即停止；速度控制独立。')
+    sections.append(('manual_steering','깜빡이 수동조향','Manual steering',['ManualSteerWithBlinker']))
   # Reuse the existing switch; do not introduce an unknown native Params key
   # or a virtual preference that older rollback readers would reject.
   if 'EnableCornerRadar' in definitions:
     option = definitions['EnableCornerRadar']
-    description = 'LX3에서는 오파 제어 여부와 무관하게 순정 주변 정보를 우선 표시합니다. 순정 항목이 비면 신선하고 1초 이상 안정적으로 추적된 전방 측방 레이더 대상을 회색 상자로 보완합니다. 후방·바로 옆의 전체 감지와 차종 인식은 보장하지 않습니다. 0은 보완 끄기, 1은 표시 보완, 2는 기존 끼어들기 검출 설정도 유지합니다. 차선 내 미세조정은 아래의 별도 옵션과 차선·제어 조건을 따릅니다. 오파 화면에는 신선한 순정 좌우·앞뒤 상대위치 미니맵을 표시하고, 실제 경로 보정과 부드러운 감속 보정이 적용되는 동안에만 상태를 표시합니다.'
+    description = 'LX3에서는 순정 모듈이 가공한 표시 대상과 숨김 상태를 보존하고, 차종 미분류 레이더 값으로 빈 차량 표시를 만들지 않습니다. 오파 화면의 실제 카메라 영상 위치에 차량 아이콘을 투영합니다. 차종 정보가 없는 경우에는 원본 순정 모듈이 직접 표시한 대상만 중립 마커로 나타냅니다. 신선한 위치·영상·보정 정보가 없거나 전방 카메라 밖에 있는 대상은 그리지 않습니다. 0은 영상 표시 끄기, 1은 영상 표시 켜기, 2는 기존 끼어들기 검출 설정도 유지합니다. 차선 내 미세조정은 별도 옵션과 차선·제어 조건을 따르며 아이콘 위치를 제어 입력으로 사용하지 않습니다. 실제 경로·감속 보정이 계산에 적용되는 동안에만 적용 상태를 표시합니다.'
     option.update(title='주변 대상 상시 표시', etitle='Surrounding object display',
       ctitle='周围目标持续显示', descr=description,
-      edescr='LX3 keeps OEM surrounding objects first, whether openpilot controls are active or not. Empty forward-side slots may use fresh radar tracks stable for at least one second, shown as generic gray objects. Full rear/alongside coverage and vehicle classification are not provided. 0 disables filling; 1 enables it; 2 also keeps existing cut-in detection. Within-lane adjustment has separate options and lane/control requirements.',
-      cdescr='LX3优先保留原厂周围目标，不要求openpilot控制已启用。前侧空白位置可由持续稳定至少一秒的新鲜雷达轨迹补充为灰色通用目标。不提供完整侧后方覆盖或车型识别。0关闭补充，1开启补充，2同时保留现有切入检测。车道内微调仍需单独选项及车道和控制条件。')
+      edescr='LX3 preserves processed OEM display objects and hidden states without filling empty slots from unclassified radar tracks. Icons follow positions in the real camera view. Unclassified objects need a matching original OEM-visible slot and remain neutral markers. Stale, uncalibrated and off-camera objects are hidden. 0 disables the camera overlay; 1 enables it; 2 retains existing cut-in behavior. Within-lane adjustment has separate requirements and does not use screen coordinates.',
+      cdescr='LX3保留原厂处理后的显示目标和隐藏状态，不再用未分类雷达轨迹填充空白。图标投影到实际相机画面；没有车型分类时，只有原厂明确显示且位置匹配的目标才使用中性标记。过期、未标定或相机外目标不绘制。0关闭画面叠加，1开启，2保留既有切入检测。车道内微调有独立条件，不使用图标屏幕坐标。')
     sections.insert(0, ('surround_display','주변 대상 표시','Surrounding objects',['EnableCornerRadar']))
   development = {name for _,_,_,items in sections for name in items if name in definitions}
   for name in development:
