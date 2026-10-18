@@ -131,10 +131,36 @@ class LaunchFollow:
     self.extra = 0.0
     self.reason = 'off'
     self.previous_lead = None
+    self.relative_samples = []
+    self.relative_speed_growing = False
+
+  def observe_opening(self, stamp_ns, relative_speed, reset):
+    if reset:
+      self.relative_samples = []
+    if stamp_ns > self.last_ns:
+      self.relative_samples.append((stamp_ns, relative_speed))
+    self.relative_samples = [(stamp, value) for stamp, value in self.relative_samples
+                             if 0 <= stamp_ns-stamp <= 650_000_000][-32:]
+    self.relative_speed_growing = False
+    if not self.relative_samples or stamp_ns-self.relative_samples[0][0] < 550_000_000:
+      return
+    # Three means over about 0.6s reject a single spike/threshold chatter.
+    # Only distinct radar timestamps advance the trend; no wall-time timer.
+    bins = [[], [], []]
+    for stamp, value in self.relative_samples:
+      age = stamp_ns-stamp
+      bins[0 if age >= 400_000_000 else 1 if age >= 200_000_000 else 2].append(value)
+    if all(bins):
+      old, middle, recent = [sum(values)/len(values) for values in bins]
+      self.relative_speed_growing = (recent-old >= .2 and middle-old >= .05 and
+                                     recent-middle >= .05 and relative_speed >= old+.2)
 
   def withdraw(self, table_max, reason, *, immediate=False):
     self.reason = reason
     self.extra = 0.0 if immediate else max(0.0, self.extra-0.3*self.dt)
+    if immediate:
+      self.relative_samples = []
+      self.relative_speed_growing = False
     return table_max+self.extra if self.extra else table_max
 
   def update(self, strength, radar, *, stamp_ns, eligible, should_stop, v_ego,
@@ -150,10 +176,16 @@ class LaunchFollow:
       delta = (stamp_ns-self.last_ns)/1e9
       continuous = (0 <= delta <= .2 and abs(lead.dRel-d-lead.vRel*delta)<1.5 and
                     abs(lead.vLead-velocity)<5.)
-    if not stamp_ok or not lead_ok or lead.radarTrackId != self.track or not continuous:
+    reset_track = not stamp_ok or not lead_ok or lead.radarTrackId != self.track or not continuous
+    if reset_track:
       self.track = lead.radarTrackId if lead_ok and stamp_ok else None
       self.since_ns = stamp_ns
       self.extra = 0.0
+    if lead_ok and stamp_ok:
+      self.observe_opening(stamp_ns, lead.vRel, reset_track)
+    else:
+      self.relative_samples = []
+      self.relative_speed_growing = False
     self.previous_lead = (lead.dRel, lead.vLead) if lead_ok else None
     self.last_ns = stamp_ns
     if not strength or not eligible:
@@ -194,12 +226,17 @@ class LaunchFollow:
     active = self.extra > 0.0
     if (lead.vRel <= (.2 if active else .5) or lead.vLead <= 1.0 or
         lead.aLeadK < (-.05 if active else 0.0) or
-        lead.dRel <= desired_distance+(1.0 if active else 2.0)):
+        lead.dRel <= desired_distance+1.0):
       return self.withdraw(table_max, 'lead_not_opening')
-    amount = clamp(strength, 0, 20) * 0.01 * clamp((lead.vRel-0.5)/2.5, 0., 1.)
+    # Sustained growing separation can use the full configured allowance;
+    # otherwise keep the existing relative-speed scaling. This raises a
+    # capability only: MPC obstacles/jerk and stock turn/approach limits win.
+    opening_factor = 1.0 if self.relative_speed_growing else clamp((lead.vRel-0.5)/2.5, 0., 1.)
+    amount = clamp(strength, 0, 20) * 0.01 * opening_factor
     amount *= clamp((60/3.6-v_ego)/(20/3.6), 0., 1.)
     allowed = min(1.6, table_max*(1.+amount))
-    self.reason = 'opening_allowance' if allowed > table_max else 'speed_or_stock_limit'
+    self.reason = (('opening_growth_allowance' if self.relative_speed_growing else 'opening_allowance')
+                   if allowed > table_max else 'speed_or_stock_limit')
     # A higher stock table must never be lowered by this optional allowance.
     target = max(0., allowed-table_max)
     self.extra += clamp(target-self.extra, -.3*self.dt, .15*self.dt)

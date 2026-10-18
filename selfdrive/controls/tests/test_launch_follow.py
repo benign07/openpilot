@@ -89,6 +89,92 @@ def test_mild_measurement_jitter_and_comfort_exit_do_not_snap():
   assert run(h,r,4_450_000_000)==1.3
 
 
+@pytest.mark.parametrize('margin,allowed',[(.99,False),(1.,False),(1.01,True),(1.5,True)])
+def test_launch_activates_above_one_metre_of_target_gap(margin,allowed):
+  h=LaunchFollow();r=scene();r.leadOne.dRel=8.+margin;stopped(h,r)
+  assert (run(h,r,2_500_000_000)>1.3) is allowed
+
+
+def growing_launch(helper,radar,count=45,*,strength=10,table_max=1.3):
+  values=[]
+  for i in range(count):
+    relative=.6+.6*i*.05
+    radar.leadOne.vRel=relative
+    radar.leadOne.vLead=2.+relative
+    radar.leadOne.dRel+=relative*.05
+    values.append(run(helper,radar,2_500_000_000+i*50_000_000,
+                      strength=strength,table_max=table_max))
+  return values
+
+
+def test_sustained_growing_opening_uses_the_configured_allowance_ceiling():
+  h=LaunchFollow();r=scene();stopped(h,r)
+  values=growing_launch(h,r)
+  assert values[-1]==pytest.approx(1.43)
+  assert h.relative_speed_growing and h.reason=='opening_growth_allowance'
+  assert max(b-a for a,b in zip([1.3]+values,values))<=.15*.05+1e-12
+
+
+@pytest.mark.parametrize('strength,table_max,expected',[(10,1.3,1.43),(20,1.3,1.56),(20,1.5,1.6),(20,2.,2.)])
+def test_growth_respects_existing_strength_cap_and_never_lowers_stock_limit(strength,table_max,expected):
+  h=LaunchFollow();r=scene();stopped(h,r)
+  values=growing_launch(h,r,80,strength=strength,table_max=table_max)
+  assert values[-1]==pytest.approx(expected)
+  assert max(values)<=max(table_max,expected)+1e-12
+
+
+@pytest.mark.parametrize('kind',['steady','jitter','single_spike','falling'])
+def test_growth_requires_a_sustained_trend_not_a_sample_or_large_gap(kind):
+  h=LaunchFollow();r=scene();stopped(h,r)
+  for i in range(40):
+    value={'steady':1.,'jitter':1.+(.03 if i%2 else -.03),
+           'single_spike':1.6 if i==39 else 1.,'falling':2.-i*.02}[kind]
+    r.leadOne.vRel=value;r.leadOne.vLead=2.+value;r.leadOne.dRel+=value*.05
+    run(h,r,2_500_000_000+i*50_000_000)
+  assert not h.relative_speed_growing
+  assert h.extra<.13
+
+
+def test_repeated_radar_stamp_cannot_age_the_opening_trend():
+  h=LaunchFollow();r=scene();stopped(h,r)
+  for i in range(20):
+    r.leadOne.vRel=.6+i*.05;r.leadOne.vLead=2.+r.leadOne.vRel
+    run(h,r,2_500_000_000)
+  assert not h.relative_speed_growing
+  assert len(h.relative_samples)==1
+
+
+@pytest.mark.parametrize('kind',['new_id','range_jump','old_clock','long_gap','missing','nan'])
+def test_growth_history_cannot_survive_unqualified_tracks(kind):
+  h=LaunchFollow();r=scene();stopped(h,r);growing_launch(h,r)
+  assert h.relative_speed_growing
+  stamp=4_750_000_000
+  if kind=='new_id':r.leadOne.radarTrackId+=1
+  elif kind=='range_jump':r.leadOne.dRel+=10.
+  elif kind=='old_clock':stamp=4_690_000_000
+  elif kind=='long_gap':stamp=5_000_000_000
+  elif kind=='missing':r.leadOne.status=False
+  else:r.leadOne.vRel=float('nan')
+  assert run(h,r,stamp)==1.3
+  assert not h.relative_speed_growing and not h.relative_samples
+
+
+@pytest.mark.parametrize('kind',['stop','approach','inactive','zero_strength','closing','braking','queue','cutin'])
+def test_existing_safety_and_approach_exits_win_over_the_full_growth_ceiling(kind):
+  h=LaunchFollow();r=scene();stopped(h,r);growing_launch(h,r)
+  changes={}
+  if kind=='stop':changes['should_stop']=True
+  elif kind=='approach':changes['approach_active']=True
+  elif kind=='inactive':changes['eligible']=False
+  elif kind=='zero_strength':changes['strength']=0
+  elif kind=='closing':r.leadOne.vRel=-.1
+  elif kind=='braking':r.leadOne.aLeadK=-.2
+  elif kind=='queue':r.leadsCenter=[NS(status=True,radarTrackId=8,dRel=r.leadOne.dRel+10.,vLead=0.,aLeadK=0.)]
+  else:r.leadsCutIn=[NS(status=True,dRel=20.)]
+  assert run(h,r,4_750_000_000,**changes)==1.3
+  assert not h.relative_speed_growing and h.extra==0.
+
+
 def test_preference_store_invalid_or_missing_is_all_off(tmp_path):
   f=tmp_path/'prefs.json';p=DrivingPreferences(f)
   assert p.read()['LaunchFollowStrength'] == 0 and p.read()['LateralMarginShadow'] == 1

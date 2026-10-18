@@ -59,6 +59,7 @@ jobs:
           uv run --no-sync python tools/check_lx3_evidence_native.py --output native-evidence.json 2>&1 | tee native-evidence.log
           uv run --no-sync python tools/check_lx3_approach_native.py --output native-comfort.json 2>&1 | tee native-comfort.log
           uv run --no-sync python tools/check_lx3_preferences_native.py --output native-preferences.json 2>&1 | tee native-preferences.log
+          uv run --no-sync python tools/check_lx3_launch_native.py --output native-launch.json 2>&1 | tee native-launch.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -73,3 +74,5 @@ jobs:
             native-comfort.log
             native-preferences.json
             native-preferences.log
+            native-launch.json
+            native-launch.log
