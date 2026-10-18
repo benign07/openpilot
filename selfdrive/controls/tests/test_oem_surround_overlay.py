@@ -255,7 +255,7 @@ def test_wide_camera_requires_its_own_valid_calibration(codec):
 
 @pytest.mark.parametrize('condition',['ok','static','slow','bad_lane','stale_radar','stale_model',
   'old_origin','radar_error','position_mismatch','hidden_source','source_geometry','missing_source','old_helper'])
-def test_generic_echo_needs_filtered_moving_match_and_truly_empty_sources(codec,condition):
+def test_generic_echo_needs_fresh_matching_occupancy_and_truly_empty_sources(codec,condition):
   packer,_,_=codec
   obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
   queue.clear();sm['carControl'].latActive=False
@@ -282,8 +282,9 @@ def test_generic_echo_needs_filtered_moving_match_and_truly_empty_sources(codec,
   elif condition=='position_mismatch':target.dRel=30.
   elif condition=='old_helper':obj.filter_lead=None
   obj.render(rect)
-  assert len([x for kind,x in draws if kind=='icon'])==(1 if condition=='ok' else 0)
-  assert ('text','12m') in draws if condition=='ok' else ('text','12m') not in draws
+  visible=condition in ('ok','static','slow','bad_lane')
+  assert len([x for kind,x in draws if kind=='icon'])==int(visible)
+  assert ('text','12m') in draws if visible else ('text','12m') not in draws
 
 
 @pytest.mark.parametrize('name,address',[('ADRV_0x1ea',0x1EA),('CCNC_0x162',0x162)])

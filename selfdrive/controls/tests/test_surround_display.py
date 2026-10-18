@@ -75,7 +75,7 @@ def test_stable_tracks_are_generic_objects_without_an_engage_requirement():
   h = display_scope()['LX3SurroundDisplay']()
   assert not prime(h, count=20)
   assert h.update((radar(), 2_000_000_000), 2_000_000_000, True, model=lane_model()) == {'LF': (15., 3.2)}
-  assert not prime(h, radar([], [lead(1, 2, vLead=0.)]), start=3_000_000_000)
+  assert prime(h, radar([], [lead(1, 2, vLead=0.)]), start=3_000_000_000) == {'RF': (15., 3.2)}
 
 
 @pytest.mark.parametrize('change', [
@@ -356,15 +356,18 @@ def test_other_car_keeps_its_existing_1ea_formatting(codec):
 
 
 @pytest.mark.parametrize('speed',[-1.,0.,.5,2.99,3.])
-def test_static_and_slow_occupancy_never_supplements_empty_vehicle_slots(speed):
-  assert not prime(display_scope()['LX3SurroundDisplay'](),radar([lead(vLead=speed)]))
+def test_previous_static_and_slow_occupancy_display_is_restored(speed):
+  assert prime(display_scope()['LX3SurroundDisplay'](),radar([lead(vLead=speed)])) == {'LF':(15.,3.2)}
 
 
 @pytest.mark.parametrize('condition',['missing','low_prob','bad_std','narrow','wide','reversed_x','nan','outside'])
-def test_uncertain_own_lane_corridor_rejects_supplements(condition):
+def test_lane_classification_is_not_an_extra_occupancy_display_filter(condition):
   cls=display_scope()['LX3SurroundDisplay'];h=cls();md=lane_model()
   if condition=='missing':
-    assert h.update((radar(),1_000_000_000),1_000_000_000,True)=={}
+    for i in range(21):
+      t=1_000_000_000+i*50_000_000
+      result=h.update((radar(),t),t,True)
+    assert result=={'LF':(15.,3.2)}
     return
   if condition=='low_prob':md.laneLineProbs[1]=.79
   elif condition=='bad_std':md.laneLineStds[2]=.26
@@ -373,18 +376,17 @@ def test_uncertain_own_lane_corridor_rejects_supplements(condition):
   elif condition=='reversed_x':md.laneLines[1].x=[60.,0.]
   elif condition=='nan':md.laneLines[2].y=[float('nan')]*2
   else:md.laneLines[1].y=[0.,0.];md.laneLines[2].y=[3.,3.]
-  assert not prime(h,model=md)
+  assert prime(h,model=md)=={'LF':(15.,3.2)}
 
 
-def test_signal_loss_on_same_radar_frame_clears_previously_visible_supplement():
+def test_lane_probability_change_does_not_hide_a_fresh_stable_occupancy():
   h=display_scope()['LX3SurroundDisplay']();assert prime(h)
   md=lane_model();md.laneLineProbs[1]=0.
-  assert h.update((radar(),2_000_000_000),2_050_000_000,True,model=md)=={}
-  assert not h.tracks
+  assert h.update((radar(),2_000_000_000),2_050_000_000,True,model=md)=={'LF':(15.,3.2)}
+  assert h.tracks
 
 
 def test_only_own_lane_is_observed_not_an_asserted_adjacent_lane():
-  # The supplement uses a bounded inferred corridor; do not pretend that the
-  # model observed the outer adjacent marking or that this identifies a car.
+  # Display occupancy is not an assertion about adjacent marked lanes or cars.
   md=lane_model();md.laneLineProbs[0]=md.laneLineProbs[3]=0.
   assert prime(display_scope()['LX3SurroundDisplay'](),model=md)=={'LF':(15.,3.2)}

@@ -220,7 +220,7 @@ class OemSurroundOverlay:
     targets = {side:target for side,target in targets.items() if target is not None}
     # A 1EA colour/CCNC BOX is not a vehicle class. A neutral marker is allowed
     # only if the original camera module itself displayed the matching slot.
-    # Old host-generated fills in a completely empty source cannot qualify.
+    # A stable host supplement in an empty source also needs a matching track.
     original = {}
     for address in (0x1EA,0x162):
       stamp,values = self.frames.get((self.bus,address),(0.0,{}))
@@ -231,9 +231,9 @@ class OemSurroundOverlay:
       return (source is not None and source['class'] in (0,1,2,3,4,5,6,9,10,11,12) and
               abs(source['distance']-target['distance']) <= max(2.,target['distance']*.1) and
               abs(source['lateral']-target['lateral']) <= .6)
-    def filtered_supplement(side,target):
-      # An actual emitted generic slot needs the same fresh moving/lane test
-      # as its producer. This remains neutral occupancy, not a vehicle class.
+    def tracked_supplement(side,target):
+      # An actual emitted generic slot needs fresh matching radar occupancy.
+      # Its producer checks stability; neither path claims a vehicle class.
       if display_bus != self.echo_bus or not callable(self.filter_lead) or not fresh('radarState') or not fresh('modelV2'):
         return False
       for address in (0x1EA,0x162):
@@ -253,7 +253,7 @@ class OemSurroundOverlay:
           return True
       return False
     targets = {side:target for side,target in targets.items() if target['class'] in (3,4,5,6,9,10,11,12) or
-               (target['class'] in (0,1,2) and (original_visible(side,target) or filtered_supplement(side,target)))}
+               (target['class'] in (0,1,2) and (original_visible(side,target) or tracked_supplement(side,target)))}
     cm = None
     comfort = 0
     if fresh('lateralPlan') and fresh('carControl') and sm['carControl'].latActive and sm['lateralPlan'].mpcSolutionValid:
