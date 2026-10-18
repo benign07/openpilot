@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import time
 import uuid
@@ -34,7 +35,8 @@ def atomic_json(path, data):
 
 
 class ChunkStore:
-  def __init__(self, root, *, quota=512 * 1024**2, reserve=512 * 1024**2, seconds=60, chunk_bytes=2 * 1024**2):
+  def __init__(self, root, *, quota=512 * 1024**2, reserve=512 * 1024**2, seconds=60, chunk_bytes=2 * 1024**2,
+               rolling=False):
     self.root = Path(root)
     self.quota, self.reserve = quota, reserve
     self.seconds, self.chunk_bytes = seconds, chunk_bytes
@@ -42,6 +44,11 @@ class ChunkStore:
     self.error = None
     self.dropped_no_stream = 0
     self.recovery_quarantined = 0
+    self.rolling = rolling
+    self.retired_chunks = self.retired_bytes = 0
+    self.retention_skipped = 0
+    self.last_retention_scan = -math.inf
+    self.retention_cursor = None
     self.root.mkdir(parents=True, exist_ok=True)
     self.recover()
     # Preserved bad records still consume space; quarantine is not free quota.
@@ -68,6 +75,17 @@ class ChunkStore:
       return False
 
   def recover(self):
+    # A crash during retention may leave a hidden manifest. Restore it when
+    # its data survived; otherwise complete the already-started retirement.
+    for path in self.root.glob('*.manifest.retiring'):
+      chunk = path.name.split('.')[0]
+      if not re.fullmatch(r'[a-f0-9]{32}', chunk) or path.is_symlink():
+        continue
+      data = self.root / (chunk + '.jsonl.gz')
+      if data.is_file():
+        os.replace(path, self.root / (chunk + '.manifest.json'))
+      else:
+        path.unlink()
     # Keep complete JSON lines after abrupt power loss; never claim uninterrupted coverage.
     for path in self.root.glob('*.partial'):
       end = 0
@@ -133,11 +151,89 @@ class ChunkStore:
     return result
 
   def list_chunks(self):
-    return [json.loads(p.read_text(encoding='utf-8')) for p in sorted(self.root.glob('*.manifest.json'))]
+    rows = []
+    for path in sorted(self.root.glob('*.manifest.json')):
+      try:
+        rows.append(json.loads(path.read_text(encoding='utf-8')))
+      except FileNotFoundError:
+        continue  # The collector can retire a completed file during indexing.
+    return rows
+
+  def make_room(self, now):
+    """Owner's bounded oldest-first policy for the passive recorder only.
+
+    Other callers retain the old preserve-on-full policy. Never touch open,
+    quarantined, mismatched or symlinked records. Downloads already opened by
+    FileResponse can finish on their original descriptor.
+    """
+    if not self.rolling or now - self.last_retention_scan < 30:
+      return
+    self.last_retention_scan = now
+    needed = self.chunk_bytes + 65536
+    try:
+      self.usage = sum(p.stat().st_size for p in self.root.rglob('*') if p.is_file())
+      candidates = sorted(self.root.glob('*.manifest.json'), key=lambda p: (p.stat().st_mtime_ns, p.name))
+      # Keep the newest two completed records even when no older file can help.
+      candidates = [(p.stat().st_mtime_ns, p.name, p) for p in candidates[:-2]]
+      if self.retention_cursor is not None:
+        candidates = ([row for row in candidates if row[:2] > self.retention_cursor] +
+                      [row for row in candidates if row[:2] <= self.retention_cursor])
+      scanned_bytes = 0
+      deadline = time.monotonic() + .1
+      for stamp, name, manifest in candidates[:64]:
+        if scanned_bytes >= 8 * 1024**2 or time.monotonic() >= deadline:
+          break
+        if self.usage + needed <= self.quota and shutil.disk_usage(self.root).free >= self.reserve + self.chunk_bytes:
+          break
+        self.retention_cursor = (stamp, name)
+        chunk = manifest.name.split('.')[0]
+        data = self.root / (chunk + '.jsonl.gz')
+        if not re.fullmatch(r'[a-f0-9]{32}', chunk) or manifest.is_symlink() or data.is_symlink():
+          self.retention_skipped += 1
+          continue
+        try:
+          if manifest.stat().st_size > 4096:
+            raise ValueError('oversized manifest')
+          row = json.loads(manifest.read_text(encoding='utf-8'))
+          if not isinstance(row, dict):
+            raise ValueError('invalid manifest')
+          size = data.stat().st_size
+          if (row.get('id') != chunk or type(row.get('bytes')) is not int or row['bytes'] != size
+              or not 0 < size <= self.chunk_bytes + 65536
+              or not isinstance(row.get('sha256'), str) or not re.fullmatch(r'[a-f0-9]{64}', row['sha256'])):
+            raise ValueError('unverified record')
+          if hashlib.sha256(data.read_bytes()).hexdigest() != row['sha256']:
+            raise ValueError('record checksum mismatch')
+          scanned_bytes += size
+          with gzip.open(data, 'rb') as stream:
+            if not self.valid_header(stream):
+              raise ValueError('invalid record header')
+            # Reach EOF/CRC without allowing a damaged or oversized compressed
+            # record to be retired merely because its first line was valid.
+            if len(stream.read(self.chunk_bytes + 65537)) > self.chunk_bytes + 65536:
+              raise ValueError('oversized decompressed record')
+          manifest_size = manifest.stat().st_size
+          retiring = manifest.with_suffix('.retiring')
+          os.replace(manifest, retiring)  # Stop advertising before removing data.
+          try:
+            data.unlink()
+          except OSError:
+            os.replace(retiring, manifest)
+            raise
+          retiring.unlink()
+          self.usage -= size + manifest_size
+          self.retired_chunks += 1
+          self.retired_bytes += size + manifest_size
+        except (OSError, ValueError, gzip.BadGzipFile, EOFError, zlib.error):
+          self.retention_skipped += 1
+    except OSError:
+      self.retention_skipped += 1
 
   def begin(self, metadata, now):
     if self.stream:
       return True
+    if self.usage + self.chunk_bytes + 65536 > self.quota or shutil.disk_usage(self.root).free < self.reserve + self.chunk_bytes:
+      self.make_room(now)
     if self.usage + self.chunk_bytes + 65536 > self.quota or shutil.disk_usage(self.root).free < self.reserve + self.chunk_bytes:
       self.error = 'storage_full_preserving_records'
       return False
@@ -793,6 +889,30 @@ class AutoRecorder:
                        'trip_id': self.trip, 'boot_id': self.metadata.get('boot_id')}, now)
     self.longitudinal_frames += 1
 
+  def lateral_evidence(self, row, source_ns, now):
+    # Existing event envelope keeps older HUD/PC receivers compatible. This is
+    # evidence of a planner request, never a physical displacement or ECU ACK.
+    if self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV' or self.state != 'recording':
+      return
+    if (not isinstance(row, dict) or row.get('schema') != 1
+        or type(row.get('mono_ns')) is not int or row['mono_ns'] < self.route_observed_ns
+        or not 0 <= now - row['mono_ns']/1e9 <= 1.):
+      return
+    try:
+      if len(json.dumps(row, separators=(',', ':'), allow_nan=False).encode()) > 16384:
+        return
+    except (TypeError, ValueError):
+      return
+    if now - self.last_event.get('lateral_margin_evidence', -math.inf) < .5:
+      return
+    if not self.rotate_full_chunk(now):
+      self.storage_dropped += 1
+      return
+    self.last_event['lateral_margin_evidence'] = now
+    self.store.append({'kind': 'event', 'name': 'lateral_margin_evidence', 'mono_ns': row['mono_ns'],
+                       'source_log_mono_ns': source_ns, 'route': self.recording_route,
+                       'trip_id': self.trip, 'boot_id': self.metadata.get('boot_id'), 'evidence': row}, now)
+
   def video_index(self, index, source_ns, now, observed_route, observed_ns, native_offset_ns):
     """Preserve native clock evidence only with a qualified current route."""
     if self.state != 'recording':
@@ -823,6 +943,9 @@ class AutoRecorder:
             'stale_can_frames': self.stale_can_frames, 'stale_panda_snapshots': self.stale_panda_snapshots,
             'storage_dropped': self.storage_dropped, 'dropped_no_stream': self.store.dropped_no_stream,
             'recovery_quarantined': self.store.recovery_quarantined,
+            'diagnostic_retention': {'policy': 'oldest_completed_first' if self.store.rolling else 'preserve_on_full',
+                                     'retired_chunks': self.store.retired_chunks, 'retired_bytes': self.store.retired_bytes,
+                                     'skipped_unverified': self.store.retention_skipped},
             'video_index_source': 'completed_qlog_on_pc_not_live_published',
             'chunk_rotations': self.chunk_rotations, 'max_chunk_rotation_ms': self.max_chunk_rotation_ms,
             'button_traces': self.trace_count, 'button_trace_active': self.trace is not None,
@@ -832,6 +955,7 @@ class AutoRecorder:
             'blindspot_diagnostic_traces': self.blindspot_trace_count,
             'longitudinal_evidence_frames': self.longitudinal_frames,
             'longitudinal_evidence_rejected': self.longitudinal_rejected,
+            'lateral_evidence_transport': 'bounded_event_lateral_margin_evidence',
             'video_index_stale': self.video_index_stale, 'video_index_dropped': self.video_index_dropped,
             'video_index_route_mismatch': self.video_index_route_mismatch,
             'control_changes': False, 'phone_backup': False}

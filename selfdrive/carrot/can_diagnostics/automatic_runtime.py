@@ -261,7 +261,7 @@ class AutomaticController:
     if dbc.exists():
       metadata['dbc_sha256'] = hashlib.sha256(dbc.read_bytes()).hexdigest()
     with self.lock:
-      self.recorder = AutoRecorder(ChunkStore(self.root), metadata)
+      self.recorder = AutoRecorder(ChunkStore(self.root, rolling=True), metadata)
       self.error = None
       self.retry_after_seconds = 0
     last_metadata = last_context = last_storage = -100
@@ -371,12 +371,17 @@ class AutomaticController:
         if not event.valid or event.which() != 'logMessage':
           continue
         text = str(event.logMessage)
-        if len(text) > 65536 or 'lx3_longitudinal_evidence' not in text:
+        if len(text) > 65536 or not any(key in text for key in ('lx3_longitudinal_evidence', 'lx3_lateral_margin')):
           continue
         try:
-          row = json.loads(text).get('msg', {}).get('lx3_longitudinal_evidence')
+          message = json.loads(text).get('msg', {})
+          row = message.get('lx3_longitudinal_evidence')
+          lateral = message.get('lx3_lateral_margin')
         except (ValueError, AttributeError):
           continue
         with self.lock:
-          self.recorder.longitudinal_evidence(row, int(event.logMonoTime), time.monotonic())
+          if row is not None:
+            self.recorder.longitudinal_evidence(row, int(event.logMonoTime), time.monotonic())
+          if lateral is not None:
+            self.recorder.lateral_evidence(lateral, int(event.logMonoTime), time.monotonic())
       self.shutdown.wait(.05)

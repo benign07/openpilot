@@ -670,7 +670,7 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control,
                      lane_line=True, corner_radar=True,
                      desire=0,
                      blink_pairs=None,
-                     blink_t=1.0):
+                     blink_t=1.0, preserve_corner_types=False):
   if lane_line:
     curvature = round(CS.out.steeringAngleDeg / 3)
     mag = min(abs(curvature), 15)
@@ -681,7 +681,7 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control,
     if desire:
       _apply_lane_desire(values, desire)
 
-  if corner_radar:
+  if corner_radar and not preserve_corner_types:
     radar_all = [
       ('LF_DETECT', 'LF_DETECT_DISTANCE'),
       ('RF_DETECT', 'RF_DETECT_DISTANCE'),
@@ -896,7 +896,10 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           # 필요하면 162도 깜빡임 적용(원래 코드처럼 LR/RR만)
           blink_pairs=[('LR_DETECT', 'LR_DETECT_DISTANCE'),
                        ('RR_DETECT', 'RR_DETECT_DISTANCE')],
-          blink_t=1.0
+          blink_t=1.0,
+          # CCNC 0x162 has 5-bit object classes, unlike 0x1EA's 3-bit
+          # visibility enums. Keep actual types and source emphasis.
+          preserve_corner_types=CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV',
         )
 
         if (left_lane_warning and not CS.out.leftBlinker) or (right_lane_warning and not CS.out.rightBlinker):
