@@ -4,7 +4,7 @@ import math
 import re
 from types import SimpleNamespace as NS
 import pytest
-from openpilot.selfdrive.controls.tests.test_surround_display import ROOT,load,codec  # noqa: F401
+from openpilot.selfdrive.controls.tests.test_surround_display import ROOT,load,codec,display_scope,lane_model,lead  # noqa: F401
 
 UI=ROOT/'selfdrive/ui/onroad/augmented_road_view.py'
 
@@ -251,3 +251,45 @@ def test_wide_camera_requires_its_own_valid_calibration(codec):
   sm['liveCalibration'].wideFromDeviceEuler=[0.,0.,0.]
   draws.clear();obj.render(rect,camera_service='wideRoadCameraState')
   assert ('text','12m') in draws
+
+
+@pytest.mark.parametrize('condition',['ok','static','slow','bad_lane','stale_radar','stale_model',
+  'old_origin','radar_error','position_mismatch','hidden_source','source_geometry','missing_source','old_helper'])
+def test_generic_echo_needs_filtered_moving_match_and_truly_empty_sources(codec,condition):
+  packer,_,_=codec
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  queue.clear();sm['carControl'].latActive=False
+  md=lane_model();md.position=NS(x=[0.,60.],z=[0.,0.]);sm['modelV2']=md
+  target=lead(dRel=12.,yRel=3.,dPath=3.)
+  sm['radarState']=NS(mdMonoTime=1_990_000_000,leadsLeft=[target],leadsRight=[],
+    radarErrors=NS(to_dict=lambda:{'canError':condition=='radar_error'}))
+  sm.valid['radarState']=sm.alive['radarState']=True;sm.logMonoTime['radarState']=1_990_000_000
+  obj.filter_lead=display_scope()['LX3SurroundDisplay'].eligible
+  for name,address in (('ADRV_0x1ea',0x1EA),('CCNC_0x162',0x162)):
+    source={}
+    if condition=='hidden_source' and address==0x1EA:source={'LF_DETECT':4,'LF_DETECT_DISTANCE':12.,'LF_DETECT_LATERAL':3.}
+    if condition=='source_geometry' and address==0x162:source={'LF_DETECT_DISTANCE':12.,'LF_DETECT_LATERAL':3.}
+    if condition=='missing_source' and address==0x162:continue
+    queue.append(NS(logMonoTime=1_990_000_000,valid=True,can=[NS(src=2,address=address,dat=packer.make_can_msg(name,2,source)[1])]))
+  echo=packer.make_can_msg('CCNC_0x162',0,{'LF_DETECT':1,'LF_DETECT_DISTANCE':12.,'LF_DETECT_LATERAL':3.})[1]
+  queue.append(NS(logMonoTime=1_995_000_000,valid=True,can=[NS(src=128,address=0x162,dat=echo)]))
+  if condition=='static':target.vLead=0.
+  elif condition=='slow':target.vLead=3.
+  elif condition=='bad_lane':md.laneLineProbs[1]=.1
+  elif condition=='stale_radar':sm.logMonoTime['radarState']=1_000_000_000
+  elif condition=='stale_model':sm.logMonoTime['modelV2']=1_000_000_000
+  elif condition=='old_origin':sm['radarState'].mdMonoTime=1_000_000_000
+  elif condition=='position_mismatch':target.dRel=30.
+  elif condition=='old_helper':obj.filter_lead=None
+  obj.render(rect)
+  assert len([x for kind,x in draws if kind=='icon'])==(1 if condition=='ok' else 0)
+  assert ('text','12m') in draws if condition=='ok' else ('text','12m') not in draws
+
+
+@pytest.mark.parametrize('name,address',[('ADRV_0x1ea',0x1EA),('CCNC_0x162',0x162)])
+@pytest.mark.parametrize('side',['LF','RF','LR','RR'])
+def test_empty_slot_check_uses_all_three_actual_DBC_fields(codec,name,address,side):
+  packer,_,_=codec;fn=overlay_scope()['_decode_oem_surround']
+  assert fn(address,packer.make_can_msg(name,2,{})[1],empty_slots=True)[side]
+  for suffix,value in (('_DETECT',1),('_DETECT_DISTANCE',12.),('_DETECT_LATERAL',3.)):
+    assert not fn(address,packer.make_can_msg(name,2,{side+suffix:value})[1],empty_slots=True)[side]

@@ -44,7 +44,7 @@ def _oem_bits(raw, start, size, little=True):
   return value
 
 
-def _decode_oem_surround(address, raw):
+def _decode_oem_surround(address, raw, *, empty_slots=False):
   """Only actual OEM slots; 1EA cannot identify vehicle type. CRC checked by caller."""
   if len(raw) != 32 or address not in (0x1EA, 0x162):
     return {}
@@ -53,6 +53,12 @@ def _decode_oem_surround(address, raw):
   result = {}
   for side, (typ, distance, lateral) in layout.items():
     code = _oem_bits(raw, typ, 3 if address == 0x1EA else 5, address != 0x1EA)
+    if empty_slots:
+      raw_d = _oem_bits(raw, distance, 11 if side.endswith('F') else 8, not (address == 0x162 and side == 'LR'))
+      raw_y = _oem_bits(raw, lateral, 6 if address == 0x1EA and side.endswith('R') else 7,
+                        not (address == 0x1EA and side.endswith('F')))
+      result[side] = code == raw_d == raw_y == 0
+      continue
     # Keep hidden/unknown object codes distinct from a generic visible object.
     if not (1 <= code <= (3 if address == 0x1EA else 12)):
       if code:
@@ -105,6 +111,8 @@ class OemSurroundOverlay:
   def __init__(self):
     self.socket = None
     self.frames = {}
+    self.empty_frames = {}
+    self.filter_lead = None
     self.last_poll = 0.0
     self.param_at = 0.0
     self.enabled = False
@@ -162,16 +170,20 @@ class OemSurroundOverlay:
       self.param_at = now+2.0
     if not self.enabled:
       self.frames.clear()
+      self.empty_frames.clear()
       self.socket = None
     fresh = lambda k: sm.valid[k] and sm.alive[k] and 0 <= now-sm.logMonoTime[k]/1e9 <= .2
     if not fresh('carState') or not sm['carState'].canValid or sm['carState'].canTimeout:
       self.frames.clear()
+      self.empty_frames.clear()
       return
     if self.enabled and self.socket is None:
-      from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
+      from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum, LX3SurroundDisplay
       self.bus = CanBus(cp).CAM
       self.echo_bus = CanBus(cp).ECAN | 0x80
       self.checksum = hkg_can_fd_checksum
+      # The separate UI bootstrap can safely run with the prior source bundle.
+      self.filter_lead = getattr(LX3SurroundDisplay, 'eligible', None)
       self.socket = messaging.sub_sock('can')
     if self.enabled and now-self.last_poll >= .04:
       self.last_poll = now
@@ -191,6 +203,8 @@ class OemSurroundOverlay:
           raw = bytes(packet.dat)
           if len(raw) == 32 and int.from_bytes(raw[:2], 'little') == self.checksum(packet.address, None, raw):
             self.frames[(int(packet.src), int(packet.address))] = (stamp, _decode_oem_surround(int(packet.address), raw))
+            self.empty_frames[(int(packet.src), int(packet.address))] = (
+              stamp, _decode_oem_surround(int(packet.address), raw, empty_slots=True))
     targets = {}
     # Mirror the cluster's actual emitted display when Panda confirms TX.
     # sendcan intent alone is never used. A fresh empty TX frame also clears
@@ -217,8 +231,29 @@ class OemSurroundOverlay:
       return (source is not None and source['class'] in (0,1,2,3,4,5,6,9,10,11,12) and
               abs(source['distance']-target['distance']) <= max(2.,target['distance']*.1) and
               abs(source['lateral']-target['lateral']) <= .6)
+    def filtered_supplement(side,target):
+      # An actual emitted generic slot needs the same fresh moving/lane test
+      # as its producer. This remains neutral occupancy, not a vehicle class.
+      if display_bus != self.echo_bus or not callable(self.filter_lead) or not fresh('radarState') or not fresh('modelV2'):
+        return False
+      for address in (0x1EA,0x162):
+        stamp,empty = self.empty_frames.get((self.bus,address),(0.,{}))
+        if not 0 <= now-stamp <= .2 or not empty.get(side,False):
+          return False
+      radar = sm['radarState']
+      if not 0 < radar.mdMonoTime <= time.monotonic_ns() or time.monotonic_ns()-radar.mdMonoTime > 200_000_000:
+        return False
+      if any(radar.radarErrors.to_dict().values()):
+        return False
+      leads = radar.leadsLeft if side == 'LF' else radar.leadsRight if side == 'RF' else []
+      for lead in list(leads)[:16]:
+        if (self.filter_lead(lead,0 if side == 'LF' else 1,sm['modelV2']) and
+            abs(lead.dRel-target['distance']) <= max(2.,target['distance']*.1) and
+            abs(abs(lead.yRel)-target['lateral']) <= .6):
+          return True
+      return False
     targets = {side:target for side,target in targets.items() if target['class'] in (3,4,5,6,9,10,11,12) or
-               (target['class'] in (0,1,2) and original_visible(side,target))}
+               (target['class'] in (0,1,2) and (original_visible(side,target) or filtered_supplement(side,target)))}
     cm = None
     comfort = 0
     if fresh('lateralPlan') and fresh('carControl') and sm['carControl'].latActive and sm['lateralPlan'].mpcSolutionValid:
@@ -249,7 +284,7 @@ class OemSurroundOverlay:
       visible += 1
       colour = rl.WHITE if target['white'] else rl.Color(165,175,185,255)
       # Known OEM car/truck types get a silhouette. Original OEM-visible slots
-      # without a vehicle type stay neutral boxes; raw radar fills are excluded.
+      # without a vehicle type stay neutral boxes; unfiltered radar fills are excluded.
       rl.draw_rectangle_lines_ex(rl.Rectangle(tx-w/2,ty-h,w,h), 2, colour)
       if target['class'] in (3,4,5,6):
         rl.draw_rectangle_lines_ex(rl.Rectangle(tx-w*.30,ty-h*.9,w*.6,h*.3), 2, colour)
@@ -257,7 +292,7 @@ class OemSurroundOverlay:
       draw_text_ui_style(f"{target['distance']:.0f}m",tx,ty+14,17,colour,align='center',shadow_offset=0)
     x,y = rect.x+24,rect.y+rect.height-130
     if self.enabled:
-      state = f'주변 표시 {visible}대' if projection_ready else '주변 표시 · 영상 정보 확인 중'
+      state = f'주변 대상 {visible}개' if projection_ready else '주변 표시 · 영상 정보 확인 중'
       draw_text_ui_style(state,x,y,18,rl.LIGHTGRAY,align='left_center',shadow_offset=0)
     if cm is not None:
       label = '거리두기 적용 중 '+('→' if cm > 0 else '←')+f' {abs(cm):.1f}cm'

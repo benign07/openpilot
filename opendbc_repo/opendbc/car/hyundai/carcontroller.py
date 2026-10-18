@@ -187,9 +187,8 @@ class CarController(CarControllerBase):
     self.camera_scc_params = Params().get_int("HyundaiCameraSCC")
     self.is_ldws_car = Params().get_bool("IsLdwsCar")
     self.enable_corner_radar = 0
-    # Radar tracks have no vehicle classification. Do not manufacture OEM
-    # display objects from them; keep the attribute for old inspection tools.
-    self.lx3_surround_display = None
+    # Informational moving-target supplement only; no vehicle type is inferred.
+    self.lx3_surround_display = hyundaicanfd.LX3SurroundDisplay() if CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' else None
 
     self.steerDeltaUpOrg = self.steerDeltaUp = self.steerDeltaUpLC = self.params.STEER_DELTA_UP
     self.steerDeltaDownOrg = self.steerDeltaDown = self.steerDeltaDownLC = self.params.STEER_DELTA_DOWN
@@ -250,6 +249,11 @@ class CarController(CarControllerBase):
       self.params.STEER_DELTA_DOWN = self.steerDeltaDown
     
     surround_objects = {}
+    if self.lx3_surround_display is not None and self.frame % 5 == 0:
+      surround_objects = self.lx3_surround_display.update(
+        getattr(CS, 'lx3_surround_context', None), now_nanos,
+        self.enable_corner_radar > 0 and CS.out.canValid and not CS.out.canTimeout,
+        model=getattr(CS, 'modelV2', None))
 
     angle_control = self.CP.flags & HyundaiFlags.ANGLE_CONTROL
     lx3_guard = uses_lx3_authority(self.CP)

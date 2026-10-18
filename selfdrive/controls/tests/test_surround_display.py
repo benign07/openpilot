@@ -58,19 +58,24 @@ def radar(left=None, right=None, error=False):
             radarErrors=NS(to_dict=lambda: {'canError': error}))
 
 
-def prime(h, r=None, count=21, start=1_000_000_000):
+def lane_model():
+  return NS(laneLines=[NS(x=[0.,60.],y=[y,y]) for y in (-5.4,-1.8,1.8,5.4)],
+            laneLineProbs=[.95]*4,laneLineStds=[.05]*4)
+
+
+def prime(h, r=None, count=21, start=1_000_000_000, model=None):
   result = {}
   for i in range(count):
     stamp = start+i*50_000_000
-    result = h.update((r or radar(), stamp), stamp, True)
+    result = h.update((r or radar(), stamp), stamp, True, model=model or lane_model())
   return result
 
 
 def test_stable_tracks_are_generic_objects_without_an_engage_requirement():
   h = display_scope()['LX3SurroundDisplay']()
   assert not prime(h, count=20)
-  assert h.update((radar(), 2_000_000_000), 2_000_000_000, True) == {'LF': (15., 3.2)}
-  assert prime(h, radar([], [lead(1, 2, vLead=0.)]), start=3_000_000_000) == {'RF': (15., 3.2)}
+  assert h.update((radar(), 2_000_000_000), 2_000_000_000, True, model=lane_model()) == {'LF': (15., 3.2)}
+  assert not prime(h, radar([], [lead(1, 2, vLead=0.)]), start=3_000_000_000)
 
 
 @pytest.mark.parametrize('change', [
@@ -100,14 +105,14 @@ def test_invalid_context_removes_visible_objects_immediately(event):
   elif event == 'zero': args = ((radar(), 0), t, True)
   elif event == 'reverse': args = ((radar(), 1_990_000_000), t, True)
   elif event == 'dropout': args = ((radar([]), t), t, True)
-  assert h.update(*args) == {}
+  assert h.update(*args, model=lane_model()) == {}
   assert h.objects == {}
 
 
 def test_repeated_packets_cannot_age_a_track_into_a_visible_object():
   h = display_scope()['LX3SurroundDisplay']()
   for _ in range(100):
-    assert not h.update((radar(), 1_000_000_000), 1_150_000_000, True)
+    assert not h.update((radar(), 1_000_000_000), 1_150_000_000, True, model=lane_model())
   assert h.tracks[(0,1)][1] == 1_000_000_000
 
 
@@ -116,14 +121,14 @@ def test_repeated_packets_cannot_age_a_track_into_a_visible_object():
 def test_reused_slot_or_discontinuity_must_qualify_again(change):
   h = display_scope()['LX3SurroundDisplay']()
   assert prime(h)
-  assert not h.update((radar([lead(**change)]), 2_050_000_000), 2_050_000_000, True)
+  assert not h.update((radar([lead(**change)]), 2_050_000_000), 2_050_000_000, True, model=lane_model())
   assert prime(h, radar([lead(**change)]), start=2_100_000_000)
 
 
 def test_long_gap_and_duplicate_slot_do_not_inherit_stability():
   h = display_scope()['LX3SurroundDisplay']()
   assert prime(h)
-  assert not h.update((radar(), 2_250_000_000), 2_250_000_000, True)
+  assert not h.update((radar(), 2_250_000_000), 2_250_000_000, True, model=lane_model())
   assert not prime(h, radar([lead()], [lead(1, 1)]), start=3_000_000_000)
   assert not h.tracks
 
@@ -201,16 +206,18 @@ def test_incomplete_oem_source_does_not_imply_an_empty_slot():
   assert values == original
 
 
-def test_actual_controller_does_not_synthesize_icons_from_unclassified_tracks():
+def test_actual_controller_requires_model_valid_CAN_and_opt_in_for_supplements():
   tree=ast.parse((ROOT/'opendbc_repo/opendbc/car/hyundai/carcontroller.py').read_text(encoding='utf8'))
   cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='CarController')
   update=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='update')
-  assert not any(isinstance(n,ast.Call) and 'lx3_surround_display.update' in ast.unparse(n.func)
-                 for n in ast.walk(update))
+  call=next(n for n in ast.walk(update) if isinstance(n,ast.Call) and 'lx3_surround_display.update' in ast.unparse(n.func))
+  assert any(k.arg=='model' and 'modelV2' in ast.unparse(k.value) for k in call.keywords)
+  assert 'CS.out.canValid' in ast.unparse(call.args[2]) and 'CS.out.canTimeout' in ast.unparse(call.args[2])
+  assert 'self.enable_corner_radar' in ast.unparse(call.args[2])
   constructor=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='__init__')
   node=next(n for n in ast.walk(constructor) if isinstance(n,ast.Assign) and
             any(ast.unparse(t)=='self.lx3_surround_display' for t in n.targets))
-  assert isinstance(node.value,ast.Constant) and node.value.value is None
+  assert isinstance(node.value,ast.IfExp) and 'HYUNDAI_PALISADE_LX3_HEV' in ast.unparse(node.value.test)
 
 
 def test_apply_extension_keeps_actuators_and_non_lx3_call_contract():
@@ -273,10 +280,10 @@ def minimal_cs():
 
 
 @pytest.mark.parametrize('fingerprint,setting,enabled,expected',[
-  (LX3,1,False,0),(LX3,1,True,0),(LX3,2,False,0),
+  (LX3,1,False,1),(LX3,1,True,1),(LX3,2,False,1),
   (LX3,0,True,0),('KIA_EV9',1,True,0),
 ])
-def test_real_formatter_ignores_unclassified_fill_with_crc_and_preserves_other_fields(
+def test_real_formatter_uses_only_supplied_filtered_generic_slots_with_crc(
     codec,fingerprint,setting,enabled,expected):
   packer,decode,checksum = codec
   cs = minimal_cs(); cs.ccnc_0x162.update(FAULT_LSS=1,FAULT_DAS=1,FF_DETECT=3,FF_DISTANCE=12.)
@@ -335,7 +342,8 @@ def test_lx3_formatter_never_revives_hidden_source_geometry(codec,frame):
     source=cs.adrv_0x1ea if address==0x1EA else cs.ccnc_0x162
     for side in ('LF','RF','LR','RR'):
       for suffix in ('_DETECT','_DETECT_DISTANCE','_DETECT_LATERAL'):
-        assert values[side+suffix]==pytest.approx(source[side+suffix])
+        expected = {'_DETECT':1,'_DETECT_DISTANCE':15.,'_DETECT_LATERAL':3.}[suffix] if side == 'RF' else source[side+suffix]
+        assert values[side+suffix]==pytest.approx(expected)
 
 
 def test_other_car_keeps_its_existing_1ea_formatting(codec):
@@ -345,3 +353,38 @@ def test_other_car_keeps_its_existing_1ea_formatting(codec):
     NS(enabled=False,latActive=False),cs,NS(leadDistance=0.),0.,False,False,1,False,0)
   original=next(raw for addr,raw,_ in messages if addr==0x1EA)
   assert decode('ADRV_0x1ea',original)['LF_DETECT']==1
+
+
+@pytest.mark.parametrize('speed',[-1.,0.,.5,2.99,3.])
+def test_static_and_slow_occupancy_never_supplements_empty_vehicle_slots(speed):
+  assert not prime(display_scope()['LX3SurroundDisplay'](),radar([lead(vLead=speed)]))
+
+
+@pytest.mark.parametrize('condition',['missing','low_prob','bad_std','narrow','wide','reversed_x','nan','outside'])
+def test_uncertain_own_lane_corridor_rejects_supplements(condition):
+  cls=display_scope()['LX3SurroundDisplay'];h=cls();md=lane_model()
+  if condition=='missing':
+    assert h.update((radar(),1_000_000_000),1_000_000_000,True)=={}
+    return
+  if condition=='low_prob':md.laneLineProbs[1]=.79
+  elif condition=='bad_std':md.laneLineStds[2]=.26
+  elif condition=='narrow':md.laneLines[2].y=[.3,.3]
+  elif condition=='wide':md.laneLines[2].y=[4.,4.]
+  elif condition=='reversed_x':md.laneLines[1].x=[60.,0.]
+  elif condition=='nan':md.laneLines[2].y=[float('nan')]*2
+  else:md.laneLines[1].y=[0.,0.];md.laneLines[2].y=[3.,3.]
+  assert not prime(h,model=md)
+
+
+def test_signal_loss_on_same_radar_frame_clears_previously_visible_supplement():
+  h=display_scope()['LX3SurroundDisplay']();assert prime(h)
+  md=lane_model();md.laneLineProbs[1]=0.
+  assert h.update((radar(),2_000_000_000),2_050_000_000,True,model=md)=={}
+  assert not h.tracks
+
+
+def test_only_own_lane_is_observed_not_an_asserted_adjacent_lane():
+  # The supplement uses a bounded inferred corridor; do not pretend that the
+  # model observed the outer adjacent marking or that this identifies a car.
+  md=lane_model();md.laneLineProbs[0]=md.laneLineProbs[3]=0.
+  assert prime(display_scope()['LX3SurroundDisplay'](),model=md)=={'LF':(15.,3.2)}

@@ -698,10 +698,11 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control,
 
 
 class LX3SurroundDisplay:
-  """Historical offline track selector; no production display/control consumer.
+  """Filtered moving-occupancy supplement, never a vehicle classifier/control input.
 
-  Retained for comparison tools. Stability is not vehicle classification, so
-  the controller and formatter no longer use these objects to fill OEM slots.
+  Require a fresh model/radar context, forward motion, a stable track and a
+  neighbouring corridor inferred from the observed own-lane width. This does
+  not establish that another marked lane exists or identify a vehicle type.
   """
   def __init__(self):
     self.tracks = {}
@@ -716,11 +717,48 @@ class LX3SurroundDisplay:
     self.reason = reason
     return {}
 
-  def update(self, context, now_ns, enabled):
+  @staticmethod
+  def inside_adjacent_corridor(model, side, distance, radar_y):
+    try:
+      if model is None or any(len(getattr(model, key)) != 4 for key in ('laneLines', 'laneLineProbs', 'laneLineStds')):
+        return False
+      bounds = []
+      for i in (1, 2):
+        probability, std = model.laneLineProbs[i], model.laneLineStds[i]
+        if not (math.isfinite(probability) and .8 <= probability <= 1. and math.isfinite(std) and 0. <= std <= .25):
+          return False
+        line = model.laneLines[i]
+        xs, ys = list(line.x), list(line.y)
+        if (not 2 <= len(xs) == len(ys) <= 33 or not all(math.isfinite(v) for v in (*xs, *ys, distance, radar_y)) or
+            any(a >= b for a, b in zip(xs, xs[1:])) or not xs[0] <= distance <= xs[-1]):
+          return False
+        j = next(j for j in range(len(xs)-1) if distance <= xs[j+1])
+        bounds.append(ys[j]+(distance-xs[j])/(xs[j+1]-xs[j])*(ys[j+1]-ys[j]))
+      left, right = bounds
+      width = right-left
+      if not 2.6 <= width <= 4.5:
+        return False
+      left, right = (left-width, left) if side == 0 else (right, right+width)
+      return left+.25 < -radar_y < right-.25
+    except (AttributeError, IndexError, TypeError, ValueError, OverflowError):
+      return False
+
+  @staticmethod
+  def eligible(lead, side, model):
+    sign = 1 if side == 0 else -1
+    return (lead.status and lead.radar and lead.radarTrackId >= 0 and
+            all(math.isfinite(v) for v in (lead.dRel, lead.yRel, lead.dPath, lead.vRel, lead.vLead, lead.vLat)) and
+            .5 < lead.dRel < 50 and 2 < lead.yRel*sign < 5 and 2 < lead.dPath*sign < 5 and
+            abs(lead.yRel-lead.dPath) < .75 and lead.vLead > 3. and abs(lead.vLat) < 1. and
+            LX3SurroundDisplay.inside_adjacent_corridor(model, side, lead.dRel, lead.yRel))
+
+  def update(self, context, now_ns, enabled, *, model=None):
     if not enabled:
       return self.clear('off_or_invalid_can')
     if context is None:
       return self.clear('missing_context')
+    if model is None:
+      return self.clear('missing_lane_model')
     radar, stamp = context
     if not 0 < stamp <= now_ns or now_ns - stamp > 200_000_000:
       return self.clear('stale_radar')
@@ -729,6 +767,11 @@ class LX3SurroundDisplay:
     if stamp < self.last_stamp:
       return self.clear('clock_reversed')
     if stamp == self.last_stamp:
+      self.tracks = {key:row for key,row in self.tracks.items()
+                     if self.inside_adjacent_corridor(model, key[0], row[2], row[3])}
+      self.objects = {name:obj for name,obj in self.objects.items()
+                      if self.inside_adjacent_corridor(model, 0 if name == 'LF' else 1,
+                                                       obj[0], obj[1] if name == 'LF' else -obj[1])}
       return dict(self.objects)
     current, objects = {}, {}
     duplicate_ids = set()
@@ -739,14 +782,7 @@ class LX3SurroundDisplay:
       for index, lead in enumerate(leads):
         if index >= 16:
           break
-        if not lead.status or not lead.radar or lead.radarTrackId < 0:
-          continue
-        values = (lead.dRel, lead.yRel, lead.dPath, lead.vRel, lead.vLead, lead.vLat)
-        if not all(math.isfinite(v) for v in values):
-          continue
-        if not (0.5 < lead.dRel < 50 and 2 < lead.yRel * sign < 5 and
-                2 < lead.dPath * sign < 5 and abs(lead.yRel - lead.dPath) < .75 and
-                lead.vLead >= -1 and abs(lead.vLat) < 1):
+        if not self.eligible(lead, side, model):
           continue
         slot = int(lead.radarTrackId)
         if slot in seen_ids:
@@ -776,7 +812,7 @@ class LX3SurroundDisplay:
 
 
 def _apply_lx3_surround_display(values, CS, objects):
-  # Historical offline formatter probe only. Not called by production senders.
+  # The producer supplies only filtered moving targets; use a generic box type.
   # Both OEM formats have first refusal. A hidden object with nonzero geometry
   # is not an empty slot. Fill only LF/RF, never front lead, rear, state or faults.
   sources = (CS.adrv_0x1ea, CS.ccnc_0x162)
@@ -980,6 +1016,8 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           preserve_corner_types=CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV',
         )
 
+        if CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' and enable_corner_radar > 0:
+          _apply_lx3_surround_display(values, CS, surround_objects or {})
         ret.append(packer.make_can_msg("ADRV_0x1ea", CAN.ECAN, values, rx_counter = rx_counter))
 
       if CS.ccnc_0x162 is not None:
@@ -1015,6 +1053,8 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
           values["FAULT_LSS"] = 0
           values["FAULT_DAS"] = 0
 
+        if CP.carFingerprint == 'HYUNDAI_PALISADE_LX3_HEV' and enable_corner_radar > 0:
+          _apply_lx3_surround_display(values, CS, surround_objects or {})
         ret.append(packer.make_can_msg("CCNC_0x162", CAN.ECAN, values))
 
     # --- NEW_MSG_4B9 (corner radar keep-alive?) ---
