@@ -1,0 +1,50 @@
+name: LX3 stock SPI turnaround ARM candidate
+on:
+  push:
+    branches: [review/lx3-spi-turnaround-20261020]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  arm-device-build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native compiler prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang python3-venv
+          python3 -m venv /tmp/lx3-build
+          /tmp/lx3-build/bin/pip install scons Cython numpy
+      - name: Verify sealed original ARM SDK
+        run: /tmp/lx3-build/bin/python tools/lx3_spi_arm_artifact.py sdk
+      - name: Compare native objects against installed source baseline
+        run: |
+          set -o pipefail
+          mkdir -p arm-evidence arm-before-src
+          git fetch --depth=1 origin a381f7d6c7d469d391a8e45121718279bcaf9d61
+          git fetch --depth=1 origin 32ff4a1101fc522ce43d44e0989cd52862abc203
+          git fetch --depth=1 origin cadd97de0d690db8540d1d35adb34e3e9af6516b
+          git diff --exit-code cadd97de0d690db8540d1d35adb34e3e9af6516b HEAD -- panda opendbc_repo selfdrive/controls selfdrive/carrot selfdrive/monitoring selfdrive/selfdrived cereal system/manager
+          git show a381f7d6c7d469d391a8e45121718279bcaf9d61:selfdrive/pandad/panda.cc > arm-before-src/panda.cc
+          /tmp/lx3-build/bin/python tools/lx3_spi_object_compare.py
+      - name: ARM ABI, CAN protocol and prior SPI rejection boundaries
+        run: |
+          set -o pipefail
+          /tmp/lx3-build/bin/python tools/lx3_spi_arm_artifact.py record
+          selfdrive/pandad/tests/test_pandad_canprotocol 2>&1 | tee arm-evidence/canprotocol.log
+          /tmp/lx3-build/bin/python tools/lx3_spi_hw_type_regression.py
+          for response in -1 0 1 2; do
+            selfdrive/pandad/tests/test_spi_mcu_status "$response" | tee "arm-evidence/mcu-status-$response.log"
+          done
+          /tmp/lx3-build/bin/python tools/check_lx3_spi_boundaries.py --cc clang --cxx clang++ --output arm-evidence/spi
+      - name: Same production-source readiness comparison and interrupted sleeps
+        run: /tmp/lx3-build/bin/python tools/check_lx3_spi_turnaround.py --cxx clang++ --output arm-evidence/turnaround
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lx3-turnaround-arm-candidate
+          path: |
+            arm-evidence
+            selfdrive/pandad/pandad

@@ -33,6 +33,20 @@ const unsigned int SPI_ACK_TIMEOUT = 500; // milliseconds
 const std::string SPI_DEVICE = "/dev/spidev0.0";
 static SpiDiagnostics spi_diagnostics;
 
+// Stock Carrot's H7 DMA re-arm intervals, without its unrelated priority
+// arbiter. Access only while holding the bus lock. Sleeping avoids spinning
+// a CPU while preserving the minimum interval; an oversleep is not an error.
+static double spi_last_transaction_ms = -1000.0;
+static double spi_next_transaction_gap_ms = 0.4;
+static void wait_for_spi_ready(double since_ms, double minimum_ms) {
+  // A signal can interrupt usleep. Recheck the monotonic clock before allowing
+  // the next transfer rather than treating an interrupted sleep as readiness.
+  double remaining_ms;
+  while ((remaining_ms = minimum_ms - (millis_since_boot() - since_ms)) > 0.0) {
+    usleep(static_cast<unsigned>(std::ceil(remaining_ms * 1000.0)));
+  }
+}
+
 static void report_spi_diagnostics() {
   const auto now = static_cast<uint64_t>(millis_since_boot());
   if (!spi_diagnostics.report_due(now)) return;
@@ -361,10 +375,15 @@ int PandaSpiHandle::spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx
   int ret;
   uint16_t rx_data_len;
   LockEx lock(spi_fd, hw_lock);
+  const bool safety_mode_control = endpoint == 0U && tx_data != nullptr &&
+                                   tx_len >= sizeof(ControlPacket_t) && tx_data[0] == 0xdcU;
 
   // needs to be less, since we need to have space for the checksum
   assert(tx_len < SPI_BUF_SIZE);
   assert(max_rx_len < SPI_BUF_SIZE);
+
+  wait_for_spi_ready(spi_last_transaction_ms,
+                     std::max(spi_next_transaction_gap_ms, endpoint == 0U ? 1.0 : 0.4));
 
   xfer_count++;
   spi_diagnostics.count(SpiStage::ATTEMPTS);
@@ -396,6 +415,7 @@ int PandaSpiHandle::spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx
   if (ret < 0) {
     goto fail;
   }
+  wait_for_spi_ready(millis_since_boot(), 0.4);
 
   // Send data
   if (tx_data != NULL) {
@@ -443,6 +463,9 @@ int PandaSpiHandle::spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx
   }
   spi_diagnostics.count(SpiStage::SUCCESS);
 
+  spi_last_transaction_ms = millis_since_boot();
+  spi_next_transaction_gap_ms = safety_mode_control ? 1.0 : 0.4;
+
   return rx_data_len;
 
 fail:
@@ -458,6 +481,9 @@ fail:
     }
   }
   if (nack_cnt < 3) spi_diagnostics.count(SpiStage::RECOVERY_FAILED);
+
+  spi_last_transaction_ms = millis_since_boot();
+  spi_next_transaction_gap_ms = 0.4;
 
   if (ret >= 0) ret = -1;
   return ret;

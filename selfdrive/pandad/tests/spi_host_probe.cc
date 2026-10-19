@@ -27,12 +27,14 @@ static unsigned request_max = 12;
 static unsigned flow_nacks = 0;
 static unsigned header_nacks = 0;
 static std::function<void()> on_transfer;
+static std::function<bool(spi_ioc_transfer *)> override_transfer;
+static std::function<unsigned(unsigned)> elapsed_sleep_us;
 static constexpr unsigned CALL_LIMIT = 20000;
 static constexpr unsigned BACKPRESSURE_NACKS = 100;
 static constexpr double IO_MS = 0.25;
 // Header + ACK poll + three recovery fills, followed by the clamped 2ms sleep.
 static constexpr double MAX_HEADER_CHARGE_MS = 5 * IO_MS + 2.0;
-static constexpr double MAX_DATA_CHARGE_MS = 7 * IO_MS + 2.0;
+static constexpr double MAX_DATA_CHARGE_MS = 7 * IO_MS + 2.0 + 0.4;
 namespace util {
 int safe_ioctl(int, unsigned long request, void *argument, const char *) {
   if (request != SPI_IOC_MESSAGE(1)) return 0;
@@ -44,6 +46,7 @@ int safe_ioctl(int, unsigned long request, void *argument, const char *) {
   fake_ms += IO_MS;
   if (++calls > CALL_LIMIT) throw std::runtime_error("unbounded SPI recovery/retry");
   if (on_transfer) on_transfer();
+  if (override_transfer && override_transfer(transfer)) return static_cast<int>(transfer->len);
   if (tx[0] == 0x5A && transfer->len == 7) {
     request_max = uint16_t(tx[4]) | uint16_t(tx[5]) << 8;
     response_length = request_max;
@@ -86,7 +89,8 @@ int safe_ioctl(int, unsigned long request, void *argument, const char *) {
 int main(int argc, char **argv) {
   try {
     PandaSpiHandle panda("");  // Stubbed UID read, no device open or transfer.
-    calls = 0; fake_ms = 0; excessive_read = false;
+    calls = 0; excessive_read = false;
+    const double scenario_start_ms = fake_ms;  // Never move the monotonic fixture clock backwards.
     std::string test = argc > 1 ? argv[1] : "good";
     scenario = test == "oversized" ? Scenario::OVERSIZED : test == "request" ? Scenario::ABOVE_REQUEST :
                test == "recovery" ? Scenario::RECOVERY_STUCK : test == "nack" ? Scenario::DATA_BACKPRESSURE :
@@ -108,7 +112,7 @@ int main(int argc, char **argv) {
     int result = can_write ? panda.bulk_write(3, buffer, sizeof(buffer), timeout) :
                             panda.control_read(0x42, 0, 0, buffer, sizeof(buffer), timeout);
     if (scenario == Scenario::DATA_BACKPRESSURE || scenario == Scenario::MIXED_NACK || scenario == Scenario::BOUNDARY_OK) {
-      assert(result == 0 && panda.comms_healthy && flow_nacks >= BACKPRESSURE_NACKS && fake_ms > 120);
+      assert(result == 0 && panda.comms_healthy && flow_nacks >= BACKPRESSURE_NACKS && fake_ms - scenario_start_ms > 120);
       if (scenario == Scenario::BOUNDARY_OK) assert(header_nacks == 37U && spi_diagnostics.get(SpiStage::HEADER_NACK) == 36U);
     } else if (scenario == Scenario::GOOD || scenario == Scenario::HEADER_NACK) {
       assert(result == 16 && buffer[0] == 0);
@@ -119,7 +123,7 @@ int main(int argc, char **argv) {
       if (scenario == Scenario::HEADER_STUCK || scenario == Scenario::CONTROL_DATA_STUCK || scenario == Scenario::CAN_HEADER_STUCK) {
         assert(result == SpiError::NACK);  // Private header classification never escapes.
         const double max_charge = scenario == Scenario::CONTROL_DATA_STUCK ? MAX_DATA_CHARGE_MS : MAX_HEADER_CHARGE_MS;
-        assert(fake_ms >= 120 && fake_ms < 120 + max_charge);
+        assert(fake_ms - scenario_start_ms >= 120 && fake_ms - scenario_start_ms < 120 + max_charge);
         assert(spi_diagnostics.budget_permille_max() >= 1000);
       }
       if (scenario == Scenario::BOUNDARY_FAIL) {

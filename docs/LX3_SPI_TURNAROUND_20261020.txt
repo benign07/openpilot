@@ -1,0 +1,38 @@
+LX3 SPI readiness candidate — 2026-10-20
+
+Scope: host SPI transport only. Installed native pandad56850ff is still the baseline.
+Source baseline32ff4a11 corresponds to that installed native driver. Current
+cadd97de also contains a separately tested but uninstalled bounded-NACK correction.
+This candidate includes that correction plus minimal stock Carrot readiness waits;
+do not attribute a future installed A/B difference to timing alone without isolating it.
+
+Ported intent from the previously verified stock Carrot abe1a232 spi.cc:
+- Minimum400us after successful header ACK before payload transmission.
+- Minimum400us between transactions,1ms before control and after safety-mode control.
+- Keep locking over the protocol transaction. Wait by sleeping rather than busy-spin;
+  recheck monotonic time if sleep is interrupted. No priority arbiter port.
+- Preserve CRC, response-length, recovery budget, endpoint3 DATA backpressure,
+  safety configuration, heartbeat and all native non-SPI objects.
+
+New test executes actual spi.cc against inert readiness thresholds, not a cloned
+host algorithm. Compare exact installed32ff4a11, bounded cadd97de, and candidate
+with the same model; include100 transactions and CAN/control/safety transitions,
+plus short/interrupted sleeps. No-delay model is the negative prerequisite control.
+Existing14 protocol/CRC/buffer/recovery cases remain required. ARM build compares
+all native objects in the same path/compiler; only spi.o may differ from baseline.
+
+Limits: readiness thresholds are assumptions taken from stock timing, not measured
+MCU DMA timing. A model failure is not proof of the physical vehicle root cause.
+Zero simulated retries is not a real-board improvement claim. Windows PC verification
+has no UBSAN; the ARM/Linux workflow explicitly adds UBSAN. No Panda firmware change.
+Native binary is not installed through the source-only HUD updater. A separate
+verified parked native deployment and paired source/ABI checks are required.
+
+Bench acceptance before road deployment: no final transfer failures, no new CAN RX/TX
+overflow or invalid-RX, intact controls heartbeat, no newly introduced long CAN
+transmit delays; compare retry stages/CPU load over comparable load windows.
+Sleeping raises per-transaction latency and must be measured on the actual board.
+OEM FAULT_LSS is unresolved. Never mask warning bits or forge MDPS/authority responses.
+The Oct19 warning occurred with VIBRATE0, so an added vibration pulse is not necessary.
+Claude fresh review is unavailable due the recorded weekly limit until Oct21 07KST;
+previous review and this candidate's tests do not count as fresh Claude approval.
