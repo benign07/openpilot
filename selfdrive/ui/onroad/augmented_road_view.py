@@ -298,7 +298,9 @@ class OemSurroundOverlay:
       label = '거리두기 적용 중 '+('→' if cm > 0 else '←')+f' {abs(cm):.1f}cm'
       draw_text_ui_style(label,x,y-30,20,rl.GREEN,align='left_center',shadow_offset=0)
     if comfort:
-      parts = [name for bit,name in ((1,'타력'),(2,'미리 감속'),(4,'정차')) if comfort & bit]
+      # Bit1 also includes a positive stop-go acceleration ceiling. It does
+      # not prove zero propulsion or physical freewheeling on this powertrain.
+      parts = [name for bit,name in ((1,'가속 억제'),(2,'미리 감속'),(4,'정차')) if comfort & bit]
       draw_text_ui_style('부드러운 감속 적용 중 · '+' · '.join(parts),x,y-60,20,rl.SKYBLUE,align='left_center',shadow_offset=0)
 
 

@@ -47,6 +47,18 @@ def inject_driving_preferences(data):
        'ApproachStopSmooth','ApproachTrafficCalm','ApproachFlexibleGap','ApproachFlexibleGapMin']),
   ]
   definitions = {p.get('name'):p for p in data.get('params',[])}
+  # Both preferences can bind the same positive acceleration ceiling. Keep
+  # the existing IDs/ranges/defaults; a display label is not a freewheel sensor.
+  suppression_notes = {
+    'descr':'화면의 가속 억제 표시는 이 기능이나 정체 추종 차분함으로 양의 가속 상한이 낮아진 상태를 뜻합니다. 정차 중에도 나타날 수 있으며, 실제 타력주행·무동력 상태를 감지했다는 뜻은 아닙니다.',
+    'edescr':'The acceleration-suppression indicator means this preference or stop-go calmness has lowered the positive acceleration ceiling. It can appear at standstill and does not detect physical coasting or zero propulsion.',
+    'cdescr':'加速抑制指示表示本功能或拥堵跟车平缓功能降低了正加速度上限。停车时也可能显示，不表示检测到实际滑行或零驱动力。',
+  }
+  for name in ('ApproachCoastStrength','ApproachTrafficCalm'):
+    if name in definitions:
+      for field,note in suppression_notes.items():
+        text=definitions[name].get(field,'')
+        if note not in text:definitions[name][field]=(text+' '+note).strip()
   if 'ManualSteerWithBlinker' in definitions:
     definitions['ManualSteerWithBlinker'].update(
       descr='LX3에서 자동차선변경을 끈 경우(-1), 한쪽 깜빡이를 켜면 기존 조향보조를 약1초 동안 줄여 수동조향으로 전환합니다. 깜빡이를 끈 뒤 조향입력 없음·조향각15도 미만·정상CAN이0.5초 유지되면, 현재 출력에서 약0.5초 동안 부드럽게 복귀합니다. 깜빡이를 끈 뒤 새 횡/종 제어요청이 실제 승인되면 대기 없이 같은 페이드인을 시작합니다. 깜빡이가 켜진 동안에는 자동 복귀하지 않습니다. 기존 제어권한·운전자 개입·각도·토크 제한이 우선하며 가감속 제어는 별개입니다. 취소·고장 정지는 지연하지 않습니다.',

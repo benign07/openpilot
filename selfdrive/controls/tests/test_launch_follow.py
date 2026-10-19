@@ -307,6 +307,11 @@ def test_development_menu_keeps_parameter_contract_and_has_no_duplicate_entries(
     if item['name']=='ManualSteerWithBlinker':
       presentation.update(('descr','edescr','cdescr'))
       assert '0.5초' in by_name[item['name']]['descr']
+    if item['name'] in ('ApproachCoastStrength','ApproachTrafficCalm'):
+      presentation.update(('descr','edescr','cdescr'))
+      for field in ('descr','edescr','cdescr'):
+        assert by_name[item['name']][field].startswith(item[field])
+      assert '가속 억제' in by_name[item['name']]['descr']
     assert {k:v for k,v in item.items() if k not in presentation}=={
       k:v for k,v in by_name[item['name']].items() if k not in presentation}
   categories=build_menu_categories(data,by_name)

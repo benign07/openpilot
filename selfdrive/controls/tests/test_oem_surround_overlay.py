@@ -135,8 +135,29 @@ def test_comfort_can_show_without_surround_display_or_lateral_control(codec):
   ui.params.get_int=lambda _:0;sm['carControl'].latActive=False
   sm['lateralPlan'].latDebugText='lx3_comfort_v1=1990000000,3'
   obj.render(rect)
-  assert ('text','부드러운 감속 적용 중 · 타력 · 미리 감속') in draws
+  assert ('text','부드러운 감속 적용 중 · 가속 억제 · 미리 감속') in draws
   assert ('text','12m') not in draws
+
+
+def test_both_controls_off_still_show_objects_without_claiming_active_comfort(codec):
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  sm['carControl'].enabled=False
+  sm['carControl'].latActive=sm['carControl'].longActive=False
+  sm['lateralPlan'].latDebugText='lx3_comfort_v1=1990000000,7'
+  obj.render(rect)
+  assert ('text','12m') in draws
+  assert not any(kind=='text' and ('부드러운 감속' in text or '거리두기 적용 중' in text) for kind,text in draws)
+
+
+def test_traffic_only_acceleration_limit_does_not_claim_physical_coasting(codec):
+  # A recorded traffic-only positive ceiling (1.29025m/s2, coast_weight=0)
+  # produces bit1 too. It means a binding acceleration limit, not freewheel.
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  sm['carControl'].latActive=False
+  sm['lateralPlan'].latDebugText='lx3_comfort_v1=1990000000,1'
+  obj.render(rect)
+  assert ('text','부드러운 감속 적용 중 · 가속 억제') in draws
+  assert not any(kind=='text' and '타력' in text for kind,text in draws)
 
 
 @pytest.mark.parametrize('change,expected', [({},1),(dict(enabled=False),0),(dict(eligible=False),0),(dict(active=False),0),

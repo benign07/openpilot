@@ -279,6 +279,23 @@ def minimal_cs():
             out=NS(steeringAngleDeg=0.,leftBlinker=False,rightBlinker=False))
 
 
+def test_acceleration_limit_help_preserves_option_identity_and_is_idempotent():
+  from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES
+  inject=load(ROOT/'selfdrive/carrot/server/services/settings.py',{'inject_driving_preferences'},
+              {'DRIVING_PREFERENCES':DRIVING_PREFERENCES})['inject_driving_preferences']
+  data={'params':[{'name':name,'descr':'기존 설명','edescr':'Existing description','cdescr':'原说明',
+                   'min':0,'max':100,'default':40,'unit':5} for name in ('ApproachCoastStrength','ApproachTrafficCalm')]}
+  inject(data)
+  for name in ('ApproachCoastStrength','ApproachTrafficCalm'):
+    p=next(p for p in data['params'] if p['name']==name)
+    assert '가속 억제' in p['descr'] and '타력주행' in p['descr']
+    assert p['descr'].startswith('기존 설명')
+    assert (p['min'],p['max'],p['default'],p['unit'])==(0,100,40,5)
+  before=copy.deepcopy(data)
+  inject(data)
+  assert data==before
+
+
 @pytest.mark.parametrize('fingerprint,setting,enabled,expected',[
   (LX3,1,False,1),(LX3,1,True,1),(LX3,2,False,1),
   (LX3,0,True,0),('KIA_EV9',1,True,0),
