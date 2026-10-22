@@ -1,0 +1,77 @@
+LX3 guide-paint assessment candidate — 2026-10-22
+
+Purpose
+Green/pink Korean route-guidance paint must not become a lane boundary or a
+route to follow. This candidate implements exclusion evidence and PC replay.
+It does NOT activate exclusion in steering. There is no active-mode switch,
+probability overwrite, replacement geometry, image masking or confidence boost.
+The earlier exact blue CAN-color UI tint repair is retained.
+
+Implemented
+- Sparse, read-only RGB/NV12 sampling on projected model lane polylines.
+- Same camera transform as modeld, including its calibrated yaw trim; lane z
+  already includes road height. Never add camera height again.
+- Narrow green/pink support across 8–32 m, local chroma contrast against flanks,
+  nearby boundary-color ambiguity veto, temporal persistence and invalid-data
+  resets. Color rules are provisional, not a semantic road classifier.
+- Published model probabilities, geometry, model action, road edges, confidence,
+  Panda, MDPS, driver monitoring, Params and HUD contracts remain unchanged.
+- An unconnected research adapter tests nominal 5 Hz sampling, calibrated/fresh
+  inputs, resets, a 2 ms overrun backoff and error containment. It is not imported
+  or called by modeld or any vehicle process. The trial hook was REMOVED after
+  device-office performance measurement and Claude review. modeld.py is byte
+  identical to installed seq16; no environment or Params option activates this.
+- PC replay requires exact externally exported encoder/model frame identities,
+  image SHA, image-space intrinsics and calibration, increasing frames/times.
+  It refuses repository-local private records/results, path escape, invalid
+  input and output replacement. Decode uses the exact hashed image bytes;
+  camera matrix must agree with scaled intrinsics. Failed runs leave .partial.
+  Complete runs require results plus the SHA-bound summary sidecar; publication
+  is exclusive per file, not a two-file atomic transaction.
+
+Evidence and limits
+Synthetic tests exercise positive green/pink, white/yellow/blue preservation,
+adjacent/dim boundaries, colored pavement, padded/subsampled NV12, projection,
+resets, observer backoff/error containment, no mutation and replay provenance.
+These are logic contracts, NOT real-world precision/recall or a full model/IPC
+build. Decoded QCamera samples are small/compressed and cannot validate raw ISP
+NV12 behavior. Exact frame IDs bind exported metadata, not camera ring-buffer
+freshness. There is no runtime camera-buffer ownership check in this PC tool.
+
+Measured office standalone full-size synthetic 4-lane assessment:
+Earlier prototype PC p99 about 1.04 ms; device default SSH affinity p99 about 12.67 ms (200 measured
+iterations after 20 warmups). All device iterations exceeded the provisional
+2 ms budget. Modeld core-7 affinity was unavailable in that office process.
+This is NOT a live modeld timing result or an exact final-source benchmark.
+The prototype SHA and source snapshot are retained privately. The finding
+blocks claiming a useful runtime observer before profiling/optimization; there
+is no runtime hook in the final candidate.
+
+Activation requirements
+1. Labeled real road-camera guide paint and difficult negatives: rain/night,
+   colored vehicles/reflections, white/yellow/blue lines, arrows, school/bike
+   colored surfacing. Establish actual guide-related model mistakes first.
+2. Record camera type/calibration/yaw trim and exact frame mapping. Measure
+   false exclusions per event and genuine detection, not just frame counts.
+3. Optimize and measure observer latency/drop impact on target runtime. Verify
+   actual model/IPC and immutable model messages; standalone tests are limited.
+4. Separately review any consumer-side exclusion. Lowering one lane probability
+   changes lane-mode path selection and also affects LDW/radar/lane-change
+   consumers; it is not harmless. Laneless/action model paths are not corrected
+   by this assessor. Keep raw model data intact for comparison.
+
+Reliability improvements considered with persistent Claude review
+Preserve stock uncertainty/width/persistence/frame-drop/calibration gates.
+First measure video-labeled model errors, temporal/odometry consistency,
+lane width/parallelism/road-edge plausibility and OEM-camera agreement. OEM
+camera and radar are additional fallible observations, not ground truth. Raising
+lane probability values or recoloring a weak line does not improve recognition.
+
+Deployment
+This is a PC/research candidate, NOT an active guide-filter release. The UI and
+added files lie outside the signed source HUD OTA allowlist. No OTA gate is
+changed and no misleading HUD release is published. Separate verified parked
+deployment and runtime qualification remain necessary. No vehicle installation,
+reboot or Params changes are part of this preparation. Existing installed seq16
+and the separate SPI native candidate are preserved. OEM steering warning and
+SPI physical A/B remain unresolved and are not fixed by paint/color changes.

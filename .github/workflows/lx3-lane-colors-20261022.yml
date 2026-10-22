@@ -1,4 +1,4 @@
-name: LX3 lane boundary color rendering
+name: LX3 lane colors and guide-paint shadow review
 on:
   push:
     branches: [review/lx3-lane-colors-20261022]
@@ -13,11 +13,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install pytest numpy
-      - name: Actual rendering method with inert draw calls
+      - run: python -m pip install pytest numpy pillow
+      - name: Rendering and guide-paint shadow contracts
         run: |
           set -o pipefail
-          python -m pytest -o addopts= --confcutdir=selfdrive/controls/tests selfdrive/controls/tests/test_lane_boundary_colors.py -q --junitxml=lane-colors.xml 2>&1 | tee lane-colors.log
+          python -m pytest -o addopts= --confcutdir=selfdrive/controls/tests selfdrive/controls/tests/test_lane_boundary_colors.py selfdrive/controls/tests/test_guide_paint.py -q --junitxml=lane-colors.xml 2>&1 | tee lane-colors.log
+          python -m py_compile selfdrive/modeld/modeld.py selfdrive/modeld/guide_paint.py tools/replay_guide_paint.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -26,4 +27,4 @@ jobs:
             lane-colors.xml
             lane-colors.log
       - name: Verification scope
-        run: echo 'Actual drawing method contract on Linux; no GPU, camera model, native build, controls, vehicle rendering or road qualification.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'Drawing and synthetic guide-paint shadow contracts on Linux; no GPU/model execution, native build, device performance, semantic accuracy or road qualification. Shadow never changes model probabilities or controls.' >> "$GITHUB_STEP_SUMMARY"
