@@ -383,6 +383,7 @@ class AugmentedRoadView(CameraView):
 
     # Draw colored border based on driving state
     self._draw_border_carrot(rect)
+    self.alert_renderer.render_notification_border(rect)
 
     # publish uiDebug
     msg = messaging.new_message('uiDebug')

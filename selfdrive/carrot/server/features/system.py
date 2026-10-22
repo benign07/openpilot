@@ -9,7 +9,8 @@ from ..live_runtime.broker import RealtimeBroker
 from ..live_runtime.normalize import to_transport_safe
 from ..config import OFFROAD_ASSETS_DIR
 from ..services.device_info import get_calibration_status, get_device_network
-from ..services.params import HAS_PARAMS, Params, restore_param_values_validated, driving_preferences
+from ..services.params import HAS_PARAMS, Params, restore_param_values_validated, driving_preferences, notification_preferences
+from openpilot.selfdrive.controls.lib.notification_preferences import KEY as BORDER_KEY
 from ..services.setting_safety import require_parked
 from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES
 from ..services.settings import get_settings_cached
@@ -311,11 +312,15 @@ async def api_set_default(request: web.Request) -> web.Response:
       if _is_carrot_default_reset_param(name, meta)
     }
     virtual = {name:values.pop(name) for name in list(values) if name in DRIVING_PREFERENCES}
+    border_default = values.pop(BORDER_KEY, None)
     # These optional control preferences have the same parked gate on reset
     # as on individual changes. Reject before ANY native settings are reset.
     if virtual:
       await require_parked(request)
       virtual = driving_preferences.reset_defaults()
+    if border_default is not None:
+      notification_preferences.set(border_default)
+      virtual[BORDER_KEY] = border_default
     restored = restore_param_values_validated(values)
     result = restored.get("result") or {}
     ok = int(result.get("fail_cnt") or 0) == 0

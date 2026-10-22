@@ -75,7 +75,16 @@ def inject_driving_preferences(data):
       edescr='LX3 preserves OEM display types and hidden states, supplementing wholly empty front-side slots with the previous fresh, continuously tracked (at least one second) radar occupancy. Stationary and slow objects are included; walls and barriers can also appear because this is not vehicle classification. Lane classification and a >3m/s speed gate are not extra display requirements. Unclassified actual-transmission targets corroborated by current radar use neutral camera markers; classified OEM targets retain their icons. Stale, uncalibrated and off-camera targets are hidden. 0 disables the overlay; 1 enables it; 2 retains existing cut-in behavior. Within-lane adjustment has separate requirements and never consumes these screen coordinates.',
       cdescr='LX3保留原厂显示类型和隐藏状态，空白前侧方项恢复以前的雷达占用显示：要求新鲜且连续跟踪至少1秒。静止及低速目标也显示，墙壁和隔离带也可能出现，因为这不是车辆分类；车道识别和大于3m/s速度不是额外显示条件。实际发出且与当前雷达匹配的未分类目标使用中性相机标记，原厂已分类目标保留对应图标。过期、未标定或相机外目标不绘制。0关闭，1开启，2保留既有切入检测。车道内微调有独立条件，不使用这些屏幕坐标。')
     sections.insert(0, ('surround_display','주변 대상 표시','Surrounding objects',['EnableCornerRadar']))
-  notification_options = ('C3xLiteBuzzerMute', 'C3xLiteHapticNotifications')
+  border_name = 'NotificationBorderPulse'
+  if border_name not in definitions:
+    option = {'name':border_name,'title':'비긴급 알림 화면 테두리','etitle':'Non-critical notification border',
+      'ctitle':'普通提示边框','group':'개발 중 기능','min':0,'max':1,'default':1,'unit':1,'virtual':True,
+      'descr':'일반 알림과 주황색 주의 경고 등 비긴급 알림 때 화면 테두리를 주황색으로 초당1회 강조합니다. 짧은 알림도 시작부터0.5초 표시하며 부저·진동과 독립입니다. 긴급 경고의 빨간 테두리와 기존 경고 문구·중요 경고음은 이 설정을 꺼도 유지합니다. 실제 진동 모터 반응은 별도 검증이 필요합니다.',
+      'edescr':'Independently flashes the border amber once per second for non-critical alerts, including routine notifications and user prompts. Short notifications receive an onset-anchored half-second flash. Critical red emphasis, original alert text and protected sounds remain even when this is OFF. Physical wheel-motor response remains unverified.',
+      'cdescr':'普通提示每秒闪烁一次橙色边框，与声音和振动独立。关闭也保留紧急红色边框、原警告文本和重要警告音。实际方向盘振动反应仍待验证。'}
+    data.setdefault('params', []).append(option)
+    definitions[border_name] = option
+  notification_options = (border_name, 'C3xLiteBuzzerMute', 'C3xLiteHapticNotifications')
   if 'C3xLiteBuzzerMute' in definitions:
     definitions['C3xLiteBuzzerMute'].update(
       title='일반 부저·알림음 끄기', etitle='Mute routine notification sounds', ctitle='关闭普通提示音',
@@ -89,7 +98,7 @@ def inject_driving_preferences(data):
       edescr='Experimental LX3 feature, independent of the C3xLite hardware selector and routine sound mute. Requests the existing VIBRATE field for routine alerts, never oscillatory steering torque. Physical motor response is unverified. Requires healthy CAN and active control; suppressed with blinkers. Speed-camera haptics use a separate setting.',
       cdescr='LX3实验功能，与C3xLite硬件和普通提示音关闭选项独立。普通提示请求既有VIBRATE字段，不振荡转向扭矩；实际振动电机反应未验证。需正常CAN和有效控制，转向灯亮时不请求。测速摄像头振动是独立设置。')
   if any(name in definitions for name in notification_options):
-    sections.insert(0, ('notification_methods', '부저·핸들 진동 알림', 'Notification methods', notification_options))
+    sections.insert(0, ('notification_methods', '테두리·부저·핸들 진동 알림', 'Notification methods', notification_options))
   development = {name for _,_,_,items in sections for name in items if name in definitions}
   for name in development:
     definitions[name].update(group='개발 중 기능',egroup='Development features',cgroup='Development features')

@@ -22,9 +22,9 @@ jobs:
           set -o pipefail
           ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
           export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
-          python -m pytest -o addopts= --confcutdir=selfdrive/controls/tests selfdrive/controls/tests/test_camera_haptic_timer.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_manual_steering_timing.py selfdrive/controls/tests/test_lx3_notification_resume.py -q --junitxml=haptic.xml 2>&1 | tee haptic.log
+          python -m pytest -o addopts= --confcutdir=selfdrive/controls/tests selfdrive/controls/tests/test_camera_haptic_timer.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_notification_border.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_manual_steering_timing.py selfdrive/controls/tests/test_lx3_notification_resume.py -q --junitxml=haptic.xml 2>&1 | tee haptic.log
           python -m unittest selfdrive.carrot.tests.test_hud_updater selfdrive.carrot.tests.test_hud_rollback -v 2>&1 | tee updater.log
-          python -m py_compile opendbc_repo/opendbc/car/hyundai/carcontroller.py selfdrive/ui/soundd.py selfdrive/carrot/server/services/settings.py
+          python -m py_compile opendbc_repo/opendbc/car/hyundai/carcontroller.py selfdrive/ui/soundd.py selfdrive/carrot/server/services/settings.py selfdrive/carrot/server/services/params.py selfdrive/carrot/server/features/system.py selfdrive/controls/lib/notification_preferences.py selfdrive/ui/onroad/alert_renderer.py selfdrive/ui/onroad/augmented_road_view.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

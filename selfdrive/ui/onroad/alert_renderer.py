@@ -9,6 +9,7 @@ from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.label import Label
+from openpilot.selfdrive.controls.lib.notification_preferences import NotificationPreferences, BorderPulse
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
@@ -72,6 +73,10 @@ ALERT_CRITICAL_REBOOT = Alert(
 class AlertRenderer(Widget):
   def __init__(self):
     super().__init__()
+    self._notification_preferences = NotificationPreferences()
+    self._notification_border_enabled = True
+    self._notification_border_checked = float('-inf')
+    self._notification_border_pulse = BorderPulse()
     self.font_regular: rl.Font = gui_app.font(FontWeight.NORMAL)
     self.font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
 
@@ -113,6 +118,23 @@ class AlertRenderer(Widget):
 
     # Return current alert
     return Alert(text1=ss.alertText1, text2=ss.alertText2, size=ss.alertSize.raw, status=ss.alertStatus.raw)
+
+  def render_notification_border(self, rect: rl.Rectangle):
+    now = time.monotonic()
+    if now - self._notification_border_checked >= 0.5:
+      self._notification_border_enabled = bool(self._notification_preferences.read())
+      self._notification_border_checked = now
+    sm = ui_state.sm
+    alert = self.get_alert(sm)
+    critical = alert is not None and alert.status == AlertStatus.critical
+    fresh = (sm.alive['selfdriveState'] and sm.valid['selfdriveState'] and
+             sm.recv_frame['selfdriveState'] >= ui_state.started_frame and
+             0 <= now-sm.recv_time['selfdriveState'] <= 0.5)
+    notification = fresh and (alert is not None or sm['selfdriveState'].alertSound.raw != 0)
+    token = (str(sm['selfdriveState'].alertType), sm['selfdriveState'].alertSound.raw if alert is None else 0) if notification else None
+    color = self._notification_border_pulse.update(critical, token, self._notification_border_enabled, now)
+    if color is not None:
+      rl.draw_rectangle_lines_ex(rect, 10, rl.Color(*color))
 
   def _render(self, rect: rl.Rectangle):
     alert = self.get_alert(ui_state.sm)

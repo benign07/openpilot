@@ -9,8 +9,10 @@ import threading
 import zlib
 from typing import Any, Dict, List, Optional
 from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, DrivingPreferences
+from openpilot.selfdrive.controls.lib.notification_preferences import KEY as BORDER_KEY, NotificationPreferences
 
 driving_preferences = DrivingPreferences()
+notification_preferences = NotificationPreferences()
 
 try:
   import brotli
@@ -143,6 +145,8 @@ def _read_param_value(params: "Params", name: str, default: Any) -> Any:
 # Single-key get/set (used by features/params and tools)
 # -----------------------
 def get_param_value(name: str, default: Any) -> Any:
+  if name == BORDER_KEY:
+    return notification_preferences.read()
   if name in DRIVING_PREFERENCES:
     return driving_preferences.read()[name]
   # 'GitPullTime' is a synthetic key backed by services/git_state.py.
@@ -167,6 +171,8 @@ def get_param_values(names: list[str], defaults: Optional[Dict[str, Any]] = None
 
   values: Dict[str, Any] = {}
   virtual_values = driving_preferences.read() if any(n in DRIVING_PREFERENCES for n in names) else {}
+  if BORDER_KEY in names:
+    virtual_values[BORDER_KEY] = notification_preferences.read()
   if not HAS_PARAMS:
     for name in names:
       if name in virtual_values:
@@ -271,6 +277,9 @@ def put_typed(params: "Params", key: str, value: Any, p: Optional[Dict[str, Any]
 
 
 def set_param_value(name: str, value: Any, p: Optional[Dict[str, Any]] = None) -> None:
+  if name == BORDER_KEY:
+    notification_preferences.set(value)
+    return
   if name in DRIVING_PREFERENCES:
     driving_preferences.set(name, value)
     return

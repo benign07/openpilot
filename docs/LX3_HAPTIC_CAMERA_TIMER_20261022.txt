@@ -112,3 +112,20 @@ Manufacturer setting reference, not CAN protocol proof:
 https://ownersmanual.hyundai.com/full_webhelp/LX3/2026/en_US/topic_wlt_n3c_wcc.html
 It lists an independent Haptic Warning setting. Availability depends on vehicle
 specification; the manual does not specify this CAN bit or prove motor action.
+
+Three-channel display extension (2026-10-22)
+The development notification group now also offers NotificationBorderPulse,
+a virtual display-only switch in its own notification_preferences.json file.
+It never adds a native Params key or changes the driving-preferences schema.
+Non-critical notifications and user prompts can emphasize the border amber,
+independently of routine sound and VIBRATE requests. The first half-second is
+anchored to onset so a short sound-only engage event is not lost between flashes.
+Critical alerts always emphasize the border red; protected critical acoustic
+warnings and original alert text are retained. Removing critical audio in favor
+of an unverified motor/display-only channel was not implemented.
+Existing UI state/blinker borders still render, followed by a10px outline at1Hz.
+No CAN message, model, native firmware, authority or monitoring change is added.
+Separate complete application includes8runtime files (one new display module),
+not a partial HUD source OTA. Exact final CI, ARM results and actual installation
+state are recorded in the separate release verification. Mici UI is out of scope;
+the tested additional TICI uses the big Python UI.

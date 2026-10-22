@@ -176,4 +176,6 @@ def test_menu_preserves_all_existing_parameter_identities_and_favorite_names():
   inject = shared.load(ROOT / 'selfdrive/carrot/server/services/settings.py', {'inject_driving_preferences'},
                        {'DRIVING_PREFERENCES': {}})['inject_driving_preferences']
   inject(data)
-  assert identity(data) == before and all(name in identity(data) for name in favorites)
+  assert {k:v for k,v in identity(data).items() if k in before} == before
+  assert set(identity(data))-set(before) == {'NotificationBorderPulse'}
+  assert all(name in identity(data) for name in favorites)
