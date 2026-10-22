@@ -1,0 +1,36 @@
+Lane boundary colors — 2026-10-22
+
+The existing large-screen Carrot renderer treated every combined CAN lane code
+>=20 as yellow. This also painted blue (color3) and unknown colors yellow.
+Use exact color groups2/yellow and3/blue for the two ego lane boundaries.
+Keep unknown/no-color white, existing model confidence alpha, geometry,
+double-line handling and asymmetric left width/outline behavior.
+
+Only model_renderer.py changes runtime behavior. The controller, OEM color
+decoder, DBC, planner, Panda, native transport and driver monitoring stay at
+the installed cadd97de source baseline. Native79e9 is a separate candidate.
+
+The real drawing method is exercised with inert Color/polygon calls and real
+numpy. The initial21-case suite reproduced12 failures on installed source and
+passed21 after correction. Reviewer follow-ups add unknown/negative colors
+and blue double lines (26 cases). Linux CI is recorded separately from PC
+results; neither proves actual GPU pixels or improved visual perception.
+
+Recorded Oct22 data contains blue3 from OEM0x362 and matching carState31.
+One observed blue interval is roughly2s in sampled qlog. At a matched model
+frame the right lane probability was0.2246, below the unchanged0.3 UI gate.
+This fix cannot make a missing/low-confidence model lane appear, prove that
+the OEM camera classified the real road correctly, or infer bus-lane access.
+Original video/CAN and their hashes remain private outside Git.
+
+CAN enum and current model outputs do not provide a validated green/pink
+route-guidance class. Guide paint is a separate route hint, not a boundary.
+First label time-aligned videos containing guide paint and measure existing
+model confusion. Any new detector needs independent class/geometry confidence
+and validation on crossings, forks, rain, shadows, signs and worn paint.
+No unverified color threshold or guide line is fed into steering in this fix.
+
+The installed HUD updater excludes UI files. This requires a separately
+verified device deployment and UI restart under the existing parked-state
+rules. No source-OTA allowlist, signature or state gate is weakened, and no
+signed HUD update is advertised as containing this unsupported UI file.

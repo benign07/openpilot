@@ -922,13 +922,18 @@ class ModelRenderer(Widget):
     max_idx = self._get_path_length_idx(lane_lines_raw[0][:, 0], np.clip(lane_lines_raw[0][-1, 0], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE))
     left_lane_line = car_state.leftLaneLine
     right_lane_line = car_state.rightLaneLine
+    # CAN encodes color * 10 + line type. Blue (3) is not yellow (2).
+    # This only tints model boundaries; it does not detect route-guidance paint.
+    left_lane_color = left_lane_line // 10
+    right_lane_color = right_lane_line // 10
+    lane_colors = {2: (218, 202, 37), 3: (50, 150, 255)}
 
     lane_vertices = []
     lane_vertices_double = np.empty((0, 2), dtype=np.float32)
 
     for i in range(4):
       line_width = 0.025
-      if i == 1 and left_lane_line >= 20:
+      if i == 1 and left_lane_color in lane_colors:
         line_width = 0.05
       pts = self._map_line_to_polygon(lane_lines_raw[i], line_width, 0.0, max_idx, np.clip(lane_lines_raw[0][-1, 0], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE))
       lane_vertices.append(pts)
@@ -955,10 +960,10 @@ class ModelRenderer(Widget):
       alpha = 220 if lane_line_probs[i] > 0.3 else 0
       stroke = 0.0
       if i == 1:
-        color = rl.Color(218, 202, 37, alpha) if left_lane_line >= 20 else rl.Color(255, 255, 255, alpha)
-        stroke = 1.0 if left_lane_line >= 20 else 0.0
+        color = rl.Color(*lane_colors.get(left_lane_color, (255, 255, 255)), alpha)
+        stroke = 1.0 if left_lane_color in lane_colors else 0.0
       elif i == 2:
-        color = rl.Color(218, 202, 37, alpha) if right_lane_line >= 20 else rl.Color(255, 255, 255, alpha)
+        color = rl.Color(*lane_colors.get(right_lane_color, (255, 255, 255)), alpha)
       else:
         color = rl.Color(255, 255, 255, alpha)
 

@@ -1,0 +1,29 @@
+name: LX3 lane boundary color rendering
+on:
+  push:
+    branches: [review/lx3-lane-colors-20261022]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rendering-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest numpy
+      - name: Actual rendering method with inert draw calls
+        run: |
+          set -o pipefail
+          python -m pytest -o addopts= --confcutdir=selfdrive/controls/tests selfdrive/controls/tests/test_lane_boundary_colors.py -q --junitxml=lane-colors.xml 2>&1 | tee lane-colors.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lane-color-rendering-contract
+          path: |
+            lane-colors.xml
+            lane-colors.log
+      - name: Verification scope
+        run: echo 'Actual drawing method contract on Linux; no GPU, camera model, native build, controls, vehicle rendering or road qualification.' >> "$GITHUB_STEP_SUMMARY"
