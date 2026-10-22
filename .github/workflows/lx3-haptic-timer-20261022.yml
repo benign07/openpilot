@@ -1,0 +1,37 @@
+name: LX3 independent notification and camera haptic contracts
+on:
+  push:
+    branches: [review/lx3-haptic-timer-20261022]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  haptic-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest numpy aiohttp cryptography requests
+      - name: Timer, encoded CCNC, notifications and manual steering contracts
+        run: |
+          set -o pipefail
+          ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
+          python -m pytest -o addopts= --confcutdir=selfdrive/controls/tests selfdrive/controls/tests/test_camera_haptic_timer.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_manual_steering_timing.py selfdrive/controls/tests/test_lx3_notification_resume.py -q --junitxml=haptic.xml 2>&1 | tee haptic.log
+          python -m unittest selfdrive.carrot.tests.test_hud_updater selfdrive.carrot.tests.test_hud_rollback -v 2>&1 | tee updater.log
+          python -m py_compile opendbc_repo/opendbc/car/hyundai/carcontroller.py selfdrive/ui/soundd.py selfdrive/carrot/server/services/settings.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: haptic-contract-${{ matrix.python }}
+          path: |
+            haptic.xml
+            haptic.log
+            updater.log
+      - name: Scope
+        run: echo 'Timer AST, production CCNC formatter/DBC/Python packer/CRC, signed updater and regressions only. No actuator torque vibration, live CAN, motor actuation, full GPU/native build or road qualification.' >> "$GITHUB_STEP_SUMMARY"

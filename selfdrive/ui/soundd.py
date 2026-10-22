@@ -11,6 +11,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.utils import retry
 from openpilot.common.swaglog import cloudlog
+from openpilot.selfdrive.controls.beep import OPTIONAL_ALERTS
 
 from openpilot.system import micd
 from openpilot.system.hardware import HARDWARE
@@ -118,6 +119,8 @@ class Soundd:
     self.params = Params()
     self.soundVolumeAdjust = 1.0
     self.carrot_count_down = 0
+    self.routine_mute = False
+    self.mute_checked = float('-inf')
 
     self.lang = self.params.get('LanguageSetting')
     self.load_sounds()
@@ -194,6 +197,8 @@ class Soundd:
     data_out[:frames, 0] = self.get_sound_data(frames)
 
   def update_alert(self, new_alert):
+    if self.routine_mute and new_alert in OPTIONAL_ALERTS:
+      new_alert = AudibleAlert.none
     current_alert_played_once = self.current_alert == AudibleAlert.none or self.current_sound_frame > len(self.loaded_sounds[self.current_alert])
     if self.current_alert != new_alert and (new_alert != AudibleAlert.none or current_alert_played_once):
       self.current_alert = new_alert
@@ -214,6 +219,13 @@ class Soundd:
     return new_alert
 
   def get_audible_alert(self, sm):
+    now = time.monotonic()
+    if now - self.mute_checked >= .5:
+      self.routine_mute = self.params.get_bool('C3xLiteBuzzerMute')
+      self.mute_checked = now
+      if self.routine_mute and self.current_alert in OPTIONAL_ALERTS:
+        self.current_alert = AudibleAlert.none
+        self.current_sound_frame = 0
     if sm.updated['selfdriveState']:
       new_alert = sm['selfdriveState'].alertSound.raw
       new_alert = self.update_carrot_alert(sm, new_alert)

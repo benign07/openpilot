@@ -1,0 +1,114 @@
+LX3 speed-camera haptic timer correction, 2026-10-22
+
+Purpose and source scope
+Fix the existing HapticFeedbackWhenSpeedCamera timer, preserving Carrot's
+intended pulse intervals, and separate routine sound and haptic switches.
+Runtime changes: carcontroller.py, soundd.py and server/services/settings.py.
+The base is the verified installed sequence16/cadd97de source, not the separate
+guide-paint/UI research branch. No new runtime file or parameter is required.
+
+Defect and correction
+The old code set an8s timer on entry into activeCarrot3, but excluded that
+first frame with remaining<800. It then cancelled the timer on the next
+frame because an entry edge was mistaken for the sustained camera state.
+The frozen exact baseline generates zero camera pulses in the PC probe.
+
+The correction separates entry from the sustained state, starts an integer
+800-frame window including frame0, cancels only when the actual state leaves3,
+and expires at8s. Holding state3 does not repeat. A new entry restarts.
+The existing0-.5s,1-1.5s,5-5.5s,6-6.5s,7.5-8s intervals are retained while
+the camera state remains active. Default mode0 and all stored values remain.
+
+Haptic path and limitations
+This is NOT steering torque or steering angle modulation. Existing lane-warning
+values feed the0x162 field named VIBRATE in the reverse-engineered DBC,
+Motorola bit52, byte6
+bit4 with zero-based byte numbering. Actual steering generation, MDPS response
+handling, Panda authority, DM and SPI source/binary are unchanged.
+Existing CAN-FD formatter treats modes1/2/3 as a truthy vibration request;
+it does not implement three distinct cluster/HUD/vibration outputs. Preserve
+numeric modes for legacy CAN; do not invent a new mapping for CAN-FD.
+The formatter requires a received CCNC template and the existing longitudinal
+control configuration, and retains existing blinker behavior. With both
+warning sides set, a single blinker does not suppress the opposite-side request;
+hazards suppress both. Existing source VIBRATE is not forcibly cleared.
+
+Actual LX3 motor actuation/acceptance is not established by a TX echo. This
+update repairs request generation; it is not a qualified physical-haptic fix.
+The separate C3xLiteHapticNotifications routine pulse retains its existing
+profile/CAN/control/blinker gates but no longer requires HardwareC3xLite.
+C3xLiteBuzzerMute independently mutes the routine GPIO buzzer and, now, the
+speaker path too. HardwareC3xLite still selects the actual sound hardware;
+do not enable it merely to obtain haptics. Critical acoustic warnings are not
+replaced or silenced, and no fault bit is hidden. The new Development features
+notification group presents both existing keys without changing their0/1
+ranges/defaults or the HUD API. No phone APK change is required by this schema.
+The owner's current mute1/haptic1 now means routine soundOFF/haptic requestON.
+Neither setting changes the other; bothON/bothOFF/sound-only also work.
+
+Validation
+Production timer AST -> actual CCNC formatter -> actual Python DBC packer and
+CRC. Modes0..3 and all five20Hz send phases, exact50 transmitted positive
+frames for a complete pattern, frame0 entry,30s no-repeat, exits via0/2/4,
+re-entry, mode off/on, LDW overlap, source VIBRATE, blinkers, routine-notification
+independence, unchanged FAULT fields and no steering-message consumer.
+The baseline before fix is retained as a bounded independent AST fixture.
+Independent-output tests cover all four sound/haptic combinations with both
+hardware-selector values and both sound backends, actual PCM generation with
+inert audio, immediate optional-sound mute and protected warnings, unmodified
+shared alert input, single-location menu/options and idempotent schema updates.
+Other regressions cover surround formatting, manual steering, routine alerts,
+signed updater and rollback. PC242 tests pass. ARM standalone cases execute
+the same production timer/formatter/DBC code with test-decorator shims, no
+live CAN or vehicle process; this is not a full controller/GPU/native build.
+Exact Linux CI results and hashes belong in the signed release verification.
+Persistent actual Claude Opus5.5/high session reviews15 and follow-up share
+the same sources and evidence; no separate one-shot task or hardware claim.
+
+Additional root-cause narrowing, not solved by this release
+In the collected Oct20/22 routes all observed CCNC VIBRATE bits were0 on
+camera input, physicalbus0 observations, host intents and returned hostTX.
+Both raw camera LSS fault onsets occurred without a VIBRATE request. This
+weakens that particular trigger, not every possible haptic/status interaction.
+The latest sampled camera-state records were all activeCarrot0, so this timer
+bug alone does not explain those reported routine-notification failures.
+
+The old host-written +220 STEERING_COL_TORQUE value in the camera-facing0xEA
+echo is inherited stock/0627 compatibility behavior, not actuator torque,
+the VIBRATE bit or a motor command. Do not conflate these records.
+No such torque behavior is added or changed for vibration in this release.
+
+Five-second SPI envelopes containing the LSS onsets had retry rates about
+3.22% and3.98%, zero final HOST failures/timeouts/bad HOST checksum in those
+envelopes. Their same-route retry percentiles were about52 and88, respectively.
+Different traffic and five-second aggregation prevent causal attribution.
+No sequence-tagged SPI STATE transaction or GPIO/DMA readiness trace exists
+in these logs. The separate native timing/NACK candidate stays inactive and
+must be evaluated independently under fresh parked checks. ECU ownership/
+command-response compatibility and incident-after OEM DTC remain priorities
+for LSS. No warning-bit mask or fabricated MDPS state is a solution.
+
+Activation and deployment
+If an owner already has HapticFeedbackWhenSpeedCamera>0, this correction can
+newly emit physical haptic requests during actual camera-deceleration state.
+The additional LX3 currently has this value set to1. After installation the
+next qualifying camera-state window can therefore emit VIBRATE=1, subject to
+the existing template/send/blinker gates. The collected two routes contain no
+positive reference for the vehicle's response. They do not prove that the
+request has never occurred at any other time in this vehicle's history.
+Do not describe it as an inert diagnostic change. No parameter is auto-enabled. On this device the existing routine mute1 and
+haptic1 values now also suppress routine speaker sounds and permit eligible
+0.2s routine VIBRATE requests at engagement/other routine alert transitions;
+this is newly active behavior after installation, not a passive diagnostic.
+The complete independent-output change includes soundd.py outside the existing
+HUD source-OTA allowlist. Do not publish an incomplete controller-only bundle
+or expand the allowlist. Prepare a separately signed deployment with exact
+installed before hashes; installation remains a parked/zero/inactive step.
+The existing HUD channel is not changed by publishing this separate candidate.
+Physical haptic response, OEM steering warning resolution and SPI improvement
+remain unverified; do not test vibration by provoking a road hazard.
+
+Manufacturer setting reference, not CAN protocol proof:
+https://ownersmanual.hyundai.com/full_webhelp/LX3/2026/en_US/topic_wlt_n3c_wcc.html
+It lists an independent Haptic Warning setting. Availability depends on vehicle
+specification; the manual does not specify this CAN bit or prove motor action.

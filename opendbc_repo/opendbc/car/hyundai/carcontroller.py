@@ -227,7 +227,7 @@ class CarController(CarControllerBase):
         
       self.soft_hold_mode = 1 if params.get_int("AutoCruiseControl") > 1 else 2
       self.hapticFeedbackWhenSpeedCamera = int(params.get_int("HapticFeedbackWhenSpeedCamera"))
-      self.haptic_notifications_enabled = params.get_int('HardwareC3xLite') > 0 and params.get_bool('C3xLiteHapticNotifications')
+      self.haptic_notifications_enabled = params.get_bool('C3xLiteHapticNotifications')
 
       self.button_spam1 = params.get_int("CruiseButtonTest1")
       self.button_spam2 = params.get_int("CruiseButtonTest2")
@@ -443,14 +443,16 @@ class CarController(CarControllerBase):
     sys_warning, sys_state, left_lane_warning, right_lane_warning = process_hud_alert(CC.enabled, self.car_fingerprint,
                                                                                       hud_control)
 
-    active_speed_decel = hud_control.activeCarrot == 3 and self.activeCarrot != 3 # 3: Speed Decel
+    speed_decel_active = hud_control.activeCarrot == 3
+    active_speed_decel = speed_decel_active and self.activeCarrot != 3
     self.activeCarrot = hud_control.activeCarrot
-    if active_speed_decel and self.speedCameraHapticEndFrame < 0: # 과속카메라 감속시작      
-      self.speedCameraHapticEndFrame = self.frame + (8.0 / DT_CTRL)  #8초간 켜줌.
-    elif not active_speed_decel:
+    if active_speed_decel:
+      self.speedCameraHapticEndFrame = self.frame + int(8.0 / DT_CTRL)
+    elif not speed_decel_active:
       self.speedCameraHapticEndFrame = -1
 
-    if 0 <= self.speedCameraHapticEndFrame - self.frame < int(8.0 / DT_CTRL) and self.hapticFeedbackWhenSpeedCamera > 0:
+    # Include the entry frame, retain the timer between updates, and expire at8s.
+    if 0 < self.speedCameraHapticEndFrame - self.frame <= int(8.0 / DT_CTRL) and self.hapticFeedbackWhenSpeedCamera > 0:
       t = (self.frame - (self.speedCameraHapticEndFrame - int(8.0 / DT_CTRL))) * DT_CTRL
 
       for start, end in vibrate_intervals:

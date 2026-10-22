@@ -75,6 +75,21 @@ def inject_driving_preferences(data):
       edescr='LX3 preserves OEM display types and hidden states, supplementing wholly empty front-side slots with the previous fresh, continuously tracked (at least one second) radar occupancy. Stationary and slow objects are included; walls and barriers can also appear because this is not vehicle classification. Lane classification and a >3m/s speed gate are not extra display requirements. Unclassified actual-transmission targets corroborated by current radar use neutral camera markers; classified OEM targets retain their icons. Stale, uncalibrated and off-camera targets are hidden. 0 disables the overlay; 1 enables it; 2 retains existing cut-in behavior. Within-lane adjustment has separate requirements and never consumes these screen coordinates.',
       cdescr='LX3保留原厂显示类型和隐藏状态，空白前侧方项恢复以前的雷达占用显示：要求新鲜且连续跟踪至少1秒。静止及低速目标也显示，墙壁和隔离带也可能出现，因为这不是车辆分类；车道识别和大于3m/s速度不是额外显示条件。实际发出且与当前雷达匹配的未分类目标使用中性相机标记，原厂已分类目标保留对应图标。过期、未标定或相机外目标不绘制。0关闭，1开启，2保留既有切入检测。车道内微调有独立条件，不使用这些屏幕坐标。')
     sections.insert(0, ('surround_display','주변 대상 표시','Surrounding objects',['EnableCornerRadar']))
+  notification_options = ('C3xLiteBuzzerMute', 'C3xLiteHapticNotifications')
+  if 'C3xLiteBuzzerMute' in definitions:
+    definitions['C3xLiteBuzzerMute'].update(
+      title='일반 부저·알림음 끄기', etitle='Mute routine notification sounds', ctitle='关闭普通提示音',
+      descr='C3xLite 본체 옵션과 독립입니다. 켜면 일반 알림의 기기 부저·스피커 소리를 끕니다. 핸들 진동 알림은 별도 설정이므로 둘 다 켜거나 진동만 사용할 수 있습니다. 제어 해제·제어 거부·운전자 주의·긴급 경고 등 기존 보호 경고음은 유지합니다.',
+      edescr='Independent of the C3xLite hardware selector. ON mutes routine device buzzer/speaker notifications only. Wheel-haptic notifications have their own switch; either, both or neither routine output may be selected. Existing protected disengagement, refusal, attention and urgent warnings remain audible.',
+      cdescr='与C3xLite硬件选项独立。开启仅关闭普通蜂鸣器和扬声器提示音。方向盘振动有独立开关，可同时开启、仅开启一种或均关闭。原有退出、拒绝、注意和紧急警告音保留。')
+  if 'C3xLiteHapticNotifications' in definitions:
+    definitions['C3xLiteHapticNotifications'].update(
+      title='일반 알림 핸들 진동', etitle='Routine wheel-haptic notifications', ctitle='普通提示方向盘振动',
+      descr='LX3 실험 기능입니다. C3xLite 본체·일반 부저 끄기와 독립적으로 일반 알림 때 기존 VIBRATE 신호를 요청합니다. 조향토크로 진동을 만들지 않으며 실제 진동모터 반응은 아직 미검증입니다. 유효한 CAN·활성 제어가 필요하고 깜빡이 때는 요청하지 않습니다. 과속카메라 햅틱은 별도 설정입니다.',
+      edescr='Experimental LX3 feature, independent of the C3xLite hardware selector and routine sound mute. Requests the existing VIBRATE field for routine alerts, never oscillatory steering torque. Physical motor response is unverified. Requires healthy CAN and active control; suppressed with blinkers. Speed-camera haptics use a separate setting.',
+      cdescr='LX3实验功能，与C3xLite硬件和普通提示音关闭选项独立。普通提示请求既有VIBRATE字段，不振荡转向扭矩；实际振动电机反应未验证。需正常CAN和有效控制，转向灯亮时不请求。测速摄像头振动是独立设置。')
+  if any(name in definitions for name in notification_options):
+    sections.insert(0, ('notification_methods', '부저·핸들 진동 알림', 'Notification methods', notification_options))
   development = {name for _,_,_,items in sections for name in items if name in definitions}
   for name in development:
     definitions[name].update(group='개발 중 기능',egroup='Development features',cgroup='Development features')
