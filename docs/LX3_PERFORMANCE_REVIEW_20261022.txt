@@ -1,0 +1,96 @@
+LX3 guide-paint and rendering preparation: performance review 2026-10-22
+
+Scope and state
+This is a source/research preparation, not a vehicle installation or active
+guide-paint filter. modeld.py has no hook for the assessor. It contributes no
+current onroad CPU load or heat. The original guide-paint limitations and
+activation requirements in LX3_GUIDE_PAINT_SHADOW_20261022.txt still apply.
+No control, Panda, MDPS, monitoring, rate, priority, affinity, Params, camera
+capture, model weights or source-OTA allowlist changes are included.
+
+Pure NumPy optimization
+Batch the four eligible lines' sparse projection and RGB/NV12 sampling, share
+color calculations, remove repeated tiny median calls and reuse the invariant
+projection probes. Preserve float32 comparisons, green-before-pink priority,
+adjacent-boundary veto, 5/4/4 spatial support, temporal resets and thresholds.
+Retain scalar projection fallback for ragged inputs. Invalid geometry is
+masked before batched projection, and equal matrices still check probe depth.
+Skip a color only when no core pixel can supply support for that color.
+No new dependency, native ABI or compilation step is required.
+
+Frozen 88ffc175 reference SHA256:
+c9d36100db948096037e80879480b2523500fa449a3dfbf93c1c75b89223bf6b
+Optimized guide source SHA256:
+d99b9bfba940d86c63be646bc3beebd01cf68fa76ee54715464aa1e427b20cf6
+
+Device standalone AB/BA comparison, 20 warmup + 200 measured pairs per case,
+same process, full-size1928x1208 padded NV12, synthetic inputs, office power:
+                         median old/new ms      p99 old/new ms
+four guide candidates       11.565 / 3.591         14.354 / 4.408
+four no-paint lines         13.963 / 3.123         16.890 / 3.994
+uncertain model             0.346 / 0.245          0.633 / 0.709
+All660 compared pairs agreed. The tiny uncertain-path p99 did not improve;
+do not claim an improvement at every percentile or on every input.
+Default SSH affinity and online CPUs were0-3, NumPy2.4.6/Python3.12.3 on
+SDA845. Possible CPUs0-7: this is not a physically four-core device. Actual
+onroad modeld uses core7, which is offline in the office state. No CPU policy
+was changed. Big-core and live model/ISP/IPC timings remain unmeasured.
+The provisional2ms development target is still unmet on these little cores;
+it is not an upstream requirement or proof of runtime unsuitability.
+An optional native-classifier experiment only reached about2.36ms median in
+its own paired trial; it was archived privately and excluded from the source
+candidate because the limited gain did not justify a new native artifact.
+
+Parity evidence
+155 PC logic/rendering/replay tests. In addition, the exact guide sources
+passed ARM projection edge cases, 2000 seeded mixed temporal inputs and3000
+seeded float32 row cases against the frozen oracle. Includes NaN/inf x/y/z,
+float32/list/ragged lines, boundary values and deterministic green+pink lanes.
+Raw channel threshold cases do not exhaust all derived-product float values.
+These prove tested behavior compatibility, not real-road semantic accuracy.
+
+UI preparation optimization
+Only build the extra left polygon when a double line is actually drawn.
+Only build road-edge geometry in ShowLaneInfo>1. Hoist identical clipping.
+Preserve line width, blue/yellow/white color, alpha, outline and geometry.
+Full draw-command parity uses the actual three production projection methods
+and frozen 88ffc175 methods with an inert drawing surface. Edge cases include
+offscreen doubles, short paths, empty paths, invalid state and malformed
+unused road edges. ARM24 normal cases matched exact vertices/color/commands.
+This UI candidate includes the previously prepared blue-line display fix.
+
+Device geometry-plus-inert-drawing median ms (old / optimized):
+lane-only solid: 3.544 / 1.961; lane-only double: 3.553 / 2.421
+lanes+edges solid: 3.626 / 3.014; lanes+edges double: 3.664 / 3.500
+Hidden mode returned immediately in both. These are microbenchmarks with
+copied vertices, not GPU rendering or demonstrated road FPS improvements.
+
+Whole-system load review and next priorities
+Existing22 onroad log segments, about1317s, were audited using model/UI/
+device/process/planner/radar messages. Main UI PID own CPU median52.5% of one
+core, draw median38.21ms/p9552.88ms, publications16.85Hz; core5 median83%.
+Carrot server median33.2% and athena28.0% of one core warrant per-function
+profiling, not removal of services. Truncated procLog names can merge unrelated
+PIDs: role totals are not a single daemon's CPU usage. Actual PID records are
+kept privately. Thermal state yellow1390 of2513 post-start samples; CPU peak
+87.7C. These observations do not identify a single cause of heat or jitter.
+Message execution-time fields overwrite one another by construction, so they
+cannot establish zero postprocessing CPU cost. Publisher interval jitter alone
+cannot establish UI contention as the cause. Keep all diagnostics, recording,
+health checks and control rates. Next profiling should distinguish upstream
+model intervals from planner/radar processing and profile HUD serialization,
+camera packaging and upload activity under a representative workload before
+changing caching or scheduling. Existing idle-stop/throttle/freshness locks
+must be preserved. No speculative server/athena changes are included.
+
+Review and deployment limits
+Persistent actual Claude session b673ecb6-e097-4252-9eb7-14a36ba669e5,
+claude-opus-5-5/high, same workspace, reviews11-13. Review13 found no semantic
+mismatch, requested ARM/NaN/list/mixed-color/UI-edge coverage; these were added
+or confirmed. No claim of a complete GPU/native/openpilot build or road test.
+The UI and added files are outside signed source HUD OTA support. Keep UI
+deployment and guide research payloads separate, with exact hashes and an
+unchanged-runtime check. No misleading HUD release or allowlist expansion.
+Labeled real guide positives/negatives and a separately reviewed consumer-side
+exclusion remain required. OEM steering warning and SPI physical AB remain
+unresolved and are unrelated to these performance results.

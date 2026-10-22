@@ -17,7 +17,7 @@ jobs:
       - name: Rendering and guide-paint shadow contracts
         run: |
           set -o pipefail
-          python -m pytest -o addopts= --confcutdir=selfdrive/controls/tests selfdrive/controls/tests/test_lane_boundary_colors.py selfdrive/controls/tests/test_guide_paint.py -q --junitxml=lane-colors.xml 2>&1 | tee lane-colors.log
+          python -m pytest -o addopts= --confcutdir=selfdrive/controls/tests selfdrive/controls/tests/test_lane_boundary_colors.py selfdrive/controls/tests/test_lane_renderer_parity.py selfdrive/controls/tests/test_guide_paint.py selfdrive/controls/tests/test_guide_paint_parity.py -q --junitxml=lane-colors.xml 2>&1 | tee lane-colors.log
           python -m py_compile selfdrive/modeld/modeld.py selfdrive/modeld/guide_paint.py tools/replay_guide_paint.py
       - uses: actions/upload-artifact@v4
         if: always()

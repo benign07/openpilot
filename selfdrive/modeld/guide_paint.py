@@ -20,6 +20,9 @@ MIN_SUPPORT = 10
 MIN_OBSERVATIONS = 4
 MIN_DURATION_S = .6
 MAX_GAP_S = .35
+SUPPORT_GROUPS = np.array([0, 5, 9])  # np.array_split(13, 3): 5 / 4 / 4
+PROJECTION_PROBES = np.array([[8., -1.8, 1.2], [8., 1.8, 1.2], [32., -1.8, 1.2], [32., 1.8, 1.2]])
+PROJECTION_PROBES.flags.writeable = False
 
 
 @dataclass(frozen=True)
@@ -41,8 +44,12 @@ def guide_colors(rgb: np.ndarray) -> np.ndarray:
   """Provisional color evidence: 0 unknown, 1 green, 2 pink. Not road semantics."""
   pixels = np.asarray(rgb, dtype=np.float32)
   r, g, b = np.moveaxis(pixels, -1, 0)
-  chroma = pixels.max(axis=-1) - pixels.min(axis=-1)
-  vivid = (chroma >= 45) & (pixels.max(axis=-1) >= 75)
+  maximum = pixels.max(axis=-1)
+  return _guide_colors(r, g, b, maximum - pixels.min(axis=-1), maximum)
+
+
+def _guide_colors(r, g, b, chroma, maximum):
+  vivid = (chroma >= 45) & (maximum >= 75)
   green = vivid & (g >= 1.3 * r) & (g >= 1.3 * b)
   pink = vivid & (r >= 1.4 * g) & (b >= 1.25 * g) & (b >= .5 * r) & (r >= .75 * b)
   return np.where(green, 1, np.where(pink, 2, 0)).astype(np.uint8)
@@ -104,38 +111,111 @@ def projected_samples(line: np.ndarray, camera_from_calib: np.ndarray, width: in
   return pixels, visible, center
 
 
-def assess_lane(image, line: np.ndarray, camera_from_calib: np.ndarray) -> LaneEvidence:
-  projection = projected_samples(line, camera_from_calib, image.width, image.height)
-  if projection is None:
-    return LaneEvidence(reason="invalid_geometry")
-  uv, visible, _ = projection
-  count = int(visible.sum())
-  if count < MIN_SUPPORT or len(np.unique(uv[visible, 5, 1])) < 8:
-    return LaneEvidence(visible=count, reason="insufficient_projection")
-  rgb = image.sample(uv).astype(np.float32)
-  colors = guide_colors(rgb)
-  core = colors[:, CORE]
-  r, g, b = np.moveaxis(rgb, -1, 0)
+def _project_lanes(lines, matrix, width, height):
+  """Batch regular model geometry; retain the scalar path for ragged exports."""
+  try:
+    geometry = np.asarray(lines, dtype=np.float64)
+  except ValueError:
+    geometry = None
+  if geometry is None or geometry.ndim != 3 or geometry.shape[2] != 3 or not 2 <= geometry.shape[1] <= 64:
+    projections = [projected_samples(line, matrix, width, height) for line in lines]
+    valid = np.array([p is not None for p in projections])
+    pixels = np.stack([p[0] if p is not None else np.zeros((len(DISTANCES), len(OFFSETS), 2), dtype=np.int64) for p in projections])
+    visible = np.stack([p[1] if p is not None else np.zeros(len(DISTANCES), dtype=bool) for p in projections])
+    return pixels, visible, valid
+  valid = (np.isfinite(geometry).all(axis=(1, 2)) & (np.diff(geometry[:, :, 0], axis=1) > 0).all(axis=1) &
+           (geometry[:, 0, 0] <= DISTANCES[0]) & (geometry[:, -1, 0] >= DISTANCES[-1]))
+  centers = np.zeros((len(lines), len(DISTANCES), 3), dtype=np.float64)
+  centers[:, :, 0] = DISTANCES
+  for i in np.flatnonzero(valid):
+    # Keep np.interp's arithmetic order, including its rounding at pixel ties.
+    centers[i, :, 1] = np.interp(DISTANCES, geometry[i, :, 0], geometry[i, :, 1])
+    centers[i, :, 2] = np.interp(DISTANCES, geometry[i, :, 0], geometry[i, :, 2])
+  valid &= ((centers[:, :, 2] >= .5) & (centers[:, :, 2] <= 2.5)).all(axis=1)
+  centers[~valid] = 0.
+  points = np.repeat(centers[:, :, None, :], len(OFFSETS), axis=2)
+  points[:, :, :, 1] += OFFSETS
+  proj = points @ matrix.T
+  pixels = proj[..., :2] / np.where(proj[..., 2:] > 1., proj[..., 2:], 1.)
+  visible = (valid[:, None] & (proj[..., 2] > 1.).all(axis=2) &
+             ((pixels[..., 0] >= 1) & (pixels[..., 0] < width - 1) &
+              (pixels[..., 1] >= height * .45) & (pixels[..., 1] < height - 1)).all(axis=2))
+  pixels = np.rint(pixels).astype(np.int64)
+  pixels[..., 0] = np.clip(pixels[..., 0], 0, width - 1)
+  pixels[..., 1] = np.clip(pixels[..., 1], 0, height - 1)
+  return pixels, visible, valid
+
+
+def _median_three(values):
+  # Order statistics, not sum-minus-extremes: avoid cancellation/rounding changes.
+  a, b, c = values[..., 0], values[..., 1], values[..., 2]
+  return np.maximum(np.minimum(a, b), np.minimum(np.maximum(a, b), c))
+
+
+def assess_lanes(image, lines, camera_from_calib: np.ndarray) -> tuple[LaneEvidence, ...]:
+  if not len(lines):
+    return ()
+  uv, visible, valid = _project_lanes(lines, camera_from_calib, image.width, image.height)
+  counts = visible.sum(axis=1)
+  rows = np.sort(np.where(visible, uv[:, :, 5, 1], -1), axis=1)
+  distinct = (rows[:, 0] != -1) + ((np.diff(rows, axis=1) != 0) & (rows[:, 1:] != -1)).sum(axis=1)
+  qualified = valid & (counts >= MIN_SUPPORT) & (distinct >= 8)
+  evidence = [LaneEvidence(visible=int(counts[i]), reason="insufficient_projection") if valid[i]
+              else LaneEvidence(reason="invalid_geometry") for i in range(len(lines))]
+  ids = np.flatnonzero(qualified)
+  if not len(ids):
+    return tuple(evidence)
+  visible = visible[ids]
+  counts = counts[ids]
+  rgb = image.sample(uv[ids]).astype(np.float32, copy=False)
+  names, supported_counts = _classify_numpy(rgb, visible, counts)
+  for j, i in enumerate(ids):
+    count = int(counts[j])
+    if names[j] == 3:
+      evidence[i] = LaneEvidence(visible=count, reason="ambiguous_boundary_neighbor")
+    elif names[j]:
+      evidence[i] = LaneEvidence("green" if names[j] == 1 else "pink", int(supported_counts[j]), count, "paint_candidate")
+    else:
+      evidence[i] = LaneEvidence(visible=count, reason="no_narrow_guide_support")
+  return tuple(evidence)
+
+
+def _classify_numpy(rgb, visible, counts):
+  r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+  maximum = rgb.max(axis=-1)
+  chroma = maximum - rgb.min(axis=-1)
+  colors = _guide_colors(r, g, b, chroma, maximum)
+  core = colors[:, :, CORE]
   brightness = rgb.mean(axis=-1)
-  contrast = brightness - np.median(brightness[:, FLANKS], axis=1)[:, None]
-  chroma = rgb.max(axis=-1) - rgb.min(axis=-1)
-  white = (contrast >= 25) & (chroma <= np.maximum(15, .2 * rgb.max(axis=-1)))
+  flank_brightness = (brightness[:, :, 0] + brightness[:, :, 10]) * .5
+  contrast = brightness - flank_brightness[:, :, None]
+  white = (contrast >= 25) & (chroma <= np.maximum(15, .2 * maximum))
   yellow = (chroma >= 20) & (contrast >= 15) & (r >= .85 * g) & (g >= 1.35 * b)
   blue = (chroma >= 20) & (b >= 1.3 * r) & (b >= 1.1 * g)
-  boundary_neighbor = visible & (white | yellow | blue)[:, NEIGHBORS].any(axis=1)
-  if boundary_neighbor.sum() >= 3:
-    return LaneEvidence(visible=count, reason="ambiguous_boundary_neighbor")
-  for color, name in ((1, "green"), (2, "pink")):
+  boundary_neighbor = visible & (white | yellow | blue)[:, :, NEIGHBORS].any(axis=2)
+  ambiguous = boundary_neighbor.sum(axis=1) >= 3
+  names = np.zeros(len(rgb), dtype=np.uint8)
+  supported_counts = np.zeros(len(rgb), dtype=int)
+  flank_fraction = (((colors[:, :, 0] != 0) + (colors[:, :, 10] != 0).astype(np.int16)) * visible).sum(axis=1) / (2 * counts)
+  for color in (1, 2):
+    if not (core == color).any():
+      continue
     chroma = g - (r + b) / 2 if color == 1 else (r + b) / 2 - g
-    contrast = np.median(chroma[:, CORE], axis=1) - np.median(chroma[:, FLANKS], axis=1)
-    support = visible & ((core == color).sum(axis=1) >= 2) & (core[:, 1] == color) & (contrast >= 40)
-    supported = int(support.sum())
-    # Need repeated support near, middle AND far, not one colored object/patch.
-    spatial_support = all(int(support[part].sum()) >= 2 for part in np.array_split(np.arange(len(DISTANCES)), 3))
-    flank_fraction = float((colors[visible][:, FLANKS] != 0).mean())
-    if supported >= MIN_SUPPORT and supported / count >= .8 and spatial_support and flank_fraction <= .15:
-      return LaneEvidence(name, supported, count, "paint_candidate")
-  return LaneEvidence(visible=count, reason="no_narrow_guide_support")
+    contrast = _median_three(chroma[:, :, CORE]) - (chroma[:, :, 0] + chroma[:, :, 10]) * .5
+    support = visible & ((core == color).sum(axis=2) >= 2) & (core[:, :, 1] == color) & (contrast >= 40)
+    supported = support.sum(axis=1)
+    spatial = (np.add.reduceat(support, SUPPORT_GROUPS, axis=1, dtype=np.int16) >= 2).all(axis=1)
+    accepted = ~ambiguous & (names == 0) & (supported >= MIN_SUPPORT) & (supported / counts >= .8) & spatial & (flank_fraction <= .15)
+    names[accepted] = color
+    supported_counts[accepted] = supported[accepted]
+    if ((names != 0) | ambiguous).all():
+      break
+  names[ambiguous] = 3
+  return names, supported_counts
+
+
+def assess_lane(image, line: np.ndarray, camera_from_calib: np.ndarray) -> LaneEvidence:
+  return assess_lanes(image, [line], camera_from_calib)[0]
 
 
 class GuidePaintAssessor:
@@ -172,8 +252,10 @@ class GuidePaintAssessor:
       self.reset()
     evidence = []
     ignore = []
+    selected = [i for i, (prob, std) in enumerate(zip(probabilities, stds, strict=True)) if prob >= .3 and std <= .15]
+    measured = dict(zip(selected, assess_lanes(image, [lines[i] for i in selected], matrix), strict=True))
     for i, (line, prob, std) in enumerate(zip(lines, probabilities, stds, strict=True)):
-      item = assess_lane(image, line, matrix) if prob >= .3 and std <= .15 else LaneEvidence(reason="model_uncertain")
+      item = measured.get(i, LaneEvidence(reason="model_uncertain"))
       position = float(np.interp(12., np.asarray(line)[:, 0], np.asarray(line)[:, 1])) if item.color != "unknown" else None
       continuous = (item.color != "unknown" and item.color == self.colors[i] and self.positions[i] is not None and
                     abs(position - self.positions[i]) <= .15)
@@ -188,9 +270,13 @@ class GuidePaintAssessor:
 
   def projection_changed(self, matrix):
     # Compare projection displacement in pixels, not unlike homography units.
-    probes = np.array([[8., -1.8, 1.2], [8., 1.8, 1.2], [32., -1.8, 1.2], [32., 1.8, 1.2]])
-    new, old = probes @ matrix.T, probes @ self.last_matrix.T
-    if (new[:, 2] <= 1.).any() or (old[:, 2] <= 1.).any():
+    new = PROJECTION_PROBES @ matrix.T
+    if (new[:, 2] <= 1.).any():
+      return True
+    if np.array_equal(matrix, self.last_matrix):
+      return False
+    old = PROJECTION_PROBES @ self.last_matrix.T
+    if (old[:, 2] <= 1.).any():
       return True
     return bool(np.linalg.norm(new[:, :2] / new[:, 2:] - old[:, :2] / old[:, 2:], axis=1).max() > 2.)
 
