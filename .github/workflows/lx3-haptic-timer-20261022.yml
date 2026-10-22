@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install pytest numpy aiohttp cryptography requests
+      - run: python -m pip install pytest numpy aiohttp cryptography requests pycapnp
       - name: Timer, encoded CCNC, notifications and manual steering contracts
         run: |
           set -o pipefail
