@@ -912,14 +912,13 @@ class ModelRenderer(Widget):
     car_state = sm['carState']
 
     lane_lines_raw = [np.array([ll.x, ll.y, ll.z], dtype=np.float32).T for ll in model.laneLines]
-    road_edges_raw = [np.array([re.x, re.y, re.z], dtype=np.float32).T for re in model.roadEdges]
     lane_line_probs = np.array(model.laneLineProbs, dtype=np.float32)
-    road_edge_stds = np.array(model.roadEdgeStds, dtype=np.float32)
 
     if lane_lines_raw[0].shape[0] == 0:
       return
 
-    max_idx = self._get_path_length_idx(lane_lines_raw[0][:, 0], np.clip(lane_lines_raw[0][-1, 0], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE))
+    max_distance = np.clip(lane_lines_raw[0][-1, 0], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
+    max_idx = self._get_path_length_idx(lane_lines_raw[0][:, 0], max_distance)
     left_lane_line = car_state.leftLaneLine
     right_lane_line = car_state.rightLaneLine
     # CAN encodes color * 10 + line type. Blue (3) is not yellow (2).
@@ -935,24 +934,19 @@ class ModelRenderer(Widget):
       line_width = 0.025
       if i == 1 and left_lane_color in lane_colors:
         line_width = 0.05
-      pts = self._map_line_to_polygon(lane_lines_raw[i], line_width, 0.0, max_idx, np.clip(lane_lines_raw[0][-1, 0], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE))
+      pts = self._map_line_to_polygon(lane_lines_raw[i], line_width, 0.0, max_idx, max_distance)
       lane_vertices.append(pts)
 
-      if i == 1:
+      if i == 1 and left_lane_line % 10 == 4:
         lane_vertices_double = self._map_line_to_polygon(
           lane_lines_raw[i],
           line_width,
           0.0,
           max_idx,
-          np.clip(lane_lines_raw[0][-1, 0], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE),
+          max_distance,
           True,
           -0.3,
         )
-
-    road_vertices = []
-    max_idx_road_edge = self._get_path_length_idx(lane_lines_raw[0][:, 0], 100.0)
-    for i in range(2):
-      road_vertices.append(self._map_line_to_polygon(road_edges_raw[i], 0.025, 0.0, max_idx_road_edge, 100.0))
 
     for i in range(4):
       if lane_vertices[i].size == 0:
@@ -977,12 +971,17 @@ class ModelRenderer(Widget):
           self._draw_polygon_outline_carrot(lane_vertices_double, color, stroke)
 
     if self._carrot_show_lane_info > 1:
+      # Road edges are not drawn in lane-only mode; avoid building hidden geometry.
+      road_edges_raw = [np.array([re.x, re.y, re.z], dtype=np.float32).T for re in model.roadEdges]
+      road_edge_stds = np.array(model.roadEdgeStds, dtype=np.float32)
+      max_idx_road_edge = self._get_path_length_idx(lane_lines_raw[0][:, 0], 100.0)
       for i in range(2):
-        if road_vertices[i].size == 0:
+        vertices = self._map_line_to_polygon(road_edges_raw[i], 0.025, 0.0, max_idx_road_edge, 100.0)
+        if vertices.size == 0:
           continue
         temp_f = float(np.clip(road_edge_stds[i] / 2.0, 0.0, 1.0))
         color = rl.Color(int((1.0 - temp_f) * 255.0), 0, int(temp_f * 255.0), 255)
-        draw_polygon(self._rect, road_vertices[i], color)
+        draw_polygon(self._rect, vertices, color)
 
 
 

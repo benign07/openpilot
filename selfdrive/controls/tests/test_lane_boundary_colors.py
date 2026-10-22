@@ -10,7 +10,7 @@ import pytest
 SOURCE = Path(__file__).resolve().parents[3] / 'selfdrive/ui/onroad/model_renderer.py'
 
 
-def render(left=11, right=11, probabilities=None, valid=True):
+def render(left=11, right=11, probabilities=None, valid=True, show_info=1):
   tree = ast.parse(SOURCE.read_text(encoding='utf8'))
   cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ModelRenderer')
   method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_draw_lane_lines_carrot')
@@ -25,7 +25,7 @@ def render(left=11, right=11, probabilities=None, valid=True):
     mapped.append((index, width, double))
     return np.array([[index + (0.1 if double else 0), 0], [index, 1], [index + 1, 1]])
 
-  ui = NS(_carrot_show_lane_info=1, _rect=None, _map_line_to_polygon=polygon,
+  ui = NS(_carrot_show_lane_info=show_info, _rect=None, _map_line_to_polygon=polygon,
           _get_path_length_idx=lambda xs, limit: len(xs) - 1,
           _draw_polygon_outline_carrot=lambda vertices, color, stroke: outlines.append((float(vertices[0, 0]), color, stroke)))
   lines = [NS(x=[0., 10., 20., 30.], y=[float(i)] * 4, z=[0.] * 4) for i in range(4)]
@@ -81,3 +81,14 @@ def test_unknown_color_does_not_inherit_yellow_width_or_outline():
   _, mapped, outlines = render(left=41)
   assert next(width for index, width, double in mapped if index == 1. and not double) == .025
   assert outlines == []
+
+
+@pytest.mark.parametrize('show_info,left,expected_maps,expected_draws', [(1, 11, 4, 4), (1, 24, 5, 5), (2, 11, 6, 6), (2, 24, 7, 7)])
+def test_only_visible_double_and_road_edge_geometry_is_built(show_info, left, expected_maps, expected_draws):
+  draws, mapped, _ = render(left=left, show_info=show_info)
+  assert len(mapped) == expected_maps
+  assert len(draws) == expected_draws
+
+
+def test_hidden_lane_mode_does_no_geometry_work():
+  assert render(show_info=0) == ([], [], [])
