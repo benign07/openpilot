@@ -39,7 +39,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends clang python3-venv
           python3 -m venv /tmp/lx3-haptic-build
-          /tmp/lx3-haptic-build/bin/pip install scons Cython==3.2.4 numpy pycapnp pyzmq requests pyserial
+          /tmp/lx3-haptic-build/bin/pip install scons setuptools==80.9.0 Cython==3.2.4 numpy pycapnp pyzmq requests pyserial
       - name: Verify original sealed SDK and build original 316-key registry
         run: |
           set -o pipefail
