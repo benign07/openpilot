@@ -304,6 +304,30 @@ class OemSurroundOverlay:
       draw_text_ui_style('부드러운 감속 적용 중 · '+' · '.join(parts),x,y-60,20,rl.SKYBLUE,align='left_center',shadow_offset=0)
 
 
+def _render_driving_status(rect):
+  """Small plan-status labels using existing UI messages; no CAN subscription."""
+  cp, sm = ui_state.CP, ui_state.sm
+  if cp is None or str(cp.carFingerprint) != 'HYUNDAI_PALISADE_LX3_HEV':
+    return
+  now = time.monotonic()
+  fresh = lambda k: sm.valid[k] and sm.alive[k] and 0 <= now-sm.logMonoTime[k]/1e9 <= .2
+  if (not fresh('carState') or not sm['carState'].canValid or sm['carState'].canTimeout or
+      not fresh('carControl') or not fresh('lateralPlan')):
+    return
+  plan, control = sm['lateralPlan'], sm['carControl']
+  text = str(plan.latDebugText)
+  cm = _oem_margin_status(text) if control.latActive and plan.mpcSolutionValid else None
+  comfort = _oem_comfort_status(text, time.monotonic_ns()) if control.longActive and fresh('longitudinalPlan') else 0
+  x, y = rect.x+24, rect.y+rect.height-130
+  if cm is not None:
+    draw_text_ui_style('거리두기 적용 중 '+('→' if cm > 0 else '←')+f' {abs(cm):.1f}cm',
+                       x,y-30,20,rl.GREEN,align='left_center',shadow_offset=0)
+  if comfort:
+    parts = [name for bit,name in ((1,'가속 억제'),(2,'미리 감속'),(4,'정차')) if comfort & bit]
+    draw_text_ui_style('부드러운 감속 적용 중 · '+' · '.join(parts),
+                       x,y-60,20,rl.SKYBLUE,align='left_center',shadow_offset=0)
+
+
 class AugmentedRoadView(CameraView):
   def __init__(self, stream_type: VisionStreamType = VisionStreamType.VISION_STREAM_ROAD):
     super().__init__("camerad", stream_type)
@@ -321,7 +345,9 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
-    self.oem_surround_overlay = OemSurroundOverlay()
+    # Keep the road UI lightweight: do not instantiate the optional OEM
+    # overlay, which owns an extra CAN subscriber and decodes/projects slots.
+    # OEM cluster/HUD forwarding and control-side sensing are independent.
 
     # debug
     self._pm = messaging.PubMaster(['uiDebug'])
@@ -362,16 +388,7 @@ class AugmentedRoadView(CameraView):
     # Draw all UI overlays
     self.model_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
-    try:
-      self.oem_surround_overlay.render(self._content_rect, self.model_renderer,
-                                      'wideRoadCameraState' if self.stream_type == WIDE_CAM else 'roadCameraState')
-    except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
-      # Optional display failure must not take down the road/alert UI.
-      self.oem_surround_overlay.frames.clear()
-      if not self.oem_surround_overlay.warned:
-        from openpilot.common.swaglog import cloudlog
-        cloudlog.warning('OEM surround overlay unavailable: '+type(exc).__name__)
-        self.oem_surround_overlay.warned = True
+    _render_driving_status(self._content_rect)
     self.alert_renderer.render(self._content_rect)
     self.driver_state_renderer.render(self._content_rect)
 

@@ -10,7 +10,7 @@ UI=ROOT/'selfdrive/ui/onroad/augmented_road_view.py'
 
 
 def overlay_scope(extra=None):
-  return load(UI,{'_oem_bits','_decode_oem_surround','_oem_margin_status','_oem_comfort_status','_oem_native_clock_offset_ns','OemSurroundOverlay'},
+  return load(UI,{'_oem_bits','_decode_oem_surround','_oem_margin_status','_oem_comfort_status','_oem_native_clock_offset_ns','_render_driving_status','OemSurroundOverlay'},
               {'math':math,'re':re,'CALIBRATED':1,**(extra or {})})
 
 
@@ -113,14 +113,32 @@ def test_slots_expire_without_reusing_receive_time(codec):
   obj.render(rect);assert not any(kind=='icon' or kind=='text' and text=='12m' for kind,text in draws)
 
 
-def test_overlay_has_no_transmit_calls_and_alerts_draw_after_it():
+def test_optional_overlay_is_detached_from_live_road_ui():
   tree=ast.parse(UI.read_text(encoding='utf-8'))
   cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='OemSurroundOverlay')
   calls=[ast.unparse(n.func) for n in ast.walk(cls) if isinstance(n,ast.Call)]
   assert not any('PubMaster' in s or s.endswith('.send') or 'put_' in s for s in calls)
   view=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='AugmentedRoadView')
+  init=ast.unparse(next(n for n in view.body if isinstance(n,ast.FunctionDef) and n.name=='__init__'))
   draw=ast.unparse(next(n for n in view.body if isinstance(n,ast.FunctionDef) and n.name=='_render'))
-  assert draw.index('oem_surround_overlay.render') < draw.index('alert_renderer.render')
+  assert 'OemSurroundOverlay' not in init
+  assert 'oem_surround_overlay' not in draw
+  assert draw.index('model_renderer.render') < draw.index('alert_renderer.render')
+  assert draw.index('_render_driving_status') < draw.index('alert_renderer.render')
+
+
+def test_lightweight_status_retains_feedback_without_consuming_can(codec):
+  obj,sm,ui,clock,event,packet,queue,draws,rect=render_fixture(codec)
+  sm['lateralPlan'].latDebugText += ' | lx3_comfort_v1=1990000000,3'
+  status=overlay_scope({'ui_state':ui,'time':NS(monotonic=lambda:clock.now,monotonic_ns=lambda:int(clock.now*1e9)),
+    'rl':NS(GREEN=1,SKYBLUE=2),
+    'draw_text_ui_style':lambda text,*a,**kw:draws.append(('text',text))})['_render_driving_status']
+  status(rect)
+  assert len(queue)==1  # Existing CAN queue was not read to draw plan status.
+  assert any('거리두기 적용 중' in text for kind,text in draws)
+  assert any('부드러운 감속 적용 중' in text for kind,text in draws)
+  draws.clear();sm['carControl'].latActive=sm['carControl'].longActive=False
+  status(rect);assert not draws
 
 
 @pytest.mark.parametrize('stamp,mask,expected',[(1_990_000_000,7,7),(1_990_000_000,0,0),
