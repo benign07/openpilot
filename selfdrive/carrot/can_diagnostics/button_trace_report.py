@@ -123,6 +123,8 @@ def summarize(root):
           'adas_state_evidence': {'observations': sorted(adas, key=lambda r: (
                                     str(r['_boot_id'] or 'unknown:'+r['_chunk_id']), r['mono_ns'], r.get('observation_index', 0))),
                                   'counts': dict(adas_counts), 'report_omitted': max(0, sum(adas_counts.values())-len(adas)),
+                                  'selection': 'bounded_manifest_scan_prefix_not_a_contiguous_time_window',
+                                  'complete_record_selection': sum(adas_counts.values()) == len(adas),
                                   'ordering': 'boot_id_then_monotonic_not_cross_boot_chronology',
                                   'scope': 'selected_raw_candidates_not_AVN_state_or_ECU_ack'},
           'limits': ['TX echo is not OEM acceptance or an actuator response.',

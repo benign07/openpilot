@@ -42,9 +42,10 @@ of those control paths.
   DBC candidates. Retain raw bytes and the DBC/source hashes for PC validation.
 - Initial observations and gaps longer than one second are baselines, not
   proof of a setting change. Equal packet timestamps preserve collector order.
-- Bound added state records to 20/s RX plus a separate 10/s host/echo/reject
+- Bound added state records to 20/s RX plus a separate 20/s host/echo/reject
   budget so host traffic cannot exhaust RX capacity. Expose losses, unknown
-  fingerprint frames and wrong lengths. Repeat baselines in each new chunk.
+  fingerprint frames and wrong lengths, including RX/host loss totals. Repeat
+  baselines in each new chunk, including rapid recovery after storage failures.
   Keep high-rate 0x160 out of the full trace; its samples and changed fields
   remain available. Pre-window/frame caps and eviction counters still apply.
   Settings have
@@ -54,7 +55,8 @@ of those control paths.
   existing five-second configuration polling/header snapshot.
 - The PC trace report includes observations outside button windows and orders
   them within a boot by monotonic time, not potentially adjusted wall time.
-  Its 10,000-record display cap and missing observations remain explicit.
+  Its 10,000-record display cap and missing observations remain explicit. A
+  truncated manifest-scan prefix is explicitly not a contiguous time window.
 
 ## Verification and limits
 

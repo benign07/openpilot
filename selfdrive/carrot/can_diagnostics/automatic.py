@@ -332,7 +332,7 @@ class AutoRecorder:
                  ('FAULT_LSS', 219, 3), ('FAULT_LFA', 234, 3), ('FAULT_HDA', 237, 3), ('FAULT_DAS', 246, 3))),
   }
   ADAS_RX_OBSERVATIONS_PER_SECOND = 20
-  ADAS_HOST_OBSERVATIONS_PER_SECOND = 10
+  ADAS_HOST_OBSERVATIONS_PER_SECOND = 20
   ADAS_OBSERVATIONS_PER_SECOND = ADAS_RX_OBSERVATIONS_PER_SECOND + ADAS_HOST_OBSERVATIONS_PER_SECOND
   SETTINGS_TRACE_MAX_PER_TRIP = 6
   SETTINGS_TRACE_INTERVAL = 30.0
@@ -391,6 +391,7 @@ class AutoRecorder:
     self.adas_observation_times = {'rx': deque(maxlen=self.ADAS_RX_OBSERVATIONS_PER_SECOND),
                                    'host': deque(maxlen=self.ADAS_HOST_OBSERVATIONS_PER_SECOND)}
     self.adas_observation_count = self.adas_observation_dropped = self.adas_out_of_order = 0
+    self.adas_dropped_by_direction = {'rx': 0, 'host': 0}
     self.adas_unknown_fingerprint_frames = self.adas_length_mismatch = 0
     self.adas_dropped_since_previous = 0
     self.settings_trace_count = 0
@@ -624,6 +625,7 @@ class AutoRecorder:
       self.adas_chunk_generation = 0
       for bucket in self.adas_observation_times.values(): bucket.clear()
       self.adas_observation_count = self.adas_observation_dropped = self.adas_out_of_order = 0
+      self.adas_dropped_by_direction = {'rx': 0, 'host': 0}
       self.adas_unknown_fingerprint_frames = self.adas_length_mismatch = 0
       self.adas_dropped_since_previous = 0
       self.settings_trace_count = 0
@@ -656,7 +658,12 @@ class AutoRecorder:
       self.adas_seen_chunk.clear()
     if self.trace is not None and not self.trace_active(now):
       self.close_trace(now, 'window_elapsed')
-    ready = self.rotate_full_chunk(now) and self.store.begin(self.chunk_metadata(now), now)
+    ready = self.rotate_full_chunk(now)
+    if ready:
+      opening = self.store.stream is None
+      ready = self.store.begin(self.chunk_metadata(now), now)
+      if ready and opening:
+        self.adas_chunk_generation += 1
     if route_rotation_started is not None:
       self.chunk_rotations += 1
       self.max_chunk_rotation_ms = max(self.max_chunk_rotation_ms, (time.monotonic() - route_rotation_started) * 1000)
@@ -674,6 +681,7 @@ class AutoRecorder:
               'storage_dropped': self.storage_dropped, 'dropped_no_stream': self.store.dropped_no_stream,
               'adas_state_evidence': {'observations': self.adas_observation_count,
                                       'dropped': self.adas_observation_dropped,
+                                      'dropped_by_direction': self.adas_dropped_by_direction.copy(),
                                       'out_of_order': self.adas_out_of_order,
                                       'unknown_fingerprint_frames': self.adas_unknown_fingerprint_frames,
                                       'length_mismatch': self.adas_length_mismatch},
@@ -763,6 +771,7 @@ class AutoRecorder:
     previous = self.adas_state.get(key)
     if previous is None and len(self.adas_state) >= 128:
       self.adas_observation_dropped += 1
+      self.adas_dropped_by_direction['rx' if direction == 'rx' else 'host'] += 1
       self.adas_dropped_since_previous += 1
       return
     if previous is not None and mono_ns < previous[0]:
@@ -783,6 +792,7 @@ class AutoRecorder:
       bucket.popleft()
     if len(bucket) >= bucket.maxlen:
       self.adas_observation_dropped += 1
+      self.adas_dropped_by_direction['rx' if direction == 'rx' else 'host'] += 1
       self.adas_dropped_since_previous += 1
       return
     bucket.append(now)
@@ -811,6 +821,7 @@ class AutoRecorder:
            'dropped_since_previous': self.adas_dropped_since_previous,
            'coverage_counters': {'stale_can_frames': self.stale_can_frames,
                                  'observation_dropped': self.adas_observation_dropped,
+                                 'dropped_by_direction': self.adas_dropped_by_direction.copy(),
                                  'out_of_order': self.adas_out_of_order,
                                  'unknown_fingerprint_frames': self.adas_unknown_fingerprint_frames,
                                  'length_mismatch': self.adas_length_mismatch},
@@ -818,6 +829,7 @@ class AutoRecorder:
            'trace_id': self.trace['id'] if self.trace_active(now) else None}
     if self.store.append(row, now) is False:
       self.adas_observation_dropped += 1
+      self.adas_dropped_by_direction['rx' if direction == 'rx' else 'host'] += 1
       self.adas_dropped_since_previous += 1
     else:
       self.adas_observation_count += 1
@@ -1091,6 +1103,7 @@ class AutoRecorder:
             'settings_diagnostic_traces': self.settings_trace_count,
             'adas_state_observations': self.adas_observation_count,
             'adas_observation_dropped': self.adas_observation_dropped,
+            'adas_dropped_by_direction': self.adas_dropped_by_direction.copy(),
             'adas_out_of_order': self.adas_out_of_order,
             'adas_unknown_fingerprint_frames': self.adas_unknown_fingerprint_frames,
             'adas_length_mismatch': self.adas_length_mismatch,

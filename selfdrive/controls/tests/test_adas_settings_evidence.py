@@ -213,6 +213,7 @@ def test_host_storm_cannot_starve_received_setting_edge():
   rows = [row for row in observations(store) if row['address'] == 0x160]
   assert len(rows) == 2 and rows[-1]['fields']['AEB_SETTING'] == 1
   assert r.settings_trace_count == 1 and r.adas_observation_dropped > 0
+  assert r.adas_dropped_by_direction['rx'] == 0 and r.adas_dropped_by_direction['host'] > 0
 
 
 def test_unknown_fingerprint_wrong_length_and_stale_coverage_are_explicit():
@@ -243,3 +244,29 @@ def test_next_chunk_keeps_unchanged_state_as_baseline(tmp_path):
   assert len(rows) == 2
   assert rows[-1]['phase'] == 'baseline_chunk_boundary'
   assert rows[-1]['before'] is None and rows[-1]['fields']['LFA_OptUsmSta'] == 2
+
+
+def test_eleven_host_baselines_fit_without_artificial_loss():
+  r, store = recorder()
+  for bus, direction, addresses in ((0, 'tx_requested', (0x1E0, 0x1AA, 0x12A, 0x161, 0x162)),
+                                     (128, 'rx', (0x160, 0x1E0, 0x1AA, 0x12A, 0x161, 0x162))):
+    for address in addresses:
+      send(r, 100., address, 0, length=r.ADAS_STATE_FIELDS[address][0], bus=bus, direction=direction)
+  assert len(observations(store)) == 11
+  assert r.adas_dropped_by_direction == {'rx': 0, 'host': 0}
+
+
+def test_direct_chunk_reopen_with_short_gap_still_gets_baseline(tmp_path):
+  from selfdrive.carrot.can_diagnostics.automatic import ChunkStore
+  from selfdrive.carrot.can_diagnostics.button_trace_report import summarize
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  store = ChunkStore(tmp_path, reserve=0, seconds=10, chunk_bytes=100000)
+  r = AutoRecorder(store, {'boot_id': 'A', 'car_fingerprint': 'HYUNDAI_PALISADE_LX3_HEV'})
+  r.update(services(), 100.)
+  send(r, 100.1, 0x1E0, 2 << 27)
+  store.seal('test_direct_reopen_without_trip_change')
+  r.update(services(100.3), 100.3)
+  send(r, 100.4, 0x1E0, 2 << 27)
+  r.close()
+  rows = summarize(tmp_path)['adas_state_evidence']['observations']
+  assert len(rows) == 2 and rows[-1]['phase'] == 'baseline_chunk_boundary'
