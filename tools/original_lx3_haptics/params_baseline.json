@@ -1,0 +1,39 @@
+{
+  "original_module_sha256": "d34fd68010bb0cd3ec7dd1112c928e98fae6a0aa70216f1d8b93d5dd0e2616cc",
+  "original_header_sha256": "07debde2b9648c3fe97af0077e407fe56babf5bacaf9d97c8b8dd570a3b3003c",
+  "original_key_count": 316,
+  "required_symbol_versions": [
+    "CXXABI_1.3",
+    "CXXABI_1.3.11",
+    "CXXABI_1.3.13",
+    "CXXABI_1.3.2",
+    "CXXABI_1.3.3",
+    "CXXABI_1.3.5",
+    "GCC_3.0",
+    "GLIBCXX_3.4",
+    "GLIBCXX_3.4.11",
+    "GLIBCXX_3.4.14",
+    "GLIBCXX_3.4.15",
+    "GLIBCXX_3.4.18",
+    "GLIBCXX_3.4.19",
+    "GLIBCXX_3.4.20",
+    "GLIBCXX_3.4.21",
+    "GLIBCXX_3.4.22",
+    "GLIBCXX_3.4.26",
+    "GLIBCXX_3.4.29",
+    "GLIBCXX_3.4.30",
+    "GLIBCXX_3.4.9",
+    "GLIBC_2.17",
+    "GLIBC_2.32",
+    "GLIBC_2.33",
+    "GLIBC_2.34",
+    "GLIBC_2.38"
+  ],
+  "paired_sources": {
+    "common/params.cc": "2947645ca30b57d23feeace0e88bead5709c1681dc21359fb1e5a225ca63b187",
+    "common/params.h": "47d08fa1987c9150e55d09a2a533a0a115851aadb34bd1a0c82325e0be8726b3",
+    "common/params_pyx.pyx": "a8cc5e5296dd38a012c55b0867c4563f8e320d25960260d897675dd90f0ea544",
+    "common/SConscript": "fc79c29f10b6b65164ad4802d6868ced1461ae3484ad04643dd9d1b37a7899f4"
+  },
+  "scope": "original sealed backup; recheck live installed ABI/hashes before deployment"
+}

@@ -171,12 +171,39 @@ def test_normal_automatic_resume_still_waits_clear_and_cannot_grant():
 def test_haptic_pulse_bounded_retrigger_rate_and_critical_preemption():
   h=HapticNotifications()
   assert h.update('engage',eligible=True,frame=100)
-  assert h.update('engage',eligible=True,frame=119)
-  assert not h.update('engage',eligible=True,frame=120)
-  assert not h.update('engage2',eligible=True,frame=121)
+  assert h.update('none',eligible=True,frame=101)
+  assert h.update('engage2',eligible=True,frame=119)
+  assert h.update('none',eligible=True,frame=179)
+  assert not h.update('none',eligible=True,frame=180)
+  assert not h.update('engage2',eligible=True,frame=181)
   assert h.update('engage',eligible=True,frame=230)
   assert not h.update('warningImmediate',eligible=True,frame=231)
   assert not h.update('engage2',eligible=False,frame=400)
+
+
+def test_haptic_does_not_replay_held_or_cooldown_events():
+  h=HapticNotifications()
+  assert not h.update('engage',eligible=False,frame=0)
+  assert not h.update('engage',eligible=True,frame=1)
+  assert not h.update('none',eligible=True,frame=2)
+  assert h.update('engage',eligible=True,frame=3)
+  assert not h.update('none',eligible=False,frame=4)
+  assert not h.update('none',eligible=True,frame=5)
+  assert not h.update('engage2',eligible=True,frame=99)
+  assert not h.update('engage2',eligible=True,frame=103)
+  assert not h.update('none',eligible=True,frame=104)
+  assert h.update('engage',eligible=True,frame=105)
+
+
+def test_haptic_rollback_cancels_and_requires_fresh_event_after_cooldown():
+  h=HapticNotifications()
+  assert h.update('engage',eligible=True,frame=150)
+  assert not h.update('engage',eligible=True,frame=100)
+  assert not h.update('none',eligible=True,frame=101)
+  assert not h.update('engage',eligible=True,frame=199)
+  assert not h.update('engage',eligible=True,frame=200)
+  assert not h.update('none',eligible=True,frame=201)
+  assert h.update('engage',eligible=True,frame=202)
 
 
 @pytest.mark.parametrize('alert',['warningImmediate','refuse','disengage','audio1','promptRepeat','none'])

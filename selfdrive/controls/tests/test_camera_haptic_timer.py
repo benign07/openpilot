@@ -161,14 +161,14 @@ def test_existing_routine_notification_remains_independent_of_camera_mode(codec,
   tick = load_tick(); c = state(0); routine = cls()
   packer, decode, _ = codec
   packets_on = 0
-  for frame in range(100, 125):
+  for frame in range(100, 185):
     c.frame = frame
     warning = tick(c, NS(activeCarrot=0))
     notify = routine.update('engage', eligible=True, frame=frame)
     if frame % 5 == 0:
       packet = next(p for p in formatter(packer, frame, warning, notification=notify) if p[0] == 0x162)
       packets_on += decode('CCNC_0x162', packet[1])['VIBRATE']
-  assert packets_on == 4
+  assert packets_on == 16
 
 
 def test_thirty_second_hold_has_only_one_pattern_and_preserves_ldw_between_pulses():
@@ -213,3 +213,22 @@ def test_warning_values_have_no_steering_message_consumer_and_keep_send_gates():
                  if isinstance(n, ast.FunctionDef) and n.name == 'create_ccnc_messages')
   assert any(isinstance(n, ast.If) and ast.unparse(n.test) == 'frame % 5 == 0' for n in ast.walk(factory))
   assert any(isinstance(n, ast.If) and ast.unparse(n.test) == 'CS.ccnc_0x162 is not None' for n in ast.walk(factory))
+
+
+@pytest.mark.parametrize('phase', range(5))
+def test_short_audible_event_produces_bounded_notification_wire_pulse(codec,phase):
+  # Complete production helper -> formatter -> DBC/CRC at all 20Hz phases.
+  spec=importlib.util.spec_from_file_location('production_haptic_notifications',
+    ROOT/'opendbc_repo/opendbc/car/hyundai/lx3_haptic_notifications.py')
+  module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+  h=module.HapticNotifications();packer,decode,checksum=codec;entry=20+phase;sent=[]
+  for frame in range(entry+100):
+    request=h.update('engage' if frame==entry else 'none',eligible=True,frame=frame)
+    if frame%5:continue
+    packet=next(p for p in formatter(packer,frame,notification=request) if p[0]==0x162)
+    raw=packet[1];values=decode('CCNC_0x162',raw)
+    assert int.from_bytes(raw[:2],'little')==checksum(0x162,None,bytearray(raw))
+    assert values['FAULT_LSS']==values['FAULT_DAS']==values['FAULT_LFA']==1
+    if values['VIBRATE']:sent.append(frame)
+  assert sent==[f for f in range(entry,entry+80) if f%5==0]
+  assert len(sent)==16

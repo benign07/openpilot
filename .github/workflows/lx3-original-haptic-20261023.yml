@@ -1,0 +1,69 @@
+name: LX3 original haptic contracts and isolated ARM Params profile
+on:
+  push:
+    branches: [review/lx3-haptic-finish-20261023]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  notification-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest numpy pycapnp aiohttp cryptography requests
+      - name: Notification, camera timer and display contracts
+        run: |
+          set -o pipefail
+          ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_lx3_notification_resume.py selfdrive/controls/tests/test_camera_haptic_timer.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_notification_border.py selfdrive/controls/tests/test_oem_surround_overlay.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_lateral_margin.py selfdrive/controls/tests/test_surround_recording.py -q --junitxml=haptic.xml 2>&1 | tee haptic.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-haptic-contract-${{ matrix.python }}
+          path: |
+            haptic.xml
+            haptic.log
+  original-params-arm:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: ARM compiler and original ABI-compatible Cython
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang python3-venv
+          python3 -m venv /tmp/lx3-haptic-build
+          /tmp/lx3-haptic-build/bin/pip install scons Cython==3.2.4 numpy pycapnp pyzmq requests pyserial
+      - name: Verify original sealed SDK and build original 316-key registry
+        run: |
+          set -o pipefail
+          export PATH="/tmp/lx3-haptic-build/bin:$PATH"
+          ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
+          python tools/lx3_spi_arm_artifact.py sdk
+          python tools/check_original_lx3_haptic_params.py prepare-before
+          scons -f tools/lx3_spi_arm.SConstruct --minimal -j2 common/params_pyx.so 2>&1 | tee original-haptic-arm-evidence/before-build.log
+          python tools/check_original_lx3_haptic_params.py verify-before
+      - name: Build one-key addition and verify native type, persistence and original ABI
+        run: |
+          set -o pipefail
+          export PATH="/tmp/lx3-haptic-build/bin:$PATH"
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
+          python tools/check_original_lx3_haptic_params.py prepare-after
+          scons -f tools/lx3_spi_arm.SConstruct --minimal -j2 common/params_pyx.so 2>&1 | tee original-haptic-arm-evidence/after-build.log
+          python tools/check_original_lx3_haptic_params.py verify-after
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-haptic-arm-params
+          path: |
+            original-haptic-arm-evidence
+            common/params_pyx.so
+      - name: Scope
+        run: echo 'Isolated original 316->317 key Params profile. No Panda/pandad/control firmware built or installed. Target import, vehicle mode and motor response still require separate verification.' >> "$GITHUB_STEP_SUMMARY"
