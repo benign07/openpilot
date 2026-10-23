@@ -234,11 +234,13 @@ class AutomaticController:
                                                 'adas_setting_candidate_edge'],
                                     'max_extra_traces_per_trip': 8, 'min_new_window_interval_s': 30,
                                     'spi_scope': 'existing_health_aggregate_only_not_stage_reasons',
-                                    'echo_scope': 'panda_tx_confirmation_not_receiving_ecu_ack'}
+                                    'echo_scope': 'MCU_controller_submission_not_bus_ack_or_receiving_ECU_ack'}
     metadata['adas_state_evidence'] = {
       'schema': 1, 'source': 'selected_raw_CAN_fields_in_installed_LX3_DBC',
       'addresses': [f'0x{address:03X}' for address in AutoRecorder.ADAS_STATE_FIELDS],
       'maximum_observations_per_second': AutoRecorder.ADAS_OBSERVATIONS_PER_SECOND,
+      'rx_reserved_observations_per_second': AutoRecorder.ADAS_RX_OBSERVATIONS_PER_SECOND,
+      'host_observations_per_second': AutoRecorder.ADAS_HOST_OBSERVATIONS_PER_SECOND,
       'settings_windows_per_trip': AutoRecorder.SETTINGS_TRACE_MAX_PER_TRIP,
       'settings_window_interval_s': AutoRecorder.SETTINGS_TRACE_INTERVAL,
       'classification': 'dbc_candidate_not_setting_ack_or_cause',

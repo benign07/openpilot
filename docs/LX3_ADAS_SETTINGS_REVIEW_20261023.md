@@ -36,12 +36,18 @@ of those control paths.
 - Preserve selected state changes between ordinary 10 Hz samples, including
   short host button press/release, settings candidates, modes/icons and faults.
 - Keep physical input, host request, Panda TX echo and TX rejection separate.
-  A raw receive bus is not an ECU identity; an echo is not an ECU ACK.
+  A raw receive bus is not an ECU identity. The MCU creates the echo when
+  submitting to the controller FIFO; it proves neither bus ACK nor ECU acceptance.
 - Do not decode checksums as validity. State fields are explicitly unvalidated
   DBC candidates. Retain raw bytes and the DBC/source hashes for PC validation.
 - Initial observations and gaps longer than one second are baselines, not
   proof of a setting change. Equal packet timestamps preserve collector order.
-- Bound added state records globally to 20/s and expose losses. Settings have
+- Bound added state records to 20/s RX plus a separate 10/s host/echo/reject
+  budget so host traffic cannot exhaust RX capacity. Expose losses, unknown
+  fingerprint frames and wrong lengths. Repeat baselines in each new chunk.
+  Keep high-rate 0x160 out of the full trace; its samples and changed fields
+  remain available. Pre-window/frame caps and eviction counters still apply.
+  Settings have
   six separate 2 s before/8 s after windows per trip, at least 30 s apart;
   automatic button pulses cannot create/extend them or consume physical quotas.
 - Retain `CanfdDebug`, `HDPuse` and speed-camera haptic preferences in the

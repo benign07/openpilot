@@ -196,7 +196,50 @@ def test_real_chunks_rotate_and_pc_report_keeps_untraced_state_and_trip_reset(tm
 
 
 def test_existing_recorder_remains_passive():
-  source = Path(__file__).resolve().parents[2] / 'carrot/can_diagnostics/automatic.py'
-  tree = ast.parse(source.read_text())
-  calls = {n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
-  assert not calls & {'pub_sock', 'PubMaster', 'make_can_msg', 'put', 'put_bool', 'put_int', 'sendcan', 'can_send'}
+  for filename in ('automatic.py', 'automatic_runtime.py'):
+    source = Path(__file__).resolve().parents[2] / ('carrot/can_diagnostics/'+filename)
+    tree = ast.parse(source.read_text())
+    calls = {n.func.attr if isinstance(n.func, ast.Attribute) else n.func.id
+             for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, (ast.Attribute, ast.Name))}
+    assert not calls & {'pub_sock', 'PubMaster', 'make_can_msg', 'put', 'put_nonblocking',
+                        'put_bool', 'put_int', 'sendcan', 'can_send', 'can_send_many', 'Panda', 'SpiDevice'}
+
+
+def test_host_storm_cannot_starve_received_setting_edge():
+  r, store = recorder()
+  send(r, 100., 0x160, 0)
+  for i in range(100): send(r, 100.001+i*.001, 0x1AA, (i % 2) << 39, direction='tx_requested')
+  send(r, 100.15, 0x160, 1 << 24)
+  rows = [row for row in observations(store) if row['address'] == 0x160]
+  assert len(rows) == 2 and rows[-1]['fields']['AEB_SETTING'] == 1
+  assert r.settings_trace_count == 1 and r.adas_observation_dropped > 0
+
+
+def test_unknown_fingerprint_wrong_length_and_stale_coverage_are_explicit():
+  r, store = recorder(None)
+  send(r, 100., 0x160, 0)
+  assert r.adas_unknown_fingerprint_frames == 1 and not store.rows
+  r.metadata['car_fingerprint'] = 'HYUNDAI_PALISADE_LX3_HEV'
+  send(r, 100.1, 0x160, 0, length=32)
+  r.can_frame(2, 0x160, bytes(16), 98_000_000_000, 100.2)
+  send(r, 100.3, 0x160, 0)
+  coverage = observations(store)[0]['coverage_counters']
+  assert coverage['unknown_fingerprint_frames'] == coverage['length_mismatch'] == coverage['stale_can_frames'] == 1
+
+
+def test_next_chunk_keeps_unchanged_state_as_baseline(tmp_path):
+  from selfdrive.carrot.can_diagnostics.automatic import ChunkStore
+  from selfdrive.carrot.can_diagnostics.button_trace_report import summarize
+  from selfdrive.carrot.can_diagnostics.test_automatic import services
+  store = ChunkStore(tmp_path, reserve=0, seconds=1, chunk_bytes=100000)
+  r = AutoRecorder(store, {'boot_id': 'A', 'car_fingerprint': 'HYUNDAI_PALISADE_LX3_HEV'})
+  r.update(services(), 100.)
+  send(r, 100.1, 0x1E0, 2 << 27)
+  send(r, 100.8, 0x1E0, 2 << 27)
+  r.update(services(101.2), 101.2)
+  send(r, 101.3, 0x1E0, 2 << 27)
+  r.close()
+  rows = summarize(tmp_path)['adas_state_evidence']['observations']
+  assert len(rows) == 2
+  assert rows[-1]['phase'] == 'baseline_chunk_boundary'
+  assert rows[-1]['before'] is None and rows[-1]['fields']['LFA_OptUsmSta'] == 2
