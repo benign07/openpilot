@@ -2,8 +2,59 @@
 import ast
 from pathlib import Path
 import re
+import builtins
+from types import SimpleNamespace
+import pytest
 
 from selfdrive.carrot.can_diagnostics.automatic import AutoRecorder
+
+
+def test_old_native_registry_is_observed_without_reading_unregistered_keys():
+  from selfdrive.carrot.can_diagnostics.automatic_runtime import settings_snapshot
+  class OldParams:
+    def all_keys(self): return [b'OpenpilotEnabledToggle', b'RecordRoadCam', b'DisableLogging']
+    def get(self, key):
+      assert key in ('OpenpilotEnabledToggle', 'RecordRoadCam', 'DisableLogging')
+      return {'OpenpilotEnabledToggle': False, 'RecordRoadCam': 1, 'DisableLogging': False}[key]
+  row = settings_snapshot(OldParams())
+  assert row['OpenpilotEnabledToggle'] is False and row['RecordRoadCam'] == 1
+  assert row['driving_preferences'] == {'status': 'module_not_installed'}
+  assert 'ApproachComfortEnabled' in row['unsupported_on_this_build']
+
+
+def test_modern_registered_settings_keep_their_values():
+  from selfdrive.carrot.can_diagnostics.automatic_runtime import settings_snapshot, PARAMS
+  p = SimpleNamespace(all_keys=lambda: list(PARAMS), get=lambda key: b'7')
+  row = settings_snapshot(p, SimpleNamespace(read=lambda: {'LaunchFollowStrength': 10}))
+  assert all(row[key] == '7' for key in PARAMS)
+  assert row['unsupported_on_this_build'] == []
+  assert row['driving_preferences']['LaunchFollowStrength'] == 10
+
+
+@pytest.mark.parametrize('missing_name,optional', [
+  ('openpilot.selfdrive.controls.lib.approach_comfort', True), ('nested_dependency', False)])
+def test_only_exact_absent_optional_module_is_tolerated(monkeypatch, missing_name, optional):
+  from selfdrive.carrot.can_diagnostics.automatic_runtime import optional_driving_preferences
+  original = builtins.__import__
+  def fake_import(name, *args, **kwargs):
+    if name == 'openpilot.selfdrive.controls.lib.approach_comfort':
+      raise ModuleNotFoundError('missing dependency', name=missing_name)
+    return original(name, *args, **kwargs)
+  monkeypatch.setattr(builtins, '__import__', fake_import)
+  if optional:
+    assert optional_driving_preferences() is None
+  else:
+    with pytest.raises(ModuleNotFoundError): optional_driving_preferences()
+
+
+def test_host_passive_context_does_not_claim_actual_panda_or_relay_state():
+  from selfdrive.carrot.can_diagnostics.automatic_runtime import vehicle_capture_context
+  cp = SimpleNamespace(passive=True, dashcamOnly=False,
+                       safetyConfigs=[SimpleNamespace(safetyModel='noOutput', safetyParam=0)])
+  row = vehicle_capture_context(cp)
+  assert row['passive'] is True and row['dashcam_only'] is False
+  assert row['safety_configs'] == [{'model': 'noOutput', 'param': 0}]
+  assert row['scope'] == 'host_CarParams_not_live_Panda_mode_or_physical_relay_verification'
 
 
 class Store:
@@ -72,7 +123,7 @@ def test_source_echo_rejection_and_request_have_independent_baselines():
 
 def test_all_declared_bits_match_installed_dbc_including_motorola_fields():
   text = (Path(__file__).resolve().parents[3] /
-          'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc').read_text()
+          'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_lx3_hev.dbc').read_text(encoding='utf8')
   messages = {}
   for block in text.split('BO_ ')[1:]:
     head = re.match(r'(\d+) (\w+): (\d+)', block)

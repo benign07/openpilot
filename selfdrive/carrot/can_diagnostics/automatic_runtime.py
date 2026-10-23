@@ -47,6 +47,34 @@ PARAMS += tuple('CruiseMaxVals'+str(i) for i in range(7)) + (
   'LongTuningKpV', 'LongTuningKiV', 'LongTuningKf')
 PARAMS += ('UseLaneLineSpeed', 'UseLaneLineCurveSpeed', 'PathOffset', 'AdjustLaneOffset',
            'LatMpcInputOffset', 'LaneLineCheck')
+PARAMS += ('OpenpilotEnabledToggle', 'RecordRoadCam', 'DisableLogging')
+
+
+def settings_snapshot(params, driving_preferences=None):
+  """Observe registered keys only; older native Params registries stay intact."""
+  registered = {key.decode() if isinstance(key, bytes) else key for key in params.all_keys()}
+  values = {key: read_param(params, key) for key in PARAMS if key in registered}
+  values['unsupported_on_this_build'] = [key for key in PARAMS if key not in registered]
+  values['driving_preferences'] = (driving_preferences.read() if driving_preferences is not None
+                                   else {'status': 'module_not_installed'})
+  return values
+
+
+def optional_driving_preferences():
+  try:
+    from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences
+  except ModuleNotFoundError as exc:
+    if exc.name != 'openpilot.selfdrive.controls.lib.approach_comfort':
+      raise
+    return None
+  return DrivingPreferences()
+
+
+def vehicle_capture_context(cp):
+  return {'passive': bool(cp.passive), 'dashcam_only': bool(cp.dashcamOnly),
+          'safety_configs': [{'model': str(config.safetyModel), 'param': int(config.safetyParam)}
+                             for config in cp.safetyConfigs],
+          'scope': 'host_CarParams_not_live_Panda_mode_or_physical_relay_verification'}
 
 
 def recording_storage_status(root, usage=None):
@@ -208,10 +236,9 @@ class AutomaticController:
   def live_loop(self):
     from cereal import car, messaging
     from openpilot.common.params import Params
-    from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences
 
     params = Params()
-    driving_preferences = DrivingPreferences()
+    driving_preferences = optional_driving_preferences()
     sm = messaging.SubMaster(list(FIELDS))
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
     panda_socket = messaging.sub_sock('pandaStates', timeout=0, conflate=True)
@@ -317,13 +344,12 @@ class AutomaticController:
                                 meaning='clock_mapping_changed_not_producer_outage_proof')
         self.recorder.observer_tick(now)
       if now - last_metadata >= 5:
-        metadata['settings'] = {key: read_param(params, key) for key in PARAMS}
-        metadata['settings']['driving_preferences'] = driving_preferences.read()
-        if metadata['car_fingerprint'] is None:
-          raw = params.get('CarParams')
-          if raw:
-            with car.CarParams.from_bytes(raw) as cp:
-              metadata['car_fingerprint'] = cp.carFingerprint
+        metadata['settings'] = settings_snapshot(params, driving_preferences)
+        raw = params.get('CarParams')
+        if raw:
+          with car.CarParams.from_bytes(raw) as cp:
+            metadata['car_fingerprint'] = cp.carFingerprint
+            metadata['vehicle_capture_context'] = vehicle_capture_context(cp)
         last_metadata = now
       if now - last_storage >= 30:
         metadata['recording_retention'] = recording_storage_status(self.root)
