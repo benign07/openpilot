@@ -57,6 +57,21 @@ def test_host_passive_context_does_not_claim_actual_panda_or_relay_state():
   assert row['scope'] == 'host_CarParams_not_live_Panda_mode_or_physical_relay_verification'
 
 
+def test_missing_car_params_clears_prior_trip_capture_plan():
+  from contextlib import nullcontext
+  from selfdrive.carrot.can_diagnostics.automatic_runtime import update_vehicle_metadata
+  cp = SimpleNamespace(carFingerprint='HYUNDAI_PALISADE_LX3_HEV', passive=True,
+                       dashcamOnly=False, safetyConfigs=[])
+  schema = SimpleNamespace(from_bytes=lambda raw: nullcontext(cp))
+  metadata = {}
+  update_vehicle_metadata(metadata, b'present', schema, 100)
+  assert metadata['vehicle_capture_context']['passive'] is True
+  assert metadata['car_fingerprint'] == cp.carFingerprint
+  update_vehicle_metadata(metadata, None, schema, 200)
+  assert metadata['car_fingerprint'] is None
+  assert metadata['vehicle_capture_context'] == {'status': 'car_params_absent', 'observed_mono_ns': 200}
+
+
 class Store:
   def __init__(self): self.rows = []
   def append(self, row, now): self.rows.append(row); return True

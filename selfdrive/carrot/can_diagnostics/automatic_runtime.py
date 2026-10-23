@@ -77,6 +77,18 @@ def vehicle_capture_context(cp):
           'scope': 'host_CarParams_not_live_Panda_mode_or_physical_relay_verification'}
 
 
+def update_vehicle_metadata(metadata, raw, car_params, mono_ns):
+  # CarParams is cleared at onroad transitions. Never carry the prior trip's
+  # passive/safety plan into a new header while the next card is identifying.
+  fingerprint = None
+  context = {'status': 'car_params_absent', 'observed_mono_ns': mono_ns}
+  if raw:
+    with car_params.from_bytes(raw) as cp:
+      fingerprint = cp.carFingerprint
+      context = {**vehicle_capture_context(cp), 'status': 'observed', 'observed_mono_ns': mono_ns}
+  metadata.update(car_fingerprint=fingerprint, vehicle_capture_context=context)
+
+
 def recording_storage_status(root, usage=None):
   """Mirror stock loggerd retention thresholds; never change or bypass them."""
   try:
@@ -346,10 +358,7 @@ class AutomaticController:
       if now - last_metadata >= 5:
         metadata['settings'] = settings_snapshot(params, driving_preferences)
         raw = params.get('CarParams')
-        if raw:
-          with car.CarParams.from_bytes(raw) as cp:
-            metadata['car_fingerprint'] = cp.carFingerprint
-            metadata['vehicle_capture_context'] = vehicle_capture_context(cp)
+        update_vehicle_metadata(metadata, raw, car.CarParams, int(now*1e9))
         last_metadata = now
       if now - last_storage >= 30:
         metadata['recording_retention'] = recording_storage_status(self.root)
