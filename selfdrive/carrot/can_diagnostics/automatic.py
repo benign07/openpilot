@@ -308,10 +308,31 @@ class AutoRecorder:
   # selection around physical LX3 button presses. The ordinary rlog remains
   # the independent full CAN source when its route segments are retained.
   ADDRESSES = {0x0A0, 0x0CB, 0x0EA, 0x105, 0x10B, 0x12A, 0x161, 0x162, 0x175,
-               0x1A0, 0x1AA, 0x1BA, 0x1CF, 0x1EA, 0x2A4, 0x2AF, 0x362}
-  LX3_ONLY_ADDRESSES = {0x0A0, 0x105, 0x175, 0x1AA, 0x1BA, 0x1CF, 0x2AF}
+               0x160, 0x1A0, 0x1AA, 0x1BA, 0x1CF, 0x1E0, 0x1EA, 0x2A4, 0x2AF, 0x362}
+  LX3_ONLY_ADDRESSES = {0x0A0, 0x105, 0x160, 0x175, 0x1AA, 0x1BA, 0x1CF, 0x1E0, 0x2AF}
   TRACE_ADDRESSES = {0x0CB, 0x0EA, 0x10B, 0x12A, 0x161, 0x162, 0x1A0,
-                     0x1BA, 0x1EA, 0x2A4, 0x2AF, 0x362}
+                     0x160, 0x1AA, 0x1BA, 0x1E0, 0x1EA, 0x2A4, 0x2AF, 0x362}
+  # LSB bit positions of contiguous raw fields in the installed LX3 DBC.
+  # These are candidates, not AVN setting acknowledgements or ECU identities.
+  # Do not include counters/geometry: neither is a settings transition.
+  ADAS_STATE_FIELDS = {
+    0x160: (16, (('AEB_SETTING', 24, 2),)),
+    0x1E0: (16, (('HDA_OptUsmSta', 24, 3), ('LFA_OptUsmSta', 27, 3),
+                 ('HDA_CntrlModSta', 30, 2), ('HDA_LFA_SymSta', 47, 2), ('HDA_LFA_WrnSnd', 49, 2))),
+    0x1AA: (16, (('ADAPTIVE_CRUISE_MAIN_BTN', 34, 1), ('CRUISE_BUTTONS', 36, 3),
+                 ('LFA_BTN', 39, 1), ('NORMAL_CRUISE_MAIN_BTN', 41, 1))),
+    0x12A: (16, (('LKA_MODE', 24, 3), ('LKA_ACTIVE', 27, 2), ('LKA_WARNING', 32, 1),
+                 ('LKA_ICON', 38, 2), ('FCA_SYSWARN', 40, 1), ('STEER_REQ', 52, 1),
+                 ('LKAS_ANGLE_ACTIVE', 76, 2), ('HAS_LANE_SAFETY', 80, 1))),
+    0x161: (32, (('FCA_ICON', 24, 3), ('FCA_ALT_ICON', 27, 3), ('LKA_ICON', 30, 3),
+                 ('ALERTS_1', 128, 6), ('ALERTS_2', 134, 5), ('ALERTS_3', 139, 5),
+                 ('ALERTS_4', 144, 8), ('ALERTS_5', 152, 5), ('HDA_ICON', 212, 3), ('LFA_ICON', 224, 3))),
+    0x162: (32, (('VIBRATE', 52, 1), ('FAULT_FSS', 213, 3), ('FAULT_FCA', 216, 3),
+                 ('FAULT_LSS', 219, 3), ('FAULT_LFA', 234, 3), ('FAULT_HDA', 237, 3), ('FAULT_DAS', 246, 3))),
+  }
+  ADAS_OBSERVATIONS_PER_SECOND = 20
+  SETTINGS_TRACE_MAX_PER_TRIP = 6
+  SETTINGS_TRACE_INTERVAL = 30.0
   # Raw samples are kept at 10 Hz outside a button trace. The full-rate trace
   # is bounded in time, memory, and frames, and never transmits a CAN packet.
   BUTTON_TRACE_PRE_NS = 2_000_000_000
@@ -361,6 +382,12 @@ class AutoRecorder:
     self.blindspot_trace_count = 0
     self.last_blindspot_trace = -math.inf
     self.last_diagnostic_trace = -math.inf
+    self.adas_state = {}
+    self.adas_observation_times = deque(maxlen=self.ADAS_OBSERVATIONS_PER_SECOND)
+    self.adas_observation_count = self.adas_observation_dropped = self.adas_out_of_order = 0
+    self.adas_dropped_since_previous = 0
+    self.settings_trace_count = 0
+    self.last_settings_trace = -math.inf
     self.transport_baseline = None
     self.transport_identity = None
     self.transport_report_time = -math.inf
@@ -425,20 +452,27 @@ class AutoRecorder:
     self.last_event['diagnostic:' + reason] = now
     steering = reason in ('lane_departure', 'haptic_request', 'oem_fault_edge')
     blindspot = reason == 'blindspot_warning_candidate'
-    if blindspot:
+    settings = reason == 'adas_setting_candidate_edge'
+    if settings:
+      quota_available = self.settings_trace_count < self.SETTINGS_TRACE_MAX_PER_TRIP
+      last_trace, interval = self.last_settings_trace, self.SETTINGS_TRACE_INTERVAL
+    elif blindspot:
       quota_available = self.blindspot_trace_count < self.BLINDSPOT_TRACE_MAX_PER_TRIP
       last_trace, interval = self.last_blindspot_trace, self.BLINDSPOT_TRACE_INTERVAL
     elif steering:
       quota_available = self.steering_trace_count < self.STEERING_TRACE_MAX_PER_TRIP
       last_trace, interval = self.last_steering_trace, self.STEERING_TRACE_INTERVAL
     else:
-      quota_available = (self.diagnostic_trace_count - self.steering_trace_count - self.blindspot_trace_count
+      quota_available = (self.diagnostic_trace_count - self.steering_trace_count - self.blindspot_trace_count - self.settings_trace_count
                          < self.DIAGNOSTIC_TRACE_MAX_PER_TRIP)
       last_trace, interval = self.last_diagnostic_trace, self.DIAGNOSTIC_TRACE_INTERVAL
     if self.trace is None and quota_available and now - last_trace >= interval:
       self.begin_trace(mono_ns, now, 'diagnostic:' + reason, trigger=reason, trigger_details=details)
       self.diagnostic_trace_count += 1
-      if blindspot:
+      if settings:
+        self.settings_trace_count += 1
+        self.last_settings_trace = now
+      elif blindspot:
         self.blindspot_trace_count += 1
         self.last_blindspot_trace = now
       elif steering:
@@ -576,6 +610,12 @@ class AutoRecorder:
       self.blindspot_trace_count = 0
       self.last_blindspot_trace = -math.inf
       self.last_diagnostic_trace = -math.inf
+      self.adas_state.clear()
+      self.adas_observation_times.clear()
+      self.adas_observation_count = self.adas_observation_dropped = self.adas_out_of_order = 0
+      self.adas_dropped_since_previous = 0
+      self.settings_trace_count = 0
+      self.last_settings_trace = -math.inf
       self.transport_baseline = self.transport_identity = None
       self.transport_report_time = -math.inf
       self.transport_previous = {}
@@ -600,6 +640,7 @@ class AutoRecorder:
       self.last_sample = -math.inf
       self.recording_route = route
       self.route_observed_ns = int(now * 1e9)
+      self.adas_state.clear()
     if self.trace is not None and not self.trace_active(now):
       self.close_trace(now, 'window_elapsed')
     ready = self.rotate_full_chunk(now) and self.store.begin(self.chunk_metadata(now), now)
@@ -618,6 +659,9 @@ class AutoRecorder:
               'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
               'stale_can_frames': self.stale_can_frames, 'stale_panda_snapshots': self.stale_panda_snapshots,
               'storage_dropped': self.storage_dropped, 'dropped_no_stream': self.store.dropped_no_stream,
+              'adas_state_evidence': {'observations': self.adas_observation_count,
+                                      'dropped': self.adas_observation_dropped,
+                                      'out_of_order': self.adas_out_of_order},
               'route': self.recording_route}
     self.store.append(sample, now)
     cs = services.get('carState', {}).get('data', {})
@@ -693,6 +737,62 @@ class AutoRecorder:
         self.event('lead_flicker_candidate', now, classification='target_change_or_dropout_unconfirmed')
     self.previous, self.last_sample = current, now
 
+  def adas_observation(self, bus, address, data, mono_ns, now, direction, source_mono_ns, identity):
+    spec = self.ADAS_STATE_FIELDS.get(address)
+    if (self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV'
+        or spec is None or len(data) != spec[0]):
+      return
+    key = direction, bus, address
+    previous = self.adas_state.get(key)
+    if previous is None and len(self.adas_state) >= 128:
+      self.adas_observation_dropped += 1
+      self.adas_dropped_since_previous += 1
+      return
+    if previous is not None and mono_ns < previous[0]:
+      self.adas_out_of_order += 1
+      return
+    bits = int.from_bytes(data, 'little')
+    fields = {name: (bits >> start) & ((1 << size)-1) for name, start, size in spec[1]}
+    self.adas_state[key] = mono_ns, fields
+    gap = previous is not None and mono_ns-previous[0] > 1_000_000_000
+    if previous is not None and fields == previous[1] and not gap:
+      return
+    before = previous[1] if previous is not None and not gap else None
+    # Preserve short button pulses even between the 10 Hz raw samples. A
+    # noisy stream must not turn this into unbounded full CAN recording.
+    while self.adas_observation_times and now-self.adas_observation_times[0] >= 1.0:
+      self.adas_observation_times.popleft()
+    if len(self.adas_observation_times) >= self.ADAS_OBSERVATIONS_PER_SECOND:
+      self.adas_observation_dropped += 1
+      self.adas_dropped_since_previous += 1
+      return
+    self.adas_observation_times.append(now)
+    changed = [name for name in fields if before is not None and fields[name] != before[name]]
+    setting_fields = {0x160: {'AEB_SETTING'}, 0x1E0: {'HDA_OptUsmSta', 'LFA_OptUsmSta'}}
+    # Only an observed settings-candidate edge opens its own bounded window.
+    # Automatic host button pulses never open or prolong a window themselves.
+    if direction == 'rx' and set(changed) & setting_fields.get(address, set()):
+      self.diagnostic_trigger('adas_setting_candidate_edge', mono_ns, now, bus=bus,
+                              address=address, changed_fields=changed,
+                              meaning='raw_candidate_not_user_action_or_setting_ack')
+    row = {'kind': 'event', 'name': 'adas_state_observation',
+           **self.can_row(mono_ns, direction, bus, address, data, source_mono_ns, identity),
+           'observed_mono_ns': int(now*1e9), 'fields': fields, 'before': before,
+           'phase': 'baseline_after_gap' if gap else 'baseline' if previous is None else 'edge',
+           'previous_mono_ns': previous[0] if previous is not None else None,
+           'same_timestamp_as_previous': previous is not None and mono_ns == previous[0],
+           'classification': 'dbc_candidate_not_setting_ack_or_cause',
+           'integrity': 'not_validated_by_recorder',
+           'dropped_since_previous': self.adas_dropped_since_previous,
+           'observation_index': self.adas_observation_count+1,
+           'trace_id': self.trace['id'] if self.trace_active(now) else None}
+    if self.store.append(row, now) is False:
+      self.adas_observation_dropped += 1
+      self.adas_dropped_since_previous += 1
+    else:
+      self.adas_observation_count += 1
+      self.adas_dropped_since_previous = 0
+
   def can_frame(self, bus, address, data, mono_ns, now, direction='rx', source_mono_ns=None, identity=None):
     if (address not in self.ADDRESSES or not 0 <= bus < 256 or len(data) > 64 or
         (address in self.LX3_ONLY_ADDRESSES and self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV')):
@@ -720,6 +820,7 @@ class AutoRecorder:
         direction = 'tx_rejected'
       elif bus >= 128:
         direction = 'tx_echo'
+    self.adas_observation(bus, address, data, mono_ns, now, direction, source_mono_ns, identity)
     self.button_edges(bus, address, data, mono_ns, now, direction)
     if address == 0x162 and len(data) == 32 and direction == 'tx_requested':
       vibrate = bool(data[6] & 0x10)  # DBC 52|1@0, meaning still needs LX3 qualification.
@@ -953,6 +1054,10 @@ class AutoRecorder:
             'diagnostic_traces': self.diagnostic_trace_count,
             'steering_diagnostic_traces': self.steering_trace_count,
             'blindspot_diagnostic_traces': self.blindspot_trace_count,
+            'settings_diagnostic_traces': self.settings_trace_count,
+            'adas_state_observations': self.adas_observation_count,
+            'adas_observation_dropped': self.adas_observation_dropped,
+            'adas_out_of_order': self.adas_out_of_order,
             'longitudinal_evidence_frames': self.longitudinal_frames,
             'longitudinal_evidence_rejected': self.longitudinal_rejected,
             'lateral_evidence_transport': 'bounded_event_lateral_margin_evidence',

@@ -1,0 +1,35 @@
+name: LX3 passive ADAS settings evidence
+on:
+  push:
+    branches: [review/lx3-adas-settings-20261023]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  passive-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest aiohttp cryptography requests
+      - name: State provenance, real chunks, quotas, HTTP, signatures and rollback
+        run: |
+          set -o pipefail
+          ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE"
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_adas_settings_evidence.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/controls/tests/test_recording_rotation.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=adas.xml 2>&1 | tee adas.log
+          python -m py_compile selfdrive/carrot/can_diagnostics/automatic.py selfdrive/carrot/can_diagnostics/automatic_runtime.py selfdrive/carrot/can_diagnostics/button_trace_report.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: adas-settings-${{ matrix.python }}
+          path: |
+            adas.xml
+            adas.log
+      - name: Verification scope
+        run: echo 'Passive selected CAN evidence and source updater contracts only. No new CAN publication, control/Panda/MDPS/DM/planner change, firmware build, ECU acceptance, haptic motor or road qualification.' >> "$GITHUB_STEP_SUMMARY"

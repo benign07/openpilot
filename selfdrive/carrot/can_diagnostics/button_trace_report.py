@@ -14,7 +14,7 @@ PAIRS = {0x1A0: (2, 128), 0x0CB: (2, 128), 0x0EA: (0, 130), 0x12A: (2, 128)}
 KST = timezone(timedelta(hours=9))
 
 
-def verified_rows(root):
+def verified_rows(root, include_untraced=False):
   manifests = sorted(Path(root).glob('*.manifest.json'))
   if not manifests:
     raise ValueError('no sealed automatic diagnostic chunks found')
@@ -29,8 +29,11 @@ def verified_rows(root):
       offset = header['utc_ns'] - header['mono_ns']
       for line in stream:
         row = json.loads(line)
-        if row.get('trace_id'):
+        if row.get('trace_id') or include_untraced:
           row['_utc_ns'] = row['mono_ns'] + offset
+          row['_boot_id'] = header.get('boot_id')
+          row['_route'] = header.get('route')
+          row['_chunk_id'] = manifest['id']
           yield row
 
 
@@ -65,7 +68,15 @@ def _can_pair_counts(frames):
 
 def summarize(root):
   traces = defaultdict(lambda: {'start': None, 'end': None, 'frames': [], 'events': [], 'samples': []})
-  for row in verified_rows(root):
+  adas = []
+  adas_counts = Counter()
+  for row in verified_rows(root, include_untraced=True):
+    if row.get('name') == 'adas_state_observation':
+      adas_counts[f"{row['direction']}/bus{row['bus']}/0x{row['address']:03X}"] += 1
+      if len(adas) < 10000:
+        adas.append(row)
+    if not row.get('trace_id'):
+      continue
     trace = traces[row['trace_id']]
     if row['kind'] == 'button_trace_can':
       trace['frames'].append(row)
@@ -85,9 +96,12 @@ def summarize(root):
       raise ValueError(f'button trace start missing: {trace_id}')
     start_ns = start['mono_ns']
     events = sorted(trace['events'], key=lambda row: row['mono_ns'])
-    important = {'host_state_edge', 'panda_state_edge', 'oem_fault_observation', 'physical_button_edge'}
+    important = {'host_state_edge', 'panda_state_edge', 'oem_fault_observation', 'physical_button_edge',
+                 'adas_state_observation'}
     timeline = [{key: value for key, value in row.items() if key in
-                 ('name', 'button', 'field', 'before', 'after', 'direction', 'bus', 'raw_cruise', 'lfa_btn')}
+                 ('name', 'button', 'field', 'before', 'after', 'direction', 'bus', 'raw_cruise', 'lfa_btn',
+                  'address', 'fields', 'phase', 'integrity', 'classification', 'dropped_since_previous',
+                  'observation_index', 'same_timestamp_as_previous')}
                 | {'after_button_ms': _relative(row, start_ns)}
                 for row in events if row['name'] in important]
     counts = Counter(f"{frame['direction']}/bus{frame['bus']}/0x{frame['address']:03X}"
@@ -106,7 +120,14 @@ def summarize(root):
       'timeline': timeline,
     })
   return {'schema': 1, 'source': str(Path(root)), 'traces': sorted(result, key=lambda row: row['start_kst']),
+          'adas_state_evidence': {'observations': sorted(adas, key=lambda r: (
+                                    str(r['_boot_id'] or 'unknown:'+r['_chunk_id']), r['mono_ns'], r.get('observation_index', 0))),
+                                  'counts': dict(adas_counts), 'report_omitted': max(0, sum(adas_counts.values())-len(adas)),
+                                  'ordering': 'boot_id_then_monotonic_not_cross_boot_chronology',
+                                  'scope': 'selected_raw_candidates_not_AVN_state_or_ECU_ack'},
           'limits': ['TX echo is not OEM acceptance or an actuator response.',
+                     'ADAS fields follow the installed DBC; integrity is not validated by the recorder.',
+                     'Equal packet timestamps preserve collector order, not per-frame ECU timing.',
                      'Only selected CAN addresses are captured at full rate during bounded windows.',
                      'A missing host or Panda edge may reflect source publication or recorder gaps; counters only show known gaps.',
                      'Button labels follow the installed LX3 DBC and require physical input review.']}

@@ -37,6 +37,7 @@ PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFol
           'TFollowGap3', 'TFollowGap4', 'LaneChangeNeedTorque', 'AlwaysLateral', 'TurnSpeedControlMode',
           'ModelTurnSpeedFactor', 'AutoNaviSpeedCtrlMode', 'EnableRadarTracks', 'EnableCornerRadar',
           'HardwareC3xLite', 'DisableDM', 'SoundVolumeAdjust', 'C3xLiteBuzzerMute', 'C3xLiteHapticNotifications',
+          'CanfdDebug', 'HapticFeedbackWhenSpeedCamera', 'HDPuse',
           'ApproachComfortEnabled', 'ApproachCoastStrength', 'ApproachBrakeMargin', 'ApproachStopSmooth',
           'ApproachTrafficCalm', 'ApproachFlexibleGap', 'ApproachFlexibleGapMin',
           'EnableSpeedTF', 'TFollowDecelBoost', 'DynamicTFollow', 'DynamicTFollowLC', 'StopDistanceCarrot', 'ManualSteerWithBlinker',
@@ -229,10 +230,21 @@ class AutomaticController:
                                  'host_context_max_hz': 20, 'panda_max_hz': 20, 'panda_periodic_max_hz': 10},
                 'physical_ecu_origin': 'not_inferred_from_bus'}
     metadata['diagnostic_trace'] = {'triggers': ['oem_fault_edge', 'panda_authority_edge',
-                                                'transport_counter_change', 'observer_gap', 'blindspot_warning_candidate'],
+                                                'transport_counter_change', 'observer_gap', 'blindspot_warning_candidate',
+                                                'adas_setting_candidate_edge'],
                                     'max_extra_traces_per_trip': 8, 'min_new_window_interval_s': 30,
                                     'spi_scope': 'existing_health_aggregate_only_not_stage_reasons',
                                     'echo_scope': 'panda_tx_confirmation_not_receiving_ecu_ack'}
+    metadata['adas_state_evidence'] = {
+      'schema': 1, 'source': 'selected_raw_CAN_fields_in_installed_LX3_DBC',
+      'addresses': [f'0x{address:03X}' for address in AutoRecorder.ADAS_STATE_FIELDS],
+      'maximum_observations_per_second': AutoRecorder.ADAS_OBSERVATIONS_PER_SECOND,
+      'settings_windows_per_trip': AutoRecorder.SETTINGS_TRACE_MAX_PER_TRIP,
+      'settings_window_interval_s': AutoRecorder.SETTINGS_TRACE_INTERVAL,
+      'classification': 'dbc_candidate_not_setting_ack_or_cause',
+      'integrity': 'not_validated_by_recorder',
+      'ordering': 'equal_packet_timestamps_keep_collector_frame_order_not_per_frame_hardware_time',
+      'coverage': 'changed_fields_not_every_CAN_frame; raw_rlog_remains_independent_source'}
     metadata['longitudinal_evidence'] = {'schema': 1, 'producer_clock': 'monotonic',
                                        'source': 'existing_logMessage_and_rlog', 'maximum_frame_bytes': 32768,
                                        'comparison': 'same_filter_state_ceiling_not_alternative_command_or_placebo_proof'}
@@ -249,6 +261,7 @@ class AutomaticController:
     repo = Path(__file__).resolve().parents[3]
     sources = ('selfdrive/carrot/can_diagnostics/automatic.py', 'selfdrive/carrot/can_diagnostics/automatic_runtime.py',
                'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
+               'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py',
                'opendbc_repo/opendbc/car/hyundai/radar_interface.py', 'selfdrive/controls/controlsd.py',
                'selfdrive/carrot/manual_steering.py', 'cereal/car.capnp',
                'selfdrive/carrot/carrot_functions.py', 'selfdrive/controls/lib/approach_comfort.py',
