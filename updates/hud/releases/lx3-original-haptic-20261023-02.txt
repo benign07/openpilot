@@ -1,0 +1,18 @@
+Original LX3 haptic-only bootstrap lx3-original-haptic-20261023-02
+
+Preserves the original0627 controls/MDPS/Panda/schema and calibration. This is not a latest-control-stack migration.
+Fixes missing original HUD audible-alert producer wiring, registered independent haptic option and bounded0.8s routine request.
+Ports the corrected original8s speed-camera haptic timer, preserving the five0.5s windows and its existing setting.
+Rebuilds only the compatible original CPython3.12/AArch64 Params extension: original316 descriptors retained plus1default-offBOOL.
+Existing critical audio/beep policy is preserved. No torque/angle oscillation, fault masking, synthetic buttons or permission override was added.
+
+Evidence: exact CI39960209248/source bf0c21da188ed491266736c7ebec75a59ffc3011, Linux3.11 and3.12 each560PASS; ARM registry/ABI and all21paired original sources verified.
+Actual original-device staged import/enum/native-key test passed without CAN transmission.
+Parked10s source/native installation, fresh new boot, 7file hashes and protected hashes, and60s stable core processes/CAN verified.
+Normal driving mode and haptic preference were enabled; stock DisableDM and calibration retained.
+Physical steering-wheel motor response and road qualification remain UNVERIFIED. VIBRATE correlation/duration does not prove sole motor command or cause.
+The SPI checksum counter continued increasing while parked; SPI and the pre-existing cluster steering warning are NOT resolved by this haptic patch.
+An engage event arriving before authority eligibility can be consumed rather than replayed. No approval override or artificial event was added.
+
+Separate original-device bootstrap only. Not offered through shared HUD source OTA; source allowlist and shared latest.json are unchanged.
+Rollback is a separate signed parked operation and restores the pre-install passive configuration.
