@@ -58,7 +58,9 @@ def main():
    assert descriptor[KEY]=={'type':int(ParamKeyType.BOOL),'default':False}
    assert not p.get_bool(KEY)
    p.put_bool(KEY,True);assert p.get_bool(KEY)
-   p.clear_all(ParamKeyFlag.CLEAR_ON_MANAGER_START);assert p.get_bool(KEY)
+   for flag in (ParamKeyFlag.CLEAR_ON_MANAGER_START,ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION,
+                ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION,ParamKeyFlag.CLEAR_ON_IGNITION_ON):
+    p.clear_all(flag);assert p.get_bool(KEY)
    p.put_bool(KEY,False);assert not p.get_bool(KEY)
    assert not any(k.startswith('Calibration') and p.get(k) is not None for k in keys)
  binary=ROOT/'common/params_pyx.so'

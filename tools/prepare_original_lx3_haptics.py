@@ -7,6 +7,7 @@ import argparse
 import ast
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,7 @@ BASE = {
   FACTORY: '554dde792342f3dc3ca9abe56428bae7bb98b53f9d821f7aeea309bca9226ccd',
   KEYS: '07debde2b9648c3fe97af0077e407fe56babf5bacaf9d97c8b8dd570a3b3003c',
   PRODUCER: 'fd5f457c1685831e646abfcb7664aa9e26d2f4a72dc0229312aecc5d4692ff7b',
+  SETTINGS: 'b0bbd5acf822fd7a13011bb3b273aa16a2f8a3fd23c3c35d59be84c3e6a473e1',
 }
 
 
@@ -34,8 +36,12 @@ def replace_once(text, before, after):
   return text.replace(before, after, 1)
 
 
-def prepare(installed):
-  sources = {n: (installed/n).read_bytes() for n in (*BASE, SETTINGS)}
+def committed(commit, name):
+  return subprocess.check_output(['git','show',commit+':'+name],cwd=ROOT)
+
+
+def prepare(installed, source_commit):
+  sources = {n: (installed/n).read_bytes() for n in BASE}
   for name, expected in BASE.items():
     if sha(sources[name]) != expected:
       raise ValueError('Original source mismatch: '+name)
@@ -60,7 +66,7 @@ def prepare(installed):
   # Port the independently reviewed camera timer fix, not unrelated controls.
   start = c.index('    active_speed_decel = hud_control.activeCarrot == 3')
   end = c.index('    if self.frame % self.blinking_frame == 0:', start)
-  latest = (ROOT/CONTROLLER).read_text(encoding='utf8')
+  latest = committed(source_commit, CONTROLLER).decode('utf8')
   begin = latest.index('    speed_decel_active = hud_control.activeCarrot == 3')
   finish = latest.index('    if self.frame % self.blinking_frame == 0:', begin)
   c = c[:start]+latest[begin:finish]+c[end:]
@@ -101,7 +107,7 @@ def prepare(installed):
     'ko':'핸들 진동','en':'Steering-wheel haptics','params':['C3xLiteHapticNotifications']})
   output = {CONTROLLER:c.encode(), FACTORY:f.encode(), KEYS:k.encode(),
     SETTINGS:(json.dumps(settings,ensure_ascii=False,indent=2)+'\n').encode(),
-    HELPER:(ROOT/HELPER).read_bytes()}
+    HELPER:committed(source_commit, HELPER)}
   producer = sources[PRODUCER].decode('utf8')
   producer = replace_once(producer,
     "    hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual\n",
@@ -118,12 +124,14 @@ def main():
   parser=argparse.ArgumentParser(description=__doc__)
   parser.add_argument('--installed',type=Path,required=True)
   parser.add_argument('--out',type=Path,required=True)
+  parser.add_argument('--source-commit',required=True)
   args=parser.parse_args()
-  before, files=prepare(args.installed)
+  source_commit=subprocess.check_output(['git','rev-parse','--verify',args.source_commit+'^{commit}'],cwd=ROOT,text=True).strip()
+  before, files=prepare(args.installed,source_commit)
   args.out.mkdir(parents=True,exist_ok=False)
   for name, raw in files.items():
     path=args.out/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
-  manifest={'target_serial':'80acfe79','target':'original0627_compatible_haptic_only',
+  manifest={'source_commit':source_commit,'target_serial':'80acfe79','target':'original0627_compatible_haptic_only',
     'not_a_latest_control_stack_migration':True,'device_installed':False,
     'arm_params_build_verified':False,'motor_response_verified':False,
     'native_rebuild_required':'common/params_pyx.so from original matching source/ABI with added key',

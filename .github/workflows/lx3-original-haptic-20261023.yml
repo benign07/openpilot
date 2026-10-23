@@ -22,7 +22,7 @@ jobs:
           set -o pipefail
           ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
           export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
-          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_lx3_notification_resume.py selfdrive/controls/tests/test_camera_haptic_timer.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_notification_border.py selfdrive/controls/tests/test_oem_surround_overlay.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_lateral_margin.py selfdrive/controls/tests/test_surround_recording.py -q --junitxml=haptic.xml 2>&1 | tee haptic.log
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_lx3_notification_resume.py selfdrive/controls/tests/test_camera_haptic_timer.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_notification_border.py selfdrive/controls/tests/test_oem_surround_overlay.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_lateral_margin.py selfdrive/controls/tests/test_surround_recording.py selfdrive/controls/tests/test_original_haptic_deployment.py -q --junitxml=haptic.xml 2>&1 | tee haptic.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
