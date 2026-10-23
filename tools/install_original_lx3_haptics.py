@@ -8,7 +8,7 @@ from pathlib import Path
 import argparse,base64,hashlib,json,os,subprocess,sys,tempfile,time
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-RID='lx3-original-haptic-20261023-01'
+RID='lx3-original-haptic-20261023-02'
 SERIAL='80acfe79'
 PUBLIC_SHA='56d7f915ed4d802bccf46db83f0d7b147579466ed060abdf1dab96759babd223'
 ORDER=['opendbc_repo/opendbc/car/hyundai/lx3_haptic_notifications.py',
@@ -79,7 +79,10 @@ def parked(seconds=10):
  start=time.monotonic();since=None
  while time.monotonic()-start<seconds+8:
   sm.update(100);now=time.monotonic()
-  fresh=all(sm.alive[n] and sm.valid[n] and 0<=now-sm.logMonoTime[n]/1e9<1 for n in sm.services)
+  boot_clock=getattr(time,'CLOCK_BOOTTIME',None)
+  native_now=time.clock_gettime(boot_clock) if boot_clock is not None else now
+  fresh=all(sm.alive[n] and sm.valid[n] and
+    0<=(native_now if n=='pandaStates' else now)-sm.logMonoTime[n]/1e9<1 for n in sm.services)
   cc,cs,ss=sm['carControl'],sm['carState'],sm['selfdriveState']
   good=(fresh and str(cs.gearShifter)=='park' and abs(cs.vEgo)<.01 and abs(cs.vEgoRaw)<.01 and cs.canValid
     and not any((cc.enabled,cc.latActive,cc.longActive,ss.active,ss.enabled))
@@ -99,7 +102,8 @@ def stopped():
    assert comm not in ('pandad','controlsd','card','loggerd'),(proc.name,comm)
    assert not any(a in (b'./manager.py',b'./pandad',b'./controlsd',b'./card',
      b'openpilot.system.manager.manager',b'openpilot.selfdrive.car.card',
-     b'openpilot.selfdrive.controls.controlsd',b'selfdrive.pandad.pandad') for a in args),(proc.name,comm)
+     b'openpilot.selfdrive.controls.controlsd',b'selfdrive.pandad.pandad',
+     b'selfdrive.controls.controlsd',b'selfdrive.car.card') for a in args),(proc.name,comm)
   except (FileNotFoundError,ProcessLookupError,PermissionError):pass
 
 
@@ -140,13 +144,23 @@ print(json.dumps({'native_keys':317,'native_key_roundtrip':True,'original_schema
  save(folder/'import-smoke.json',report);return report
 
 
-def restore(root,folder,record,params_dir=Path('/data/params/d')):
+def restore(root,folder,record,params_dir=Path('/data/params/d'),restore_preferences=True):
+ # Validate every live file and backup before restoring ANY file. A foreign
+ # change must not be silently overwritten by an unrelated stale backup.
+ for name in ORDER:
+  path=checked(root,name);row=record['files'][name]
+  current=sha(path.read_bytes()) if path.is_file() else None
+  assert current in (row['before'],row['sha256']),name
+  if row['before'] is not None:assert sha((folder/'before'/name).read_bytes())==row['before'],name
  for name in reversed(ORDER):
   path=checked(root,name);row=record['files'][name]
+  current=sha(path.read_bytes()) if path.is_file() else None
+  if current==row['before']:continue
+  assert current==row['sha256'],name
   if row['before'] is None:
-   if path.exists():
-    assert sha(path.read_bytes())==row['sha256'];path.unlink()
+   path.unlink()
   else:atomic(path,(folder/'before'/name).read_bytes(),row['mode'])
+ if not restore_preferences:return
  for key,old in record['preferences'].items():
   path=params_dir/key
   if old is None:path.unlink(missing_ok=True)
@@ -154,25 +168,43 @@ def restore(root,folder,record,params_dir=Path('/data/params/d')):
 
 
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('phase',choices=['stage','install'])
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('phase',choices=['stage','install','rollback'])
  parser.add_argument('--folder',type=Path,required=True);args=parser.parse_args()
  root=Path('/data/openpilot');folder=args.folder
  assert root.resolve()==root and folder==Path('/data/lx3_separate_installs')/RID and folder.resolve()==folder
  from openpilot.system.hardware import HARDWARE
- from openpilot.common.params import Params
  assert HARDWARE.get_serial()==SERIAL
  assert sys.version_info[:2]==(3,12) and __import__('platform').machine()=='aarch64'
  state=json.loads(Path('/data/community/hud_updates/state.json').read_text());assert state['phase']=='complete'
- p=Params();assert not p.get_bool('OpenpilotEnabledToggle') and p.get_int('CanfdDebug')==0
- manifest,files,bundle_sha=verify(root,folder);before(root,files)
+ manifest,files,bundle_sha=verify(root,folder)
  record_path=folder/'transaction.json'
+ if args.phase=='rollback':
+  record=json.loads(record_path.read_text());assert record['bundle_sha256']==bundle_sha
+  assert record['phase'] in ('stopping','installing','installed_pending_reboot_verification','recovery_required')
+  record['rollback_gate']=parked()
+  subprocess.run(['sudo','-n','systemctl','stop','comma.service'],check=True)
+  try:
+   stopped();restore(root,folder,record,restore_preferences=record.get('mode_change_attempted',False));before(root,files)
+   record.update(phase='restored_by_explicit_rollback',runtime_modified=False,mode_changed=False)
+   save(record_path,record)
+  except BaseException:
+   record['phase']='recovery_required';save(record_path,record);raise
+  subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True)
+  print('RESULT_JSON='+json.dumps({k:v for k,v in record.items() if k!='preferences'}),flush=True)
+  return
+ from openpilot.common.params import Params
+ p=Params();assert not p.get_bool('OpenpilotEnabledToggle') and p.get_int('CanfdDebug')==0
+ before(root,files)
  if args.phase=='stage':
-  assert not record_path.exists();gate=parked()
+  # Download/import checks touch only this private staging directory. The
+  # executing source, vehicle preferences and service are unchanged here.
+  # Installation and rollback still require the full fresh parked gate.
+  assert not record_path.exists();gate={'staging_only':True,'runtime_source_or_preferences_modified':False}
   record={'phase':'staging','release_id':RID,'source_commit':manifest['source_commit'],'bundle_sha256':bundle_sha,
     'boot_before':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'gate':gate,'files':{},
     'preferences':{k:base64.b64encode((Path('/data/params/d')/k).read_bytes()).decode() if (Path('/data/params/d')/k).exists() else None for k in PREFS},
     'preserved_settings':{k:sha((Path('/data/params/d')/k).read_bytes()) for k in ('DisableDM','HardwareC3xLite','CalibrationParams','DongleId','CarSelected3','HapticFeedbackWhenSpeedCamera','CanfdDebug') if (Path('/data/params/d')/k).is_file()},
-    'runtime_modified':False,'mode_changed':False}
+    'runtime_modified':False,'mode_changed':False,'mode_change_attempted':False}
   save(record_path,record)
   for name in ORDER:
    row=files[name];path=checked(root,name);mode=path.stat().st_mode&0o777 if path.exists() else 0o644
@@ -183,10 +215,12 @@ def main():
  else:
   record=json.loads(record_path.read_text());assert record['phase']=='staged' and record['bundle_sha256']==bundle_sha
   for name in ORDER:assert sha((folder/'new'/name).read_bytes())==files[name]['sha256']
-  import_smoke(root,folder);record['gate_before_stop']=parked();record['phase']='stopping';save(record_path,record)
+  import_smoke(root,folder);record['gate_before_stop']=parked();assert not p.get_bool('OpenpilotEnabledToggle')
+  record['phase']='stopping';save(record_path,record)
   subprocess.run(['sudo','-n','systemctl','stop','comma.service'],check=True)
+  writes_started=False
   try:
-   stopped();before(root,files);record['phase']='installing';save(record_path,record)
+   stopped();before(root,files);record['phase']='installing';writes_started=True;save(record_path,record)
    for name in ORDER:
     atomic(checked(root,name),(folder/'new'/name).read_bytes(),record['files'][name]['mode'])
     record['last_file']=name;save(record_path,record)
@@ -194,14 +228,23 @@ def main():
    assert all(sha((root/n).read_bytes())==h for n,h in PROTECTED.items())
    assert all(sha((Path('/data/params/d')/k).read_bytes())==h for k,h in record['preserved_settings'].items())
    assert time.monotonic()-record['gate_before_stop']['mono']<15,'Installation exceeded fresh-stop window'
+   record['mode_change_attempted']=True;save(record_path,record)
    command="from openpilot.common.params import Params;p=Params();assert len(p.all_keys())==317;p.put_bool('C3xLiteHapticNotifications',True);p.put_bool('OpenpilotEnabledToggle',True);assert p.get_bool('C3xLiteHapticNotifications') and p.get_bool('OpenpilotEnabledToggle')"
    subprocess.run([sys.executable,'-c',command],cwd=root,check=True)
    record.update(phase='installed_pending_reboot_verification',runtime_modified=True,mode_changed=True)
    save(record_path,record)
   except BaseException:
-   restore(root,folder,record);record.update(phase='restored_after_failure',runtime_modified=False,mode_changed=False);save(record_path,record)
+   try:
+    if writes_started:
+     restore(root,folder,record,restore_preferences=record.get('mode_change_attempted',False));before(root,files)
+    record.update(phase='restored_after_failure' if writes_started else 'aborted_before_writes',runtime_modified=False,mode_changed=False)
+    save(record_path,record)
+   except BaseException:
+    record['phase']='recovery_required';save(record_path,record);raise
+   subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True)
    raise
-  finally:subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True)
+  # On success leave the manager stopped until reboot, rather than briefly
+  # starting normal control immediately before another manager restart.
   subprocess.Popen(['sudo','-n','sh','-c','sleep 3; reboot'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
  print('RESULT_JSON='+json.dumps({k:v for k,v in record.items() if k not in ('preferences',)}),flush=True)
 

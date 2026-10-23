@@ -68,3 +68,24 @@ def test_reverse_restore_recovers_every_partial_native_source_prefix(tmp_path,fa
   else:assert (root/name).read_bytes()==('original:'+name).encode()
  assert (prefs/'OpenpilotEnabledToggle').read_bytes()==b'0'
  assert not (prefs/'C3xLiteHapticNotifications').exists()
+
+
+@pytest.mark.skipif(os.name=='nt',reason='Linux directory fsync semantics verified on Linux CI')
+def test_rollback_does_not_clobber_foreign_change_or_unattempted_preferences(tmp_path):
+ root=tmp_path/'root';root.mkdir();stage=tmp_path/'stage';prefs=tmp_path/'prefs';prefs.mkdir()
+ record={'files':{},'preferences':{'OpenpilotEnabledToggle':base64.b64encode(b'0').decode()}}
+ for index,name in enumerate(deploy.ORDER):
+  old=None if index==0 else ('old:'+name).encode();new=('new:'+name).encode()
+  record['files'][name]={'before':deploy.sha(old) if old is not None else None,'sha256':deploy.sha(new),'mode':0o644}
+  if old is not None:deploy.atomic(root/name,old);deploy.atomic(stage/'before'/name,old)
+ deploy.atomic(root/deploy.ORDER[0],('new:'+deploy.ORDER[0]).encode())
+ deploy.atomic(root/deploy.ORDER[3],b'foreign concurrent change')
+ deploy.atomic(prefs/'OpenpilotEnabledToggle',b'1')
+ with pytest.raises(AssertionError):deploy.restore(root,stage,record,prefs,restore_preferences=False)
+ assert (root/deploy.ORDER[3]).read_bytes()==b'foreign concurrent change'
+ assert (root/deploy.ORDER[0]).read_bytes()==('new:'+deploy.ORDER[0]).encode()
+ assert (prefs/'OpenpilotEnabledToggle').read_bytes()==b'1'
+ deploy.atomic(root/deploy.ORDER[3],('old:'+deploy.ORDER[3]).encode())
+ deploy.restore(root,stage,record,prefs,restore_preferences=False)
+ assert not (root/deploy.ORDER[0]).exists()
+ assert (prefs/'OpenpilotEnabledToggle').read_bytes()==b'1'
