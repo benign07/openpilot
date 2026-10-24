@@ -52,6 +52,8 @@ def main():
   descriptor={k:{'type':int(p.get_type(k)),'default':p.get_default_value(k)} for k in keys}
   if not after:
    assert KEY not in keys
+   legacy_helper=options.HapticNotifications();legacy_helper.configure_from_params(p)
+   assert legacy_helper.enabled_events==legacy_helper.ROUTINE and legacy_helper.pattern==0
    try:p.get_bool(KEY)
    except UnknownKeyName:pass
    else:raise AssertionError('Old native registry unexpectedly accepts new haptic key')
@@ -60,12 +62,16 @@ def main():
    before=json.loads((OUT/'before-registry.json').read_text())
    assert {k:v for k,v in descriptor.items() if k not in [KEY]+EXTRA_KEYS}==before
    assert descriptor[KEY]=={'type':int(ParamKeyType.BOOL),'default':False}
+   default_helper=options.HapticNotifications();default_helper.configure_from_params(p)
+   assert default_helper.enabled_events==default_helper.ROUTINE and default_helper.pattern==0
    for key,default,_,_ in options.HAPTIC_EVENT_OPTIONS:
     assert descriptor[key]=={'type':int(ParamKeyType.BOOL),'default':default}
-    assert p.get_bool(key)==default
+    assert p.get(key,return_default=True)==default
     p.put_bool(key,False);assert not p.get_bool(key)
    assert descriptor[options.HAPTIC_PATTERN_KEY]=={'type':int(ParamKeyType.INT),'default':0}
    p.put_int(options.HAPTIC_PATTERN_KEY,2);assert p.get_int(options.HAPTIC_PATTERN_KEY)==2
+   selected_helper=options.HapticNotifications();selected_helper.configure_from_params(p)
+   assert not selected_helper.enabled_events and selected_helper.pattern==2
    assert not p.get_bool(KEY)
    p.put_bool(KEY,True);assert p.get_bool(KEY)
    for flag in (ParamKeyFlag.CLEAR_ON_MANAGER_START,ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION,

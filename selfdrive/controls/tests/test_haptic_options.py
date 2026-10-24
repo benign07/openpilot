@@ -44,11 +44,11 @@ def test_unknown_pattern_values_fall_back_to_verified_single_pulse(value):
 
 def test_new_registry_selects_events_and_legacy_registry_keeps_previous_defaults():
   h=HapticNotifications()
-  legacy=SimpleNamespace(check_key=lambda key:False)
+  legacy=SimpleNamespace(all_keys=lambda:[b'C3xLiteHapticNotifications'])
   h.configure_from_params(legacy)
   assert h.enabled_events==h.ROUTINE and h.pattern==0
-  current=SimpleNamespace(check_key=lambda key:True,
-    get_bool=lambda key:key=='C3xLiteHapticEngage',get_int=lambda key:2)
+  current=SimpleNamespace(all_keys=lambda:[x[0] for x in HAPTIC_EVENT_OPTIONS]+[HAPTIC_PATTERN_KEY],
+    get=lambda key,return_default:2 if key==HAPTIC_PATTERN_KEY else key=='C3xLiteHapticEngage')
   h.configure_from_params(current)
   assert h.enabled_events==set(HAPTIC_EVENT_OPTIONS[0][2]) and h.pattern==2
   assert set().union(*(set(x[2]) for x in HAPTIC_EVENT_OPTIONS))==h.ROUTINE

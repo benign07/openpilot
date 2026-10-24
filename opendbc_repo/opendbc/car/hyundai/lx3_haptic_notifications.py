@@ -55,11 +55,12 @@ class HapticNotifications:
     # Called at the controller's existing low-rate settings refresh only.
     # Original 317-key native modules keep old behavior until the paired native
     # registry is installed. No control permission is granted by these options.
+    keys = {k.decode() if isinstance(k, bytes) else k for k in params.all_keys()}
     enabled = set()
     for key, default, names, _ in HAPTIC_EVENT_OPTIONS:
-      if (params.get_bool(key) if params.check_key(key) else default):
+      if (params.get(key, return_default=True) if key in keys else default):
         enabled.update(names)
-    pattern = params.get_int(HAPTIC_PATTERN_KEY) if params.check_key(HAPTIC_PATTERN_KEY) else 0
+    pattern = params.get(HAPTIC_PATTERN_KEY, return_default=True) if HAPTIC_PATTERN_KEY in keys else 0
     self.configure(enabled, pattern)
 
   def update(self, alert, *, eligible, frame):
