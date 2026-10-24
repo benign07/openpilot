@@ -1,0 +1,16 @@
+Original LX3 haptic event options lx3-original-haptic-20261024-02
+
+Separate original0627-compatible overlay, not a latest-control-stack migration or shared source OTA.
+Preserves the prior installed driving mode, haptic master preference, Panda/pandad/MDPS, controls, schema, calibration, identity and DisableDM.
+Adds six event-family selections and three binary request patterns under Development features / Steering-wheel haptics.
+Default0 retains one0.8s request. Pattern1 is0.3on/0.2off/0.3on; pattern2 is0.2on/0.1off/0.2on/0.1off/0.2on.
+Split patterns are trials. VIBRATE is binary; motor strength is not adjustable with the verified field.
+Existing active-control/CAN/blinker/critical-alert gates remain. Lane-change/reverse menu descriptions explicitly disclose the applicable inhibition.
+Speed-camera settings and critical/acoustic warnings are unchanged.
+Original Params registry317->324, with original316+master descriptors preserved and native ABI/sources verified.
+Exact source b0ae42d568cf546ff57e8b1db6ee202e259e6be0 / CI40045241485: Python3.11 and3.12 each593PASS, plus actual ARM324 defaults/types/persistence/malformed-input and legacy profile checks.
+Actual target staged import, source/native hashes, parked10s install, fresh boot and60s core processes/CAN verified.
+Owner confirmed physical engage vibration on the prior -02 baseline; three matching host0.81-0.83s pulses and TX echo observed onOct24. New split-pattern motor response and road qualification remain unverified.
+Steering-system cluster warnings and SPI transport errors remain unresolved; this release does not hide or claim to fix them.
+Signed parked rollback restores the immediately preceding original haptic build and preserves its already enabled mode.
+Shared HUD latest.json/source updater allowlist and additional/EV9 devices are unchanged.
