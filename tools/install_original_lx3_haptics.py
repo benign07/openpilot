@@ -8,7 +8,8 @@ from pathlib import Path
 import argparse,base64,hashlib,json,os,subprocess,sys,tempfile,time
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-RID='lx3-original-haptic-20261023-02'
+RID='lx3-original-haptic-20261024-01'
+NATIVE_KEYS=324
 SERIAL='80acfe79'
 PUBLIC_SHA='56d7f915ed4d802bccf46db83f0d7b147579466ed060abdf1dab96759babd223'
 ORDER=['opendbc_repo/opendbc/car/hyundai/lx3_haptic_notifications.py',
@@ -53,7 +54,7 @@ def verify(root,folder,config_path=Path('/data/community/hud_updates/config.json
  assert manifest['release_id']==RID and manifest['target_serial']==SERIAL
  assert manifest['installer_sha256']==sha(Path(__file__).read_bytes())
  assert len(manifest['files'])==len(ORDER) and {x['path'] for x in manifest['files']}==set(ORDER)
- assert manifest['native_build']['key_count']==317 and manifest['native_build']['original316_descriptors_preserved']
+ assert manifest['native_build']['key_count']==NATIVE_KEYS and manifest['native_build']['original316_descriptors_preserved']
  assert manifest['native_build']['ABI_subset_of_original_backup']
  files={x['path']:x for x in manifest['files']}
  for name,row in files.items():
@@ -120,10 +121,15 @@ def load(name,relative):
  return module
 native=load('openpilot.common.params_pyx','common/params_pyx.so')
 with tempfile.TemporaryDirectory(prefix='lx3-haptic-import-') as temp:
- p=native.Params(temp);assert len(p.all_keys())==317
+ p=native.Params(temp);assert len(p.all_keys())==324
  assert p.check_key('C3xLiteHapticNotifications') and not p.get_bool('C3xLiteHapticNotifications')
  p.put_bool('C3xLiteHapticNotifications',True);assert p.get_bool('C3xLiteHapticNotifications')
 helper=load('opendbc.car.hyundai.lx3_haptic_notifications','opendbc_repo/opendbc/car/hyundai/lx3_haptic_notifications.py')
+with tempfile.TemporaryDirectory(prefix='lx3-haptic-options-') as temp:
+ p=native.Params(temp);h=helper.HapticNotifications();h.configure_from_params(p)
+ assert h.enabled_events==h.ROUTINE and h.pattern==0
+ p.put_bool('C3xLiteHapticEngage',False);p.put_int('C3xLiteHapticPattern',2)
+ h.configure_from_params(p);assert 'engage' not in h.enabled_events and h.pattern==2
 factory=load('opendbc.car.hyundai.hyundaicanfd','opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py')
 import opendbc.car.hyundai as package
 package.hyundaicanfd=factory
@@ -133,7 +139,7 @@ cc=structs.CarControl.new_message();cc.hudControl.audibleAlert='engage'
 with structs.CarControl.from_bytes(cc.to_bytes()) as decoded:
  assert helper.HapticNotifications().update(decoded.hudControl.audibleAlert,eligible=True,frame=0)
 assert controller.CarController and factory.create_ccnc_messages
-print(json.dumps({'native_keys':317,'native_key_roundtrip':True,'original_schema_enum':True,
+print(json.dumps({'native_keys':324,'native_key_roundtrip':True,'original_schema_enum':True,
 'candidate_controller_imported':True,'factory_keyword':'notification_vibrate' in __import__('inspect').signature(factory.create_ccnc_messages).parameters,
 'live_CAN_TX':False}))
 '''
@@ -144,7 +150,7 @@ print(json.dumps({'native_keys':317,'native_key_roundtrip':True,'original_schema
  save(folder/'import-smoke.json',report);return report
 
 
-def restore(root,folder,record,params_dir=Path('/data/params/d'),restore_preferences=True):
+def validate_restore(root,folder,record):
  # Validate every live file and backup before restoring ANY file. A foreign
  # change must not be silently overwritten by an unrelated stale backup.
  for name in ORDER:
@@ -152,6 +158,10 @@ def restore(root,folder,record,params_dir=Path('/data/params/d'),restore_prefere
   current=sha(path.read_bytes()) if path.is_file() else None
   assert current in (row['before'],row['sha256']),name
   if row['before'] is not None:assert sha((folder/'before'/name).read_bytes())==row['before'],name
+
+
+def restore(root,folder,record,params_dir=Path('/data/params/d'),restore_preferences=True):
+ validate_restore(root,folder,record)
  for name in reversed(ORDER):
   path=checked(root,name);row=record['files'][name]
   current=sha(path.read_bytes()) if path.is_file() else None
@@ -180,20 +190,26 @@ def main():
  record_path=folder/'transaction.json'
  if args.phase=='rollback':
   record=json.loads(record_path.read_text());assert record['bundle_sha256']==bundle_sha
-  assert record['phase'] in ('stopping','installing','installed_pending_reboot_verification','recovery_required')
+  assert record['phase'] in ('stopping','installing','installed_pending_reboot_verification','recovery_required','complete','rollback_rejected')
   record['rollback_gate']=parked()
+  validate_restore(root,folder,record)
   subprocess.run(['sudo','-n','systemctl','stop','comma.service'],check=True)
+  rollback_writes_started=False
   try:
-   stopped();restore(root,folder,record,restore_preferences=record.get('mode_change_attempted',False));before(root,files)
+   stopped();validate_restore(root,folder,record);rollback_writes_started=True
+   restore(root,folder,record,restore_preferences=record.get('mode_change_attempted',False));before(root,files)
    record.update(phase='restored_by_explicit_rollback',runtime_modified=False,mode_changed=False)
    save(record_path,record)
   except BaseException:
-   record['phase']='recovery_required';save(record_path,record);raise
+   record['phase']='recovery_required' if rollback_writes_started else 'rollback_rejected'
+   save(record_path,record)
+   if not rollback_writes_started:subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True)
+   raise
   subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True)
   print('RESULT_JSON='+json.dumps({k:v for k,v in record.items() if k!='preferences'}),flush=True)
   return
  from openpilot.common.params import Params
- p=Params();assert not p.get_bool('OpenpilotEnabledToggle') and p.get_int('CanfdDebug')==0
+ p=Params();assert p.get_bool('OpenpilotEnabledToggle') and p.get_int('CanfdDebug')==0
  before(root,files)
  if args.phase=='stage':
   # Download/import checks touch only this private staging directory. The
@@ -215,7 +231,7 @@ def main():
  else:
   record=json.loads(record_path.read_text());assert record['phase']=='staged' and record['bundle_sha256']==bundle_sha
   for name in ORDER:assert sha((folder/'new'/name).read_bytes())==files[name]['sha256']
-  import_smoke(root,folder);record['gate_before_stop']=parked();assert not p.get_bool('OpenpilotEnabledToggle')
+  import_smoke(root,folder);record['gate_before_stop']=parked();assert p.get_bool('OpenpilotEnabledToggle')
   record['phase']='stopping';save(record_path,record)
   subprocess.run(['sudo','-n','systemctl','stop','comma.service'],check=True)
   writes_started=False
@@ -228,10 +244,11 @@ def main():
    assert all(sha((root/n).read_bytes())==h for n,h in PROTECTED.items())
    assert all(sha((Path('/data/params/d')/k).read_bytes())==h for k,h in record['preserved_settings'].items())
    assert time.monotonic()-record['gate_before_stop']['mono']<15,'Installation exceeded fresh-stop window'
-   record['mode_change_attempted']=True;save(record_path,record)
-   command="from openpilot.common.params import Params;p=Params();assert len(p.all_keys())==317;p.put_bool('C3xLiteHapticNotifications',True);p.put_bool('OpenpilotEnabledToggle',True);assert p.get_bool('C3xLiteHapticNotifications') and p.get_bool('OpenpilotEnabledToggle')"
+   # This update preserves the already enabled mode/master preference. Native
+   # defaults expose the new options without rewriting any owner setting.
+   command="from openpilot.common.params import Params;p=Params();assert len(p.all_keys())==324;assert p.get_bool('C3xLiteHapticNotifications') and p.get_bool('OpenpilotEnabledToggle')"
    subprocess.run([sys.executable,'-c',command],cwd=root,check=True)
-   record.update(phase='installed_pending_reboot_verification',runtime_modified=True,mode_changed=True)
+   record.update(phase='installed_pending_reboot_verification',runtime_modified=True,mode_changed=False)
    save(record_path,record)
   except BaseException:
    try:

@@ -22,7 +22,7 @@ def fixture(tmp_path,monkeypatch):
  values={r['path']:r for r in files}
  manifest={'release_id':deploy.RID,'target_serial':deploy.SERIAL,
   'installer_sha256':deploy.sha(Path(deploy.__file__).read_bytes()),'files':files,
-  'native_build':{'key_count':317,'original316_descriptors_preserved':True,'ABI_subset_of_original_backup':True,
+  'native_build':{'key_count':deploy.NATIVE_KEYS,'original316_descriptors_preserved':True,'ABI_subset_of_original_backup':True,
     'module_sha256':values['common/params_pyx.so']['sha256'],'registry_header_sha256':values['common/params_keys.h']['sha256']}}
  def sign():
   payload=json.dumps(manifest).encode()
