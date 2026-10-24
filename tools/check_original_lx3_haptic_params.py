@@ -72,6 +72,9 @@ def main():
    p.put_int(options.HAPTIC_PATTERN_KEY,2);assert p.get_int(options.HAPTIC_PATTERN_KEY)==2
    selected_helper=options.HapticNotifications();selected_helper.configure_from_params(p)
    assert not selected_helper.enabled_events and selected_helper.pattern==2
+   Path(p.get_param_path(options.HAPTIC_PATTERN_KEY)).write_text('not-an-integer')
+   selected_helper.configure_from_params(p);assert selected_helper.pattern==0
+   p.put_int(options.HAPTIC_PATTERN_KEY,2)
    assert not p.get_bool(KEY)
    p.put_bool(KEY,True);assert p.get_bool(KEY)
    for flag in (ParamKeyFlag.CLEAR_ON_MANAGER_START,ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION,

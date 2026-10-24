@@ -8,7 +8,7 @@ from pathlib import Path
 import argparse,base64,hashlib,json,os,subprocess,sys,tempfile,time
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-RID='lx3-original-haptic-20261024-01'
+RID='lx3-original-haptic-20261024-02'
 NATIVE_KEYS=324
 SERIAL='80acfe79'
 PUBLIC_SHA='56d7f915ed4d802bccf46db83f0d7b147579466ed060abdf1dab96759babd223'

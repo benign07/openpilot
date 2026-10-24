@@ -109,6 +109,9 @@ def test_menu_has_two_independent_options_and_preserves_hardware_parent():
   occurrences = list(leaves(data['menu']))
   assert all(occurrences.count(n) == 1 for n in (*names, 'HardwareC3xLite'))
   assert data['menu'][0]['groups'][0]['groups'][0]['id'] == 'notification_methods'
+  haptic_names = [p['name'] for p in data['params'] if p['name'].startswith('C3xLiteHaptic')]
+  assert set(haptic_names) <= set(data['menu'][0]['groups'][0]['groups'][0]['params'])
+  assert all(occurrences.count(n) == 1 for n in haptic_names)
   after = {p['name']: {k: p[k] for k in ('min', 'max', 'default')} for p in data['params'] if p['name'] in names}
   assert after == before
   snapshot = copy.deepcopy(data); inject(data); assert data == snapshot

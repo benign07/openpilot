@@ -102,9 +102,15 @@ def prepare(installed, source_commit):
     'min':0,'max':1,'default':0,'unit':1,
   })
   for key, default, names, title in helper_ns['HAPTIC_EVENT_OPTIONS']:
+    detail = ('방향지시등이 켜진 동안 항상 억제되므로 현재 일반적인 차선 변경 상황에서는 진동하지 않습니다.'
+      if key == 'C3xLiteHapticLaneChange' else '후진 기어에서는 제어가 비활성이므로 현재 이 항목으로 진동하지 않습니다.'
+      if key == 'C3xLiteHapticReverse' else '')
+    english = {'C3xLiteHapticEngage':'Engage / control start','C3xLiteHapticTraffic':'Traffic signal alerts',
+      'C3xLiteHapticLaneChange':'Lane change (muted with blinkers)', 'C3xLiteHapticStopping':'Stopping / auto hold',
+      'C3xLiteHapticNavigation':'Navigation alerts','C3xLiteHapticReverse':'Reverse (inactive control: muted)'}[key]
     settings['params'].append({'name':key,'group':'개발 중 기능','egroup':'Development features',
-      'title':title,'etitle':title,'min':0,'max':1,'default':int(default),'unit':1,
-      'descr':'일반 알림 핸들 진동 요청이 켜져 있을 때 해당 알림의 진동을 선택합니다. 실제 알림과 제어 활성 상태가 함께 있어야 하며 방향지시등이 켜진 동안에는 요청하지 않습니다. 모든 운행에서 이 알림이 발생하는 것은 아닙니다.'})
+      'title':title,'etitle':english,'min':0,'max':1,'default':int(default),'unit':1,
+      'descr':detail+' 일반 알림 핸들 진동 요청이 켜져 있을 때 해당 알림의 진동을 선택합니다. 실제 알림과 제어 활성 상태가 함께 있어야 하며 방향지시등이 켜진 동안에는 요청하지 않습니다. 모든 운행에서 이 알림이 발생하는 것은 아닙니다.'})
   settings['params'].append({'name':helper_ns['HAPTIC_PATTERN_KEY'],'group':'개발 중 기능',
     'egroup':'Development features','title':'일반 알림 진동 패턴','etitle':'Routine haptic pulse pattern',
     'min':0,'max':2,'default':0,'unit':1,

@@ -84,7 +84,8 @@ def inject_driving_preferences(data):
       'cdescr':'普通提示每秒闪烁一次橙色边框，与声音和振动独立。关闭也保留紧急红色边框、原警告文本和重要警告音。实际方向盘振动反应仍待验证。'}
     data.setdefault('params', []).append(option)
     definitions[border_name] = option
-  notification_options = (border_name, 'C3xLiteBuzzerMute', 'C3xLiteHapticNotifications')
+  notification_options = (border_name, 'C3xLiteBuzzerMute', 'C3xLiteHapticNotifications') + tuple(
+    name for name in definitions if name.startswith('C3xLiteHaptic') and name != 'C3xLiteHapticNotifications')
   if 'C3xLiteBuzzerMute' in definitions:
     definitions['C3xLiteBuzzerMute'].update(
       title='일반 부저·알림음 끄기', etitle='Mute routine notification sounds', ctitle='关闭普通提示音',
