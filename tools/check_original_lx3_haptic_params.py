@@ -1,5 +1,6 @@
 """Build-profile/registry evidence for original LX3; never touch device Params."""
 import argparse
+import importlib.util
 import hashlib
 import json
 import platform
@@ -14,6 +15,9 @@ PROFILE=ROOT/'tools/original_lx3_haptics'
 BASE=json.loads((PROFILE/'params_baseline.json').read_text())
 OUT=ROOT/'original-haptic-arm-evidence'
 KEY='C3xLiteHapticNotifications'
+spec=importlib.util.spec_from_file_location('haptic_profile_options',ROOT/'opendbc_repo/opendbc/car/hyundai/lx3_haptic_notifications.py')
+options=importlib.util.module_from_spec(spec);spec.loader.exec_module(options)
+EXTRA_KEYS=[x[0] for x in options.HAPTIC_EVENT_OPTIONS]+[options.HAPTIC_PATTERN_KEY]
 sha=lambda raw:hashlib.sha256(raw).hexdigest()
 
 
@@ -23,7 +27,7 @@ def header(after):
  if after:
   raw=raw.replace(b'    {"HardwareC3xLite", {PERSISTENT, INT, "0"}},\n',
     b'    {"HardwareC3xLite", {PERSISTENT, INT, "0"}},\n'
-    b'    {"C3xLiteHapticNotifications", {PERSISTENT, BOOL, "0"}},\n')
+    b'    {"C3xLiteHapticNotifications", {PERSISTENT, BOOL, "0"}},\n'+options.haptic_param_declarations().encode())
   assert raw.count(b'"C3xLiteHapticNotifications"')==1
  return raw
 
@@ -36,7 +40,7 @@ def main():
   assert sha((ROOT/name).read_bytes())==expected,name
  if args.action.startswith('prepare'):
   (ROOT/'common/params_keys.h').write_bytes(header(after))
-  print('Prepared original Params registry profile:', '317 keys' if after else '316 keys')
+  print('Prepared original Params registry profile:', str(BASE['original_key_count']+1+len(EXTRA_KEYS))+' keys' if after else '316 keys')
   return
  assert platform.machine()=='aarch64' and sys.version_info[:2]==(3,12)
  assert (ROOT/'common/params_keys.h').read_bytes()==header(after)
@@ -44,7 +48,7 @@ def main():
  with tempfile.TemporaryDirectory(prefix='original-haptic-params-') as temp:
   p=Params(temp)
   keys=sorted(k.decode() if isinstance(k,bytes) else k for k in p.all_keys())
-  assert len(keys)==BASE['original_key_count']+int(after)
+  assert len(keys)==BASE['original_key_count']+(1+len(EXTRA_KEYS) if after else 0)
   descriptor={k:{'type':int(p.get_type(k)),'default':p.get_default_value(k)} for k in keys}
   if not after:
    assert KEY not in keys
@@ -54,13 +58,21 @@ def main():
    (OUT/'before-registry.json').write_text(json.dumps(descriptor,indent=2,default=str))
   else:
    before=json.loads((OUT/'before-registry.json').read_text())
-   assert {k:v for k,v in descriptor.items() if k!=KEY}==before
+   assert {k:v for k,v in descriptor.items() if k not in [KEY]+EXTRA_KEYS}==before
    assert descriptor[KEY]=={'type':int(ParamKeyType.BOOL),'default':False}
+   for key,default,_,_ in options.HAPTIC_EVENT_OPTIONS:
+    assert descriptor[key]=={'type':int(ParamKeyType.BOOL),'default':default}
+    assert p.get_bool(key)==default
+    p.put_bool(key,False);assert not p.get_bool(key)
+   assert descriptor[options.HAPTIC_PATTERN_KEY]=={'type':int(ParamKeyType.INT),'default':0}
+   p.put_int(options.HAPTIC_PATTERN_KEY,2);assert p.get_int(options.HAPTIC_PATTERN_KEY)==2
    assert not p.get_bool(KEY)
    p.put_bool(KEY,True);assert p.get_bool(KEY)
    for flag in (ParamKeyFlag.CLEAR_ON_MANAGER_START,ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION,
                 ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION,ParamKeyFlag.CLEAR_ON_IGNITION_ON):
     p.clear_all(flag);assert p.get_bool(KEY)
+    assert p.get_int(options.HAPTIC_PATTERN_KEY)==2
+    assert all(not p.get_bool(key) for key,_,_,_ in options.HAPTIC_EVENT_OPTIONS)
    p.put_bool(KEY,False);assert not p.get_bool(KEY)
    assert not any(k.startswith('Calibration') and p.get(k) is not None for k in keys)
  binary=ROOT/'common/params_pyx.so'

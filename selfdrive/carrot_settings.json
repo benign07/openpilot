@@ -2,6 +2,28 @@
   "apilot": 20220111,
   "menu": [
     {
+      "id": "development_features_haptic",
+      "ko": "개발 중 기능",
+      "en": "Development features",
+      "groups": [
+        {
+          "id": "haptic_options",
+          "ko": "핸들 진동",
+          "en": "Steering-wheel haptics",
+          "params": [
+            "C3xLiteHapticNotifications",
+            "C3xLiteHapticEngage",
+            "C3xLiteHapticTraffic",
+            "C3xLiteHapticLaneChange",
+            "C3xLiteHapticStopping",
+            "C3xLiteHapticNavigation",
+            "C3xLiteHapticReverse",
+            "C3xLiteHapticPattern"
+          ]
+        }
+      ]
+    },
+    {
       "id": "DRIVING",
       "ko": "주행 제어",
       "en": "Driving",
@@ -586,8 +608,7 @@
               "zh": "C3xlite",
               "params": [
                 "HardwareC3xLite",
-                "C3xLiteBuzzerMute",
-                "C3xLiteHapticNotifications"
+                "C3xLiteBuzzerMute"
               ]
             }
           ]
@@ -3280,11 +3301,11 @@
       "unit": 1
     },
     {
-      "group": "C3xlite",
+      "group": "개발 중 기능",
       "name": "C3xLiteHapticNotifications",
       "title": "↳ 일반 알림을 핸들 진동으로 (시험)",
-      "descr": "LX3 실험 옵션·기본 꺼짐. 기존0x162 VIBRATE 신호로 일반 알림 때 짧은 진동을 요청합니다. 실제 핸들 진동 지원은 아직 미확인입니다. 제어가 비활성이거나 깜빡이가 켜져 있으면 요청하지 않습니다. 중요한 경고음·운전자 감시·MDPS 응답·조향토크를 바꾸지 않습니다.",
-      "egroup": "C3xlite",
+      "descr": "LX3 일반 알림 진동의 전체 스위치. 인게이지 진동은 2026-10-24 이전 기기에서 실차 확인. 아래에서 상황과 패턴을 선택합니다. 순정 VIBRATE는 켜짐/꺼짐이며 모터 세기는 조절하지 않습니다. 부저·중요 경고음·운전자 감시·조향토크는 변경하지 않습니다.",
+      "egroup": "Development features",
       "etitle": "↳ 일반 알림을 핸들 진동으로 (시험)",
       "edescr": "Experimental LX3 option, default OFF. Request a short routine notification through the existing0x162 VIBRATE signal. Physical steering-wheel haptics are unverified. No request with inactive control or blinkers on. Does not replace critical acoustic alerts or alter driver monitoring, MDPS responses or steering torque.",
       "cgroup": "C3xlite",
@@ -3326,6 +3347,90 @@
       "max": 100,
       "default": 70,
       "unit": 5
+    },
+    {
+      "name": "C3xLiteHapticEngage",
+      "group": "개발 중 기능",
+      "egroup": "Development features",
+      "title": "인게이지·제어 시작",
+      "etitle": "인게이지·제어 시작",
+      "min": 0,
+      "max": 1,
+      "default": 1,
+      "unit": 1,
+      "descr": "일반 알림 핸들 진동 요청이 켜져 있을 때 해당 알림의 진동을 선택합니다. 실제 알림과 제어 활성 상태가 함께 있어야 하며 방향지시등이 켜진 동안에는 요청하지 않습니다. 알림 발생 조건 자체를 만들거나 제어권한을 부여하지 않습니다."
+    },
+    {
+      "name": "C3xLiteHapticTraffic",
+      "group": "개발 중 기능",
+      "egroup": "Development features",
+      "title": "신호 변경 알림",
+      "etitle": "신호 변경 알림",
+      "min": 0,
+      "max": 1,
+      "default": 1,
+      "unit": 1,
+      "descr": "일반 알림 핸들 진동 요청이 켜져 있을 때 해당 알림의 진동을 선택합니다. 실제 알림과 제어 활성 상태가 함께 있어야 하며 방향지시등이 켜진 동안에는 요청하지 않습니다. 알림 발생 조건 자체를 만들거나 제어권한을 부여하지 않습니다."
+    },
+    {
+      "name": "C3xLiteHapticLaneChange",
+      "group": "개발 중 기능",
+      "egroup": "Development features",
+      "title": "차선 변경 알림",
+      "etitle": "차선 변경 알림",
+      "min": 0,
+      "max": 1,
+      "default": 1,
+      "unit": 1,
+      "descr": "일반 알림 핸들 진동 요청이 켜져 있을 때 해당 알림의 진동을 선택합니다. 실제 알림과 제어 활성 상태가 함께 있어야 하며 방향지시등이 켜진 동안에는 요청하지 않습니다. 알림 발생 조건 자체를 만들거나 제어권한을 부여하지 않습니다."
+    },
+    {
+      "name": "C3xLiteHapticStopping",
+      "group": "개발 중 기능",
+      "egroup": "Development features",
+      "title": "정지·오토홀드 알림",
+      "etitle": "정지·오토홀드 알림",
+      "min": 0,
+      "max": 1,
+      "default": 1,
+      "unit": 1,
+      "descr": "일반 알림 핸들 진동 요청이 켜져 있을 때 해당 알림의 진동을 선택합니다. 실제 알림과 제어 활성 상태가 함께 있어야 하며 방향지시등이 켜진 동안에는 요청하지 않습니다. 알림 발생 조건 자체를 만들거나 제어권한을 부여하지 않습니다."
+    },
+    {
+      "name": "C3xLiteHapticNavigation",
+      "group": "개발 중 기능",
+      "egroup": "Development features",
+      "title": "길 안내 알림",
+      "etitle": "길 안내 알림",
+      "min": 0,
+      "max": 1,
+      "default": 1,
+      "unit": 1,
+      "descr": "일반 알림 핸들 진동 요청이 켜져 있을 때 해당 알림의 진동을 선택합니다. 실제 알림과 제어 활성 상태가 함께 있어야 하며 방향지시등이 켜진 동안에는 요청하지 않습니다. 알림 발생 조건 자체를 만들거나 제어권한을 부여하지 않습니다."
+    },
+    {
+      "name": "C3xLiteHapticReverse",
+      "group": "개발 중 기능",
+      "egroup": "Development features",
+      "title": "후진 알림",
+      "etitle": "후진 알림",
+      "min": 0,
+      "max": 1,
+      "default": 1,
+      "unit": 1,
+      "descr": "일반 알림 핸들 진동 요청이 켜져 있을 때 해당 알림의 진동을 선택합니다. 실제 알림과 제어 활성 상태가 함께 있어야 하며 방향지시등이 켜진 동안에는 요청하지 않습니다. 알림 발생 조건 자체를 만들거나 제어권한을 부여하지 않습니다."
+    },
+    {
+      "name": "C3xLiteHapticPattern",
+      "group": "개발 중 기능",
+      "egroup": "Development features",
+      "title": "일반 알림 진동 패턴",
+      "etitle": "Routine haptic pulse pattern",
+      "min": 0,
+      "max": 2,
+      "default": 0,
+      "unit": 1,
+      "descr": "0: 한 번 0.8초(인게이지 실차 확인)\n1: 두 번 0.3초·쉼 0.2초·0.3초(시험)\n2: 세 번 0.2초·쉼 0.1초(시험)\n모터 세기 조절이 아닙니다. 반복 패턴의 실제 모터 반응은 미검증입니다. 과속카메라는 별도 순정 패턴입니다."
     }
   ]
 }

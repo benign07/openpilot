@@ -228,6 +228,8 @@ class CarController(CarControllerBase):
       self.soft_hold_mode = 1 if params.get_int("AutoCruiseControl") > 1 else 2
       self.hapticFeedbackWhenSpeedCamera = int(params.get_int("HapticFeedbackWhenSpeedCamera"))
       self.haptic_notifications_enabled = params.get_bool('C3xLiteHapticNotifications')
+      if uses_lx3_authority(self.CP):
+        self.haptic_notifications.configure_from_params(params)
 
       self.button_spam1 = params.get_int("CruiseButtonTest1")
       self.button_spam2 = params.get_int("CruiseButtonTest2")

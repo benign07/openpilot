@@ -41,6 +41,9 @@ def committed(commit, name):
 
 
 def prepare(installed, source_commit):
+  helper_source = committed(source_commit, HELPER)
+  helper_ns = {}
+  exec(compile(helper_source, HELPER, 'exec'), helper_ns)
   sources = {n: (installed/n).read_bytes() for n in BASE}
   for name, expected in BASE.items():
     if sha(sources[name]) != expected:
@@ -55,7 +58,9 @@ def prepare(installed, source_commit):
     '    self.haptic_notifications_enabled = False\n')
   c = replace_once(c, '      self.hapticFeedbackWhenSpeedCamera = int(params.get_int("HapticFeedbackWhenSpeedCamera"))\n',
     '      self.hapticFeedbackWhenSpeedCamera = int(params.get_int("HapticFeedbackWhenSpeedCamera"))\n'
-    '      self.haptic_notifications_enabled = params.get_bool("C3xLiteHapticNotifications")\n')
+    '      self.haptic_notifications_enabled = params.get_bool("C3xLiteHapticNotifications")\n'
+    '      if uses_lx3_authority(self.CP):\n'
+    '        self.haptic_notifications.configure_from_params(params)\n')
   c = replace_once(c, '    lx3_guard = uses_lx3_authority(self.CP)\n',
     '    lx3_guard = uses_lx3_authority(self.CP)\n'
     '    notification_vibrate = self.haptic_notifications.update(\n'
@@ -86,16 +91,24 @@ def prepare(installed, source_commit):
     raise ValueError('Unexpected existing key')
   k = replace_once(k, '    {"HardwareC3xLite", {PERSISTENT, INT, "0"}},\n',
     '    {"HardwareC3xLite", {PERSISTENT, INT, "0"}},\n'
-    '    {"C3xLiteHapticNotifications", {PERSISTENT, BOOL, "0"}},\n')
+    '    {"C3xLiteHapticNotifications", {PERSISTENT, BOOL, "0"}},\n'+helper_ns['haptic_param_declarations']())
   settings = json.loads(sources[SETTINGS])
   if any(p.get('name') == 'C3xLiteHapticNotifications' for p in settings['params']):
     raise ValueError('Unexpected existing setting')
   settings['params'].append({
     'name':'C3xLiteHapticNotifications','group':'개발 중 기능','egroup':'Development features',
     'title':'일반 알림 핸들 진동 요청','etitle':'Routine steering-wheel haptic request',
-    'descr':'LX3 전용 시험 기능. 일반 알림에 최대0.8초의 순정 VIBRATE 요청을 보냅니다. 실제 모터 반응은 검증 중이며 조향 토크로 진동을 만들지 않습니다. 제어 해제·CAN 오류·방향지시등·중요 경고 시 추가 요청을 즉시 취소합니다. 부저·중요 경고음과 과속카메라 설정은 변경하지 않습니다.',
+    'descr':'LX3 일반 알림 진동의 전체 스위치입니다. 인게이지 진동은 2026-10-24 실차 확인. 아래에서 발생 상황과 패턴을 선택합니다. 제어 해제·CAN 오류·방향지시등·중요 경고 시 추가 요청을 취소합니다. 순정 VIBRATE는 켜짐/꺼짐 신호이며 모터 세기는 조절하지 않습니다. 부저·중요 경고음은 변경하지 않습니다.',
     'min':0,'max':1,'default':0,'unit':1,
   })
+  for key, default, names, title in helper_ns['HAPTIC_EVENT_OPTIONS']:
+    settings['params'].append({'name':key,'group':'개발 중 기능','egroup':'Development features',
+      'title':title,'etitle':title,'min':0,'max':1,'default':int(default),'unit':1,
+      'descr':'일반 알림 핸들 진동 요청이 켜져 있을 때 해당 알림의 진동을 선택합니다. 실제 알림과 제어 활성 상태가 함께 있어야 하며 방향지시등이 켜진 동안에는 요청하지 않습니다. 모든 운행에서 이 알림이 발생하는 것은 아닙니다.'})
+  settings['params'].append({'name':helper_ns['HAPTIC_PATTERN_KEY'],'group':'개발 중 기능',
+    'egroup':'Development features','title':'일반 알림 진동 패턴','etitle':'Routine haptic pulse pattern',
+    'min':0,'max':2,'default':0,'unit':1,
+    'descr':'0: 한 번 0.8초(인게이지 실차 확인)\n1: 두 번 0.3초·쉼 0.2초·0.3초(시험)\n2: 세 번 0.2초·쉼 0.1초(시험)\n세기 조절이 아닙니다. 반복 패턴의 실제 모터 반응은 미검증입니다. 과속카메라는 별도의 순정 패턴을 유지합니다.'})
   menu = settings.get('menu')
   if not isinstance(menu, list):
     raise ValueError('Original menu layout missing')
@@ -104,7 +117,8 @@ def prepare(installed, source_commit):
     development = {'id':'development_features','ko':'개발 중 기능','en':'Development features','groups':[]}
     menu.insert(0, development)
   development.setdefault('groups', []).append({'id':'haptic_notifications_original',
-    'ko':'핸들 진동','en':'Steering-wheel haptics','params':['C3xLiteHapticNotifications']})
+    'ko':'핸들 진동','en':'Steering-wheel haptics','params':['C3xLiteHapticNotifications']+
+      [x[0] for x in helper_ns['HAPTIC_EVENT_OPTIONS']]+[helper_ns['HAPTIC_PATTERN_KEY']]})
   output = {CONTROLLER:c.encode(), FACTORY:f.encode(), KEYS:k.encode(),
     SETTINGS:(json.dumps(settings,ensure_ascii=False,indent=2)+'\n').encode(),
     HELPER:committed(source_commit, HELPER)}

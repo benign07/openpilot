@@ -369,5 +369,12 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"HardwareC3xLite", {PERSISTENT, INT, "0"}},
     {"C3xLiteBuzzerMute", {PERSISTENT, BOOL, "0"}},
     {"C3xLiteHapticNotifications", {PERSISTENT, BOOL, "0"}},
+    {"C3xLiteHapticEngage", {PERSISTENT, BOOL, "1"}},
+    {"C3xLiteHapticTraffic", {PERSISTENT, BOOL, "1"}},
+    {"C3xLiteHapticLaneChange", {PERSISTENT, BOOL, "1"}},
+    {"C3xLiteHapticStopping", {PERSISTENT, BOOL, "1"}},
+    {"C3xLiteHapticNavigation", {PERSISTENT, BOOL, "1"}},
+    {"C3xLiteHapticReverse", {PERSISTENT, BOOL, "1"}},
+    {"C3xLiteHapticPattern", {PERSISTENT, INT, "0"}},
     {"ShareData", {PERSISTENT, INT, "0"}},
 };
