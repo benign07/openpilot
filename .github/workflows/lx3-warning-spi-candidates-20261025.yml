@@ -49,6 +49,7 @@ jobs:
   original-arm:
     runs-on: ubuntu-24.04-arm
     strategy:
+      fail-fast: false
       matrix:
         profile: [baseline,observed,turnaround]
     steps:
