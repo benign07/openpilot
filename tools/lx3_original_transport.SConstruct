@@ -34,6 +34,10 @@ env_swaglog=env.Clone();env_swaglog['CXXFLAGS'].append('-DSWAGLOG="\\"common/swa
 SConscript('msgq_repo/SConscript',exports={'env':env_swaglog});Import('msgq')
 SConscript('cereal/SConscript');Import('socketmaster');messaging=[socketmaster,msgq,'capnp','kj'];Export('messaging')
 # Only the original native target's JSON library is required, not GPU/model code.
-env.Library('third_party/json11', ['third_party/json11/json11.cpp'])
+json_env=env.Clone()
+# Original json11 intentionally uses move through its std using-declaration.
+# Keep its sealed bytes; this newer Clang style warning is not a runtime fault.
+json_env.Append(CXXFLAGS=['-Wno-unqualified-std-cast-call'])
+json_env.Library('third_party/json11', ['third_party/json11/json11.cpp'])
 SConscript('selfdrive/pandad/SConscript')
 Default('selfdrive/pandad/pandad','selfdrive/pandad/tests/test_pandad_canprotocol')
