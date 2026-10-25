@@ -139,3 +139,21 @@ def test_pending_or_refused_intent_is_not_an_accepted_lateral_to_keep(native):
   h=Host(native);h.c._lat_enabled=True;h.available=True
   for _ in range(3):h.step()
   h.main();assert not h.c._lat_enabled and h.snapshot().allowed==0
+
+@pytest.mark.parametrize('change',['stale','timeout','switched_off','epoch','observed_other_revoke','other_button'])
+def test_latched_request_does_not_survive_aborted_main_attempt(native,change):
+  h=Host(native);h.engage();h.step(8);c=h.c
+  assert c.lx3_main_keep_lateral is not None
+  a=h.snapshot();now=native.fixture_now()*1000
+  cs=NS(lx3Authority=a,buttonEvents=[],gearShifter='drive',canValid=True,canTimeout=False,
+        steerFaultTemporary=False,steerFaultPermanent=False,brakePressed=False,gasPressed=False)
+  if change=='stale':a.statusMonoTime=now-authority.STATUS_MAX_NS-1
+  elif change=='timeout':now=c.lx3_main_keep_lateral[2]+2_000_000_000;a.statusMonoTime=now
+  elif change=='switched_off':c._keep_lateral_on_cruise_off=False
+  elif change=='epoch':a.epoch+=1
+  elif change=='observed_other_revoke':a.allowed=0;a.lateralGeneration=a.longitudinalGeneration=0;a.reason=2
+  else:cs.buttonEvents=[NS(physical=True,type=BT.lfaButton,pressed=True)]
+  c._update_lx3_main_latch(cs,now);assert c.lx3_main_keep_lateral is None
+  cs.cruiseState=NS(available=False)
+  c._handle_lx3_main_release(cs,NS(physicalKey=8<<8,observedMonoTime=now))
+  assert not c._lat_enabled

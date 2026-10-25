@@ -493,7 +493,8 @@ class VCruiseCarrot:
       elif b.type != ButtonType.mainCruise:
         self.lx3_main_keep_lateral = None
     latch = self.lx3_main_keep_lateral
-    if latch and (a.epoch != latch[0] or not 0 <= now_ns-latch[2] < 2_000_000_000):
+    if latch and (a.epoch != latch[0] or not 0 <= now_ns-latch[2] < 2_000_000_000 or
+                  (not a.allowed & 1 and a.reason not in (0, 3))):
       self.lx3_main_keep_lateral = None
 
   @staticmethod
