@@ -1,6 +1,7 @@
 """Offline signature/migration rejection and layered source recovery."""
 from pathlib import Path
 import base64,hashlib,importlib.util,json,os,subprocess
+import sys
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
@@ -101,3 +102,18 @@ def test_recovery_authorization_requires_fresh_exact_owner_and_verified_boot_clo
   elif change=='roundtrip':device['roundtrip_seconds']=11.
   else:device['serial']='fb6d3f3f'
   with pytest.raises(AssertionError):issuer.confirmation(owner,device,'f'*64,1001.)
+
+@pytest.mark.skipif(os.name=='nt',reason='Actual source alias and POSIX module search path exercised on Linux')
+@pytest.mark.parametrize('absolute_alias',[False,True])
+def test_staged_namespace_cannot_fall_back_to_live_source_alias(tmp_path,absolute_alias):
+  root=tmp_path/'live';root.mkdir();overlay=tmp_path/'new';overlay.mkdir()
+  for folder in ('selfdrive','selfdrive/controls','selfdrive/controls/lib','cereal'):
+    p=root/folder;p.mkdir(exist_ok=True);(p/'__init__.py').write_text('')
+  (root/'openpilot').symlink_to(root if absolute_alias else '.',target_is_directory=True)
+  name='selfdrive/controls/lib/approach_comfort.py';p=overlay/name;p.parent.mkdir(parents=True);p.write_text("VALUE='candidate'\n")
+  (root/'cereal/__init__.py').write_text("VALUE='private_cereal'\n")
+  parent=tmp_path/'smoke';view=parent/'openpilot';deploy.make_smoke_view(root,overlay,view,[name])
+  program="from openpilot.selfdrive.controls.lib import approach_comfort as m; import cereal; from pathlib import Path; import sys; assert m.VALUE=='candidate'; assert Path(m.__file__).resolve().is_relative_to(Path(sys.argv[1])); assert Path(cereal.__file__).resolve().is_relative_to(Path(sys.argv[1])); print('PASS private source namespace')"
+  result=subprocess.run([sys.executable,'-c',program,str(view)],cwd=parent,env=deploy.smoke_environment(parent,view),capture_output=True,text=True)
+  assert result.returncode==0,result.stderr
+  assert not (root/name).exists()

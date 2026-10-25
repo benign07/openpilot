@@ -126,13 +126,18 @@ def make_smoke_view(root,overlay,dest,order):
       target.mkdir(exist_ok=True)
       children={p.name for p in source.iterdir()}|{Path(n).relative_to(rel).parts[0] for n in order if rel=='.' or n.startswith(rel+'/')}
       for name in sorted(children):visit(name if rel=='.' else rel+'/'+name)
-    elif source.is_symlink():target.symlink_to(os.readlink(source),target_is_directory=source.is_dir())
+    elif source.is_symlink():
+      target.symlink_to(dest if source.resolve()==root.resolve() else os.readlink(source),target_is_directory=source.is_dir())
     elif source.is_file() and source.suffix in ('.py','.capnp'):target.write_bytes(source.read_bytes())
     elif source.exists():target.symlink_to(source,target_is_directory=source.is_dir())
   visit('.')
 
+def smoke_environment(parent,view):
+  return {**os.environ,'PYTHONPATH':str(parent)+':'+str(view)+':'+str(view/'opendbc_repo')+':'+os.environ.get('PYTHONPATH',''),
+    'PYTHONDONTWRITEBYTECODE':'1','PWD':str(parent)}
+
 def import_smoke(root,folder,core):
-  parent=folder/'smoke';view=parent/'openpilot'
+  parent=folder/'smoke-v2';view=parent/'openpilot'
   if not view.exists():make_smoke_view(root,folder/'new',view,core.ORDER)
   program=r'''
 from pathlib import Path
@@ -159,8 +164,8 @@ assert 'display_context' in inspect.signature(__import__('opendbc.car.interfaces
 print(json.dumps({'key_count':333,'new_schema_roundtrip':True,'current_speed_and_planner_imports':True,
  'haptic_configuration_retained':True,'display_context_dependency':True,'no_CAN_publisher_instantiated':True}))
 '''
-  env={**os.environ,'PYTHONPATH':str(parent)+':'+str(view/'opendbc_repo')+':'+os.environ.get('PYTHONPATH',''), 'PYTHONDONTWRITEBYTECODE':'1'}
-  result=subprocess.run([sys.executable,'-c',program,str(view)],cwd=view,env=env,capture_output=True,text=True,timeout=60)
+  env=smoke_environment(parent,view)
+  result=subprocess.run([sys.executable,'-c',program,str(view)],cwd=parent,env=env,capture_output=True,text=True,timeout=60)
   core.atomic(folder/'import-smoke.stdout',result.stdout.encode());core.atomic(folder/'import-smoke.stderr',result.stderr.encode())
   assert result.returncode==0,result.stderr[-3000:]
   report=json.loads(result.stdout.splitlines()[-1]);core.save(folder/'import-smoke.json',report);return report
