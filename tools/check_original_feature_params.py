@@ -33,8 +33,8 @@ def main():
     else:
       old=json.loads((OUT/'before-registry.json').read_text())
       assert {k:v for k,v in attrs.items() if k not in profile['new_keys']}==old
-      assert params.get_bool('CruiseStartCurrentSpeed',return_default=True)
-      assert not params.get_bool('ApproachComfortEnabled',return_default=True)
+      assert params.get('CruiseStartCurrentSpeed',return_default=True) is True
+      assert params.get('ApproachComfortEnabled',return_default=True) is False
       params.put_bool('ApproachComfortEnabled',True);assert params.get_bool('ApproachComfortEnabled')
       params.put_int('ApproachTrafficCalm',30);assert params.get_int('ApproachTrafficCalm')==30
       params.put_int('ApproachFlexibleGapMin',70);assert params.get_int('ApproachFlexibleGapMin')==70
