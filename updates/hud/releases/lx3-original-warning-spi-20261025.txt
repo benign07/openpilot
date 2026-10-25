@@ -1,0 +1,49 @@
+Original LX3: first-fault recording and guarded SPI observation candidates
+
+Prepared candidates, not a claim that the cluster warning or MCU SPI problem is solved.
+Original-device-only separately verified signed SSH deployment; NOT shared HUD source OTA.
+
+D1: two existing passive diagnostic modules. Independent bounded first-fault capture
+survives ordinary recording quota exhaustion; storage failures do not disarm the next
+trip. Two-second pre-window, first second at full rate and remaining sampled/edge data
+within eight seconds; bounded memory/queue/disk, with loss and source age disclosed.
+Existing phone UUID/gzip/manifest export contract retained. PC quality aggregation
+excludes overlapping priority captures. No new CAN transmitter, UDS request or model.
+
+S0: D1 plus an original-0627-source native pandad rebuild with guarded SPI reply/request
+bounds, finite malformed/recovery paths and separate endpoint/timing counters. Zero
+extra ready waits. Source/schema/health/permission/MDPS/control payloads remain the
+sealed original profile outside the two explicit SPI files. Panda firmware unchanged.
+Installed Python Params324 registry/extension and DisableDM/calibration/options preserved;
+the native build keeps its original316 registry and does not deploy that header.
+
+B0 is source-exact comparison, NOT binary-identical to the installed program. All eleven
+non-SPI stripped object hashes are identical across the three CI native profiles; this
+does not prove equivalence to the previously installed toolchain/binary.
+S1 extra-turnaround timing is experimental, unsigned and excluded from installation.
+
+Exact source f8b8761ca45e2e4a3f944269331e77fc9b9bb7cb / CI 40164817666: six jobs successful, Python3.11/3.12 each252 XML cases
+(including subtests), zero skipped/failing;19 adversarial inert scenarios per guarded
+profile; three ARM builds, original CAN protocol tests, ABI/symbol/library checks.
+Original-driver UB/over-read/unbounded-retry counterexamples are retained, not hidden.
+This is targeted verification, not a claim of the entire safety suite or MISRA audit.
+
+Actual logged LSS transition replay also retained onset and subsequent DAS transition
+in2729 pre/6641 final rows (including factory emergency alerts), zero dropped/evicted. Arrival clocks were simulated in
+that replay; live device timing, CPU/thermal behaviour and road qualification remain.
+MCU counter saturation prevents using a flat saturated count as evidence of recovery.
+
+Signed installer requires target serial, exact before hashes/protected files, completed
+HUD transaction and fresh continuous P/zero/inactive before stopping/writing/rebooting.
+No settings/firmware writes or diagnostic/control authority fabrication. Keep immutable
+transaction backups. A separately signed manual recovery helper requires a fresh signed
+physical-condition record bound to device BOOTTIME/boot/bundle; wall-clock disagreement cannot extend freshness. It restores only with
+all services stopped, never starts services or reboots. Linux PC rehearsal exercised
+real /proc/fsync, live control-process rejection and expired-authorisation rejection.
+No real vehicle recovery authorisation was created by those isolated PC fixtures.
+
+Cluster LSS cause and MCU SPI error cause remain unresolved. Differences between
+physical EPS state and existing camera-facing compatibility responses are a candidate,
+not proven causality and not permission to mask faults or alter MDPS further.
+Device installation/postboot checks and road results must be recorded separately.
+Additional LX3 and EV9 devices and shared HUD latest.json are untouched.

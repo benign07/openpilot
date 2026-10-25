@@ -1,0 +1,14 @@
+{
+  "kind": "original-lx3-manual-file-recovery-v1",
+  "target_serial": "80acfe79",
+  "release_id": "lx3-original-spi-observe-20261025-02",
+  "bundle_sha256": "bd633feec282a846e9398a1b7dca608deba61bc2d4ccf0e9cb4f8e1c2769bc94",
+  "installer_sha256": "125cc5361ab3fa2bd674a8aea8d8815bf641f2f7e8d7ce417916e43dc8d1f949",
+  "script_sha256": "e937f4b8b351eeb0c22ca8585ad963de9285b2a9180c118f7cc956dc491b67d3",
+  "starts_service": false,
+  "reboots": false,
+  "PC_issuer_sha256": "2f7ef0164d7de3c049fb8660da01ec3a75595aea8d7457874479133092940a84",
+  "fresh_signed_physical_confirmation_required": true,
+  "descriptor_sha256": "54d67c94efd56233ccf93ac6b791cb799a2498c01bcb7d78c070fdb59d5d05e8",
+  "original_PREPARED_sha256": "7c4c9f30831e20f066a968c6b97be40a1378416100f02aa0cbd77b9461fcbc33"
+}

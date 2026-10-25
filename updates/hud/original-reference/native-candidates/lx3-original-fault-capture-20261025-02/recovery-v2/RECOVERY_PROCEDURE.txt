@@ -1,0 +1,55 @@
+Original-only signed S0 file recovery, current recovery-v2 support directory
+
+Ordinary install/rollback retains fresh continuous P/zero/inactive telemetry.
+This separate recovery ONLY follows NEW direct physical owner confirmation
+of P/zero/control off, maintained throughout, or physical CAN disconnection on
+the office bench. If neither condition can be confirmed, do not execute.
+
+Before installation, copy installer.py/package.signed.json at the package root,
+and recovery-v2/{manual_recovery.py,RECOVERY.signed.json,RECOVERY_PREPARED.json,
+RECOVERY_PROCEDURE.txt}. Keep recovery-v2/issue_recovery_confirmation.py on PC and preserve
+PC/device before/ backups. Never hand-build/reuse a token or infer confirmation.
+
+1. Archive the owner's NEW exact confirmation in a private PC JSON:
+{"confirmed_by":"owner","confirmed_at_pc_unix":ACTUAL_CONFIRMATION_TIMESTAMP,
+ "physical_condition":"P_zero_control_off","exact_message":"EXACT NEW WORDS"}
+Alternative condition: physically_CAN_disconnected_bench. Never insert current
+time beside an old message. Issuer rejects observer records older than60s.
+
+2. Recheck package/installer/helper SHA against signed PC originals. On target:
+F=/data/community/lx3_candidates/lx3-original-spi-observe-20261025-02
+H="$F/recovery-v2"
+sha256sum "$F/installer.py" "$H/manual_recovery.py"
+Compare with PC-verified PREPARED/RECOVERY_PREPARED, not just device copies.
+A modified helper's self-check alone is not trusted.
+
+3. With physical condition still maintained:
+sudo -n systemctl stop comma.service
+systemctl is-active comma.service
+If failed, clear failed bookkeeping (does NOT start service):
+sudo -n systemctl reset-failed comma.service
+Helper still requires inactive and scans real /proc for remaining controllers.
+
+4. On PC run verified issuer, keeping signing key private on PC (one line):
+python recovery-v2/issue_recovery_confirmation.py --folder LOCAL_SIGNED_PACKAGE_FOLDER --workspace PC_WORKSPACE_ROOT --owner-confirmation NEW_PRIVATE_OWNER_JSON --out NEW_PRIVATE_TOKEN_JSON
+Issuer reads device serial, boot ID, Unix time and BOOTTIME over SSH. Exact
+owner message/device observation/token are archived privately. Token expires
+120s after observed DEVICE BOOTTIME and is bound to that boot and bundle.
+PC/device wall-clock disagreement is irrelevant; NTP cannot extend validity.
+
+5. Transfer token privately to "$F/physical_confirmation.json". Run once,
+detached with private stdout/stderr, from /data/openpilot (one line):
+PYTHONPATH=/data/openpilot/pydeps:/data/openpilot /usr/local/venv/bin/python "$H/manual_recovery.py" --folder "$F" --authorization "$F/physical_confirmation.json"
+
+6. Helper verifies key, signed descriptor/installer/package, fresh token, no
+competing HUD transaction, stopped processes, signed journal, ALL protected/
+live/backup hashes BEFORE writes. Native restored first. Who/when/how/boot/
+message SHA recorded. It NEVER starts services/reboots. Failure leaves
+recovery_required. Fresh physical confirmation required AGAIN before normal
+start/reboot. Roll back S0 before D1; never mix their transaction journals.
+
+Linux PC rehearsal executes this exact helper AND issuer with actual /proc
+and directory fsync, inert systemctl. It checks active-process rejection,
+stale observer/expired signed tokens,7200s wall-clock disagreement, exact
+original-native restore with/without D1. Fixture tokens are labelled simulated,
+bound to WSL's boot and never sent to the actual device.

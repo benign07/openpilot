@@ -1,0 +1,49 @@
+{
+  "release_id": "lx3-original-fault-capture-20261025-02",
+  "target_serial": "80acfe79",
+  "source_commit": "f8b8761ca45e2e4a3f944269331e77fc9b9bb7cb",
+  "CI_run": 40164817666,
+  "installer_sha256": "125cc5361ab3fa2bd674a8aea8d8815bf641f2f7e8d7ce417916e43dc8d1f949",
+  "firmware_changed": false,
+  "actuation_source_changed": false,
+  "road_qualified": false,
+  "baseline_native": "02302e2a712168d4ed6532b7f2f589ccf91abacebc63e26b79ee034763019d64",
+  "protected": {
+    "selfdrive/car/card.py": "139d6cfc396148170f980ccbf68bb810542a360fbe3be15906103d4fed30598c",
+    "cereal/car.capnp": "9322ea6f777daf556e362b5f87e6f555db53c2a433c05a05f09913c4ee3a98ec",
+    "common/params_pyx.so": "8aa96c0a392bc9f10d640164ae9262b149851fe1976c50ab3569244a14beeb3b",
+    "common/params_keys.h": "210e60d225d1843aff35d3af6dbede63652ce46fb4fe475629281e43688470ce"
+  },
+  "shared_HUD_channel_changed": false,
+  "source_OTA": false,
+  "notes": [
+    "Original 0627 control payloads/MDPS/Panda firmware/Params324/DisableDM/calibration preserved.",
+    "Independent first-fault diagnostic retention and storage-failure isolation; passive observation only.",
+    "S0 bounds malformed SPI replies/recovery and observes transport without extra ready waits.",
+    "S1 extra-turnaround profile is experimental, unsigned and not installable.",
+    "LSS warning and MCU SPI causality/resolution remain unproven; source-exact B0 is not binary-identical to installed baseline.",
+    "Install/reboot only with fresh continuous P/zero/inactive. Native requires separately verified SSH installation."
+  ],
+  "files": [
+    {
+      "path": "selfdrive/carrot/can_diagnostics/automatic.py",
+      "sha256": "90acc75bfeadc66aec603bc9e66d5463111c7ea2f0cabc5d8f1bded857435086",
+      "bytes": 77934,
+      "allowed_before": [
+        "8aab199e7bc2d2de9ef82d3c32e71266022963522c9e0bdc5442e85888627227"
+      ]
+    },
+    {
+      "path": "selfdrive/carrot/can_diagnostics/automatic_runtime.py",
+      "sha256": "45f020f7cdee9408e105ccf7ec0024ed6c771457aaa9bb030a963164d6d52993",
+      "bytes": 27055,
+      "allowed_before": [
+        "2582f747e1aa0476dc96368659c2d34cf9a28af5791794277adaaf62c3f571ec"
+      ]
+    }
+  ],
+  "bundle_sha256": "e42ee712699a37960368f6be4d090cd0b7464117dc5cd8b80811e7ead913bb7b",
+  "bundle_bytes": 189389,
+  "installed": false,
+  "public_signature_verified": true
+}

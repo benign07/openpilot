@@ -1,0 +1,14 @@
+{
+  "kind": "original-lx3-manual-file-recovery-v1",
+  "target_serial": "80acfe79",
+  "release_id": "lx3-original-fault-capture-20261025-02",
+  "bundle_sha256": "e42ee712699a37960368f6be4d090cd0b7464117dc5cd8b80811e7ead913bb7b",
+  "installer_sha256": "125cc5361ab3fa2bd674a8aea8d8815bf641f2f7e8d7ce417916e43dc8d1f949",
+  "script_sha256": "e937f4b8b351eeb0c22ca8585ad963de9285b2a9180c118f7cc956dc491b67d3",
+  "starts_service": false,
+  "reboots": false,
+  "PC_issuer_sha256": "2f7ef0164d7de3c049fb8660da01ec3a75595aea8d7457874479133092940a84",
+  "fresh_signed_physical_confirmation_required": true,
+  "descriptor_sha256": "faebbe59734f60ea2358680b87c11264ee07fccafc245e10178a2e0d81d07cb0",
+  "original_PREPARED_sha256": "bde27cef65aeaff3b4fecb552afd273c30b80b497d49dd2a0799509deebe1353"
+}
