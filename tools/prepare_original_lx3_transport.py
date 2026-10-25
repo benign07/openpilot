@@ -41,9 +41,15 @@ def prepare(profile,out):
   if os.name=='nt':shutil.copytree(out/'msgq_repo/msgq',out/'msgq')
   else:(out/'msgq').symlink_to('msgq_repo/msgq',target_is_directory=True)
   (out/'SConstruct').write_bytes((ROOT/'tools/lx3_original_transport.SConstruct').read_bytes())
-  status=subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True)
+  # This inherited repository tracks several binary assets as raw blobs even
+  # though its attributes name LFS. A runner's LFS clean filter reports those
+  # untouched raw blobs as modified. Compare actual checkout bytes, without
+  # invoking that conversion; real source changes must still fail the gate.
+  status=subprocess.check_output(['git','-c','filter.lfs.process=','-c','filter.lfs.clean=',
+    '-c','filter.lfs.smudge=','-c','filter.lfs.required=false','status','--porcelain'],cwd=ROOT,text=True)
   record={'source_commit':commit,'profile':profile,'installed_baseline_pandad':manifest['installed_pandad_sha256'],
     'working_tree_dirty':bool(status),'source_status_porcelain':status,
+    'status_comparison':'raw_git_blob_bytes_with_LFS_conversion_disabled',
     'generator_sha256':hashlib.sha256((ROOT/'tools/original_lx3_spi_variant.py').read_bytes()).hexdigest(),
     'original_spi_sha256':hashlib.sha256(original_spi).hexdigest(),
     'files':{n:hashlib.sha256(raw).hexdigest() for n,raw in files.items()},
