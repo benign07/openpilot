@@ -8,7 +8,7 @@ from pathlib import Path
 import argparse,base64,hashlib,importlib.util,json,os,subprocess,sys,time
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-RID='lx3-original-feature-parity-20261025-01'
+RID='lx3-original-feature-parity-20261025-02'
 SERIAL='80acfe79'
 PUBLIC_SHA='56d7f915ed4d802bccf46db83f0d7b147579466ed060abdf1dab96759babd223'
 CORE_SHA='d08e4062811ec1099cd3afc9b84bda2174f712a72f3ef5db0a0a6dc0d7ba6a03'
@@ -19,6 +19,38 @@ BOOL_KEYS={'ApproachComfortEnabled','ApproachFlexibleGap','C3xLiteBuzzerMute','C
 INT_KEYS={'ApproachCoastStrength','ApproachBrakeMargin','ApproachStopSmooth','ApproachTrafficCalm','ApproachFlexibleGapMin'}
 JSON_PREF_KEYS={'LaunchFollowStrength':20,'YellowLineBiasCm':10,'NearbyVehicleBiasCm':10,'LateralMarginShadow':1}
 sha=lambda raw:hashlib.sha256(raw).hexdigest()
+LEARNED_KEYS={'CalibrationParams','LiveTorqueParameters'}
+
+
+def freeze_stopped_settings(params_dir,record,writers_stopped):
+  """Retain this device's latest learned values after their writers have exited.
+
+  These caches update periodically even while parked; a staging-time hash is
+  not a stable preference. Never replace their bytes, and never relax static
+  identity, monitoring, recording or haptic preference checks.
+  """
+  assert writers_stopped,'Learned parameter writers still running'
+  staged=record['protected_settings']
+  current={}
+  for key,expected in staged.items():
+    path=params_dir/key
+    assert path.is_file() and not path.is_symlink(),key
+    current[key]=sha(path.read_bytes())
+    assert key in LEARNED_KEYS or current[key]==expected,'Foreign protected preference change: '+key
+  record['protected_settings_at_stage']=dict(staged)
+  record['learned_updates_before_writes']={k:{'stage':staged[k],'stopped':current[k]}
+    for k in LEARNED_KEYS&staged.keys() if staged[k]!=current[k]}
+  record['protected_settings']=current
+
+
+def learned_writers_stopped(proc=Path('/proc')):
+  for path in proc.iterdir():
+    if not path.name.isdigit():continue
+    try:
+      if (path/'comm').read_text().strip() in ('torqued','calibrationd'):return False
+    except (FileNotFoundError,ProcessLookupError):continue
+    except PermissionError:return False
+  return True
 
 def support(folder):
   core_file=folder/'haptic_core.py';policy_file=folder/'feature-policy.json'
@@ -243,7 +275,10 @@ def main():
         core.restore(root,folder,record,restore_preferences=False);restore_settings(core,record,paths)
         core.before(root,files);schema_link(root);record.update(phase='restored_feature_layer_before_S0',runtime_modified=False)
       else:
-        core.before(root,files);changed=True;record['phase']='installing';core.save(record_file,record)
+        core.before(root,files)
+        freeze_stopped_settings(params_dir,record,learned_writers_stopped())
+        core.save(record_file,record)
+        changed=True;record['phase']='installing';core.save(record_file,record)
         for n in core.ORDER:
           core.atomic(core.checked(root,n),(folder/'new'/n).read_bytes(),record['files'][n]['mode']);record['last_file']=n;core.save(record_file,record)
         assert all(sha(core.checked(root,n).read_bytes())==files[n]['sha256'] for n in core.ORDER)

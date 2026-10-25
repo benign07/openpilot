@@ -13,6 +13,39 @@ deploy=load('feature_transaction',ROOT/'tools/install_original_lx3_feature_parit
 profile=load('feature_composer',ROOT/'tools/prepare_original_lx3_feature_parity.py')
 issuer=load('feature_issuer',ROOT/'tools/issue_original_feature_recovery.py')
 
+
+@pytest.mark.parametrize('change',['learned','static','writer','missing','symlink'])
+def test_protected_settings_freeze_only_after_estimator_writers_stop(tmp_path,change):
+  if change=='symlink' and os.name=='nt':pytest.skip('Actual symlink checked on Linux')
+  params=tmp_path/'params';params.mkdir()
+  old={'DisableDM':b'1','C3xLiteHapticPattern':b'2','CalibrationParams':b'own-camera-old',
+       'LiveTorqueParameters':b'own-torque-old'}
+  for k,v in old.items():(params/k).write_bytes(v)
+  record={'protected_settings':{k:deploy.sha(v) for k,v in old.items()}}
+  (params/'LiveTorqueParameters').write_bytes(b'own-torque-new-from-periodic-writer')
+  if change=='static':(params/'DisableDM').write_bytes(b'0')
+  elif change=='missing':(params/'CalibrationParams').unlink()
+  elif change=='symlink':
+    (params/'CalibrationParams').unlink();(params/'CalibrationParams').symlink_to(params/'LiveTorqueParameters')
+  before={p.name:p.read_bytes() for p in params.iterdir()}
+  if change!='learned':
+    with pytest.raises(AssertionError):deploy.freeze_stopped_settings(params,record,change!='writer')
+    assert record['protected_settings']=={k:deploy.sha(v) for k,v in old.items()}
+  else:
+    deploy.freeze_stopped_settings(params,record,True)
+    assert record['learned_updates_before_writes']=={'LiveTorqueParameters':{
+      'stage':deploy.sha(old['LiveTorqueParameters']),'stopped':deploy.sha(before['LiveTorqueParameters'])}}
+    assert record['protected_settings']['DisableDM']==deploy.sha(b'1')
+    assert record['protected_settings']['LiveTorqueParameters']==deploy.sha(before['LiveTorqueParameters'])
+  assert {p.name:p.read_bytes() for p in params.iterdir()}==before
+
+
+def test_estimator_process_presence_blocks_freeze(tmp_path):
+  path=tmp_path/'42';path.mkdir();(path/'comm').write_text('torqued\n')
+  assert not deploy.learned_writers_stopped(tmp_path)
+  (path/'comm').write_text('calibrationd\n');assert not deploy.learned_writers_stopped(tmp_path)
+  (path/'comm').write_text('unrelated\n');assert deploy.learned_writers_stopped(tmp_path)
+
 def fixture(tmp_path,monkeypatch):
   root=tmp_path/'root';root.mkdir();stage=tmp_path/'stage';stage.mkdir()
   (stage/'haptic_core.py').write_bytes((ROOT/'tools/install_original_lx3_haptics.py').read_bytes())
