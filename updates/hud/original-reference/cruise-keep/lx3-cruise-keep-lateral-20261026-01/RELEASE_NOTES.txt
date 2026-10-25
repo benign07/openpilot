@@ -1,0 +1,9 @@
+크루즈 해제 시 조향보조 유지: 개발 중 기능 → 크루즈 버튼·조향보조, 기본 꺼짐.
+ON keeps only previously accepted lateral request across a physical MAIN-off; OFF preserves prior behaviour.
+Real new MAIN citation and native permission remain required; a brief normal handshake/ramp gap can occur.
+LFA off, input/steer faults and heartbeat checks remain; normal AlwaysLateral pedal policy is unchanged.
+Separate JSON preference file preserves rollback compatibility with old driving preferences. No automatic enable.
+Seven Python files only; original native333/S0/H7/D1/haptics/schema/controlsd/factory stay unchanged.
+Shared HUD updater excludes selfdrive/car files. Separate signed parked SSH installation is required; no APK update.
+No claim of HUD dotted lane/colour repair, LSS warning or SPI root-cause repair. No actual vehicle installation.
+Restore this7-file option layer FIRST, then RID03 feature parity, then S0/D1 if needed. Normal rollback requires fresh maintainedP/zero/inactive. On failed boot, obtain a NEW exact owner P0inactive or physically-CAN-disconnected-bench message, fresh SSH boot/BOOTTIME observation, then issue a signed120s confirmation with the private PC signing key. Do not fabricate or reuse confirmation. Stop comma.service and actual controllers before manual_recovery.py. It restores only known before/after source states and never starts/reboots or changes preferences. Keep tokens/operator audit/private keys off Git. Keep the separate cruise_button_preferences.json on rollback; old builds ignore it and existing driving_preferences.json remains unchanged.
