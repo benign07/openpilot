@@ -1,0 +1,68 @@
+name: LX3 original stable-feature parity and original ABI
+on:
+  push:
+    branches: [review/lx3-original-feature-parity-20261025]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  feature-contracts:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11','3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest numpy pycapnp aiohttp cryptography requests scipy
+      - name: Verified target composition, current-speed, comfort, lateral handback, surround and diagnostic contracts
+        run: |
+          set -o pipefail
+          ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
+          python tools/prepare_original_lx3_feature_parity.py --out /tmp/lx3-feature-profile > feature-profile.json
+          cp /tmp/lx3-feature-profile/opendbc_repo/opendbc/car/car.capnp opendbc_repo/opendbc/car/car.capnp
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_original_feature_parity.py selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_composition.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_speed_follow_gap.py selfdrive/controls/tests/test_manual_steering_timing.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_lateral_margin.py selfdrive/controls/tests/test_haptic_options.py selfdrive/controls/tests/test_lx3_notification_resume.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_notification_border.py selfdrive/carrot/can_diagnostics/test_priority_capsule.py -q --junitxml=features.xml 2>&1 | tee features.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-feature-contract-${{ matrix.python }}
+          path: |
+            features.xml
+            features.log
+            feature-profile.json
+  original-params-arm:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compiler and original-compatible Params build
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang python3-venv
+          python3 -m venv /tmp/lx3-feature-build
+          /tmp/lx3-feature-build/bin/pip install scons setuptools==80.9.0 Cython==3.2.4 numpy pycapnp pyzmq requests pyserial zstandard
+          export PATH="/tmp/lx3-feature-build/bin:$PATH"
+          ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
+          python tools/lx3_spi_arm_artifact.py sdk
+          python tools/check_original_feature_params.py prepare-before
+          scons -f tools/lx3_spi_arm.SConstruct --minimal -j2 common/params_pyx.so 2>&1 | tee before-build.log
+          python tools/check_original_feature_params.py verify-before
+          python tools/check_original_feature_params.py prepare-after
+          scons -f tools/lx3_spi_arm.SConstruct --minimal -j2 common/params_pyx.so 2>&1 | tee after-build.log
+          python tools/check_original_feature_params.py verify-after
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-feature-arm-params
+          path: |
+            original-feature-arm-evidence
+            common/params_pyx.so
+            before-build.log
+            after-build.log

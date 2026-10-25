@@ -404,6 +404,9 @@ struct CarControl {
   angularVelocity @14 :List(Float32);
   currentCurvature @17 :Float32;  # From vehicle model
   lx3Authority @18 :Lx3Authority;
+  manualSteeringScale @19 :Float32 = 1;
+  # Smooth actuator handback only; never grants lateral control permission.
+  manualSteeringResume @20 :Bool;
 
   cruiseControl @4 :CruiseControl;
   hudControl @5 :HUDControl;
