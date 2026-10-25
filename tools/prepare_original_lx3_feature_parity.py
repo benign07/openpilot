@@ -81,7 +81,10 @@ def prepare(out):
   out.mkdir(parents=True,exist_ok=False)
   for name,raw in after.items():
     p=out/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
+  status=subprocess.check_output(['git','-c','filter.lfs.process=','-c','filter.lfs.clean=',
+    '-c','filter.lfs.smudge=','-c','filter.lfs.required=false','status','--porcelain'],cwd=ROOT,text=True)
   record={**evidence,'builder_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
+    'builder_sha256':sha(Path(__file__).read_bytes()),'working_tree_dirty':bool(status),
     'runtime_source_commit':profile['source_commit'],'before_release':profile['before_release'],
     'target_serial':profile['target_serial'],'source_donor_serial':profile['donor_serial'],
     'before':{n:r['before_sha256'] for n,r in profile['files'].items()},
