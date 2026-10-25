@@ -1,4 +1,6 @@
 venv/
+# Expanded from the hash-verified, sealed ARM SDK archive during CI builds.
+/arm-sdk/
 .venv/
 .ci_cache
 .env

@@ -96,5 +96,13 @@ class CandidateDeploymentTests(unittest.TestCase):
       state=Path(tmp)/'state.json';state.write_text('{"phase":"armed"}')
       with self.assertRaises(AssertionError):deploy.no_pending_ota(state)
 
+  def test_transaction_paths_are_bound_back_to_signed_files(self):
+    files={name:{'allowed_before':[None],'sha256':'a'*64,'bytes':1} for name in deploy.DIAG}
+    manifest={'release_id':next(iter(deploy.RELEASES)),'source_commit':'c'*40}
+    record={'bundle_sha256':'d'*64,**manifest,'files':{name:{'before':None,'sha256':'a'*64,'bytes':1,'mode':0o644} for name in files}}
+    deploy.validate_record(manifest,files,record,'d'*64)
+    record['files']['system/launch.sh']=record['files'][deploy.DIAG[0]]
+    with self.assertRaises(AssertionError):deploy.validate_record(manifest,files,record,'d'*64)
+
 
 if __name__=='__main__':unittest.main()

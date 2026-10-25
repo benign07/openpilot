@@ -70,6 +70,7 @@ def verify(folder,public):
    assert native['profile']=='observed' and native['spi_ready_profile']==0
    assert native['runtime_sha256']==row['sha256'] and native['protocol_pass']
    assert native['schema_sha256']==PROTECTED['cereal/car.capnp'] and not native['working_tree_dirty']
+   assert all(files[path]['sha256']==native['files'][path] for path in NATIVE[:2])
  return manifest,files,sha((folder/'package.signed.json').read_bytes())
 
 
@@ -163,6 +164,14 @@ def validate_restore(root,folder,record):
  for name,digest in PROTECTED.items():assert sha((root/name).read_bytes())==digest,name
 
 
+def validate_record(manifest,files,record,bundle_sha):
+ assert record['bundle_sha256']==bundle_sha and record['release_id']==manifest['release_id']
+ assert record['source_commit']==manifest['source_commit'] and set(record['files'])==set(files)
+ for name,row in record['files'].items():
+  assert row['before'] in files[name]['allowed_before'] and row['sha256']==files[name]['sha256']
+  assert row['bytes']==files[name]['bytes'] and row['mode'] in (0o644,0o755)
+
+
 def restore(root,folder,record):
  validate_restore(root,folder,record)
  for name in reversed(list(record['files'])):
@@ -197,7 +206,7 @@ def main():
    record['files'][name]={'before':sha(old) if old is not None else None,'sha256':row['sha256'],'bytes':row['bytes'],'mode':mode}
   record['smoke']=import_smoke(folder);record['phase']='staged';save(record_path,record)
  else:
-  record=json.loads(record_path.read_text());assert record['bundle_sha256']==bundle_sha
+  record=json.loads(record_path.read_text());validate_record(manifest,files,record,bundle_sha)
   if args.phase=='install':
    assert record['phase']=='staged'
    before(root,manifest,files)
