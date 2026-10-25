@@ -8,7 +8,7 @@ from pathlib import Path
 import argparse,base64,hashlib,importlib.util,json,os,subprocess,sys,time
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-RID='lx3-original-feature-parity-20261025-02'
+RID='lx3-original-feature-parity-20261025-03'
 SERIAL='80acfe79'
 PUBLIC_SHA='56d7f915ed4d802bccf46db83f0d7b147579466ed060abdf1dab96759babd223'
 CORE_SHA='d08e4062811ec1099cd3afc9b84bda2174f712a72f3ef5db0a0a6dc0d7ba6a03'
@@ -47,7 +47,8 @@ def learned_writers_stopped(proc=Path('/proc')):
   for path in proc.iterdir():
     if not path.name.isdigit():continue
     try:
-      if (path/'comm').read_text().strip() in ('torqued','calibrationd'):return False
+      comm=(path/'comm').read_text().strip();args=(path/'cmdline').read_bytes()
+      if comm in ('torqued','calibrationd') or any(n in args for n in (b'locationd.torqued',b'locationd.calibrationd')):return False
     except (FileNotFoundError,ProcessLookupError):continue
     except PermissionError:return False
   return True
@@ -290,6 +291,11 @@ def main():
         expected=migration(folder,m)
         subprocess.run([sys.executable,'-c',command,json.dumps(expected['params']),json.dumps(expected['driving_preferences'])],cwd=root,check=True,timeout=10)
         assert time.monotonic()-record['gate']['mono']<15,'Fresh stop window exceeded'
+        assert learned_writers_stopped()
+        assert all(sha((params_dir/k).read_bytes())==h for k,h in record['protected_settings'].items())
+        record['pre_reboot_protected_settings']={'hashes':dict(record['protected_settings']),
+          'boot':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+          'boot_seconds':time.clock_gettime(time.CLOCK_BOOTTIME)}
         record.update(phase='installed_pending_reboot_verification',runtime_modified=True,source_layer_before_rollback='S0/D1')
       core.save(record_file,record)
     except BaseException:

@@ -41,10 +41,25 @@ def test_protected_settings_freeze_only_after_estimator_writers_stop(tmp_path,ch
 
 
 def test_estimator_process_presence_blocks_freeze(tmp_path):
-  path=tmp_path/'42';path.mkdir();(path/'comm').write_text('torqued\n')
+  path=tmp_path/'42';path.mkdir();(path/'comm').write_text('torqued\n');(path/'cmdline').write_bytes(b'python\0')
   assert not deploy.learned_writers_stopped(tmp_path)
   (path/'comm').write_text('calibrationd\n');assert not deploy.learned_writers_stopped(tmp_path)
   (path/'comm').write_text('unrelated\n');assert deploy.learned_writers_stopped(tmp_path)
+
+
+@pytest.mark.parametrize('name',['selfdrive.locationd.torqued','openpilot.selfdrive.locationd.calibrationd'])
+@pytest.mark.skipif(os.name=='nt',reason='Real Linux /proc setproctitle behaviour')
+def test_actual_module_process_title_is_detected_even_when_comm_is_truncated(name):
+  program="import setproctitle,time;setproctitle.setproctitle("+repr(name)+");print('ready',flush=True);time.sleep(60)"
+  child=subprocess.Popen([sys.executable,'-c',program],stdout=subprocess.PIPE,text=True)
+  try:
+    assert child.stdout.readline().strip()=='ready'
+    # Same setproctitle call as system.manager.process.launcher; no real writer,
+    # publisher, Params or CAN connection is started by this isolated child.
+    comm=(Path('/proc')/str(child.pid)/'comm').read_text().strip()
+    assert comm not in ('torqued','calibrationd')
+    assert not deploy.learned_writers_stopped()
+  finally:child.terminate();child.wait(timeout=5)
 
 def fixture(tmp_path,monkeypatch):
   root=tmp_path/'root';root.mkdir();stage=tmp_path/'stage';stage.mkdir()

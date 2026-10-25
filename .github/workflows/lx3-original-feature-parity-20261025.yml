@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install pytest numpy pycapnp aiohttp cryptography requests scipy
+      - run: python -m pip install pytest numpy pycapnp aiohttp cryptography requests scipy setproctitle
       - name: Verified target composition, current-speed, comfort, lateral handback, surround and diagnostic contracts
         run: |
           set -o pipefail
