@@ -488,7 +488,7 @@ class FirstFaultCapsule:
   This cannot recover frames lost upstream or during an actual reader stall.
   Stale/evicted/dropped records and timestamp coverage remain explicit.
   """
-  ADDRESSES = {0x10B,0xCB,0x12A,0xEA,0x162,0x1AA,0x175,0x4B9}
+  ADDRESSES = {0x10B,0xCB,0x12A,0xEA,0x161,0x162,0x1AA,0x175,0x4B9}
   PRE_NS = 2_000_000_000
   POST_NS = 8_000_000_000
   MAX_ROWS = 8192

@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 DIAG=('selfdrive/carrot/can_diagnostics/automatic.py','selfdrive/carrot/can_diagnostics/automatic_runtime.py')
 NATIVE=('selfdrive/pandad/spi_diagnostics.h','selfdrive/pandad/spi.cc','selfdrive/pandad/pandad')
-RELEASES={'lx3-original-fault-capture-20261025-01':DIAG,'lx3-original-spi-observe-20261025-01':DIAG+NATIVE}
+RELEASES={'lx3-original-fault-capture-20261025-02':DIAG,'lx3-original-spi-observe-20261025-02':DIAG+NATIVE}
 SERIAL='80acfe79'
 PUBLIC_SHA='56d7f915ed4d802bccf46db83f0d7b147579466ed060abdf1dab96759babd223'
 BASE_NATIVE='02302e2a712168d4ed6532b7f2f589ccf91abacebc63e26b79ee034763019d64'

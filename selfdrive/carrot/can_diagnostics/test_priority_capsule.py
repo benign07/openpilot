@@ -212,6 +212,15 @@ class CapsuleTests(unittest.TestCase):
     self.assertEqual(sink.items[0][1][0]['producer_age_ns'],1_500_000_000)
     self.assertEqual(sink.items[0][0]['capsule_phase'],'initial_present')
 
+  def test_factory_emergency_alert_edge_survives_after_full_rate_window(self):
+    cap,sink=self.make_capsule();self.send(cap);self.send(cap,1,100.1)
+    for now,value in ((102,0),(102.01,11),(102.02,0)):
+      cap.can_frame(2,0x161,(value<<128).to_bytes(32,'little'),int(now*1e9),now,'rx')
+    cap.context({},109)
+    rows=[r for r in sink.items[-1][1] if r.get('address')==0x161]
+    self.assertEqual(len(rows),3)
+    self.assertEqual((int.from_bytes(bytes.fromhex(rows[1]['data']),'little')>>128)&63,11)
+
   def test_capsules_are_not_counted_as_additional_driving(self):
     from tools.can_auto_sync import chunk_summary
     result=chunk_summary([{'kind':'header','priority_capsule':True,'boot_id':'b','trip_id':'t'},
