@@ -4,7 +4,7 @@ import argparse,hashlib,json,os,subprocess,re
 
 ROOT=Path(__file__).resolve().parents[1]
 CASES=('good','oversized','request','recovery','nack','header_nack','checksum','header_stuck',
-       'control_data_stuck','can_header_stuck','mixed_nack','disconnect_backpressure','boundary_ok','boundary_fail','intervals','burst','sleep','length_alternating')
+       'control_data_stuck','can_header_stuck','mixed_nack','disconnect_backpressure','boundary_ok','boundary_fail','intervals','burst','sleep','length_alternating','endpoint')
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
       assert abs(observed['charged_us']-ready['charged_us'])<=1,('charged-time drift',case,observed,ready)
   summary['fixture_sha256']=hashlib.sha256(fixture.read_bytes()).hexdigest()
   (out/'result.json').write_text(json.dumps(summary,indent=2))
-  print('PASS original counterexamples; observed/turnaround18 scenarios; same attempts/IO budget; inert, observed sleep N/A')
+  print('PASS original counterexamples; observed/turnaround19 scenarios; same attempts/IO budget; inert, observed sleep N/A')
 
 
 if __name__=='__main__':main()

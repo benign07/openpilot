@@ -22,7 +22,7 @@ struct SpiProfileStats {
 static SpiProfileStats spi_profile_stats;
 static double spi_last_activity_ms = -1000.0;
 [[maybe_unused]] static unsigned spi_next_ready_us = 0U;
-static unsigned spi_endpoint_slot(uint8_t endpoint) { return endpoint==0U ? 0U : endpoint==1U ? 1U : endpoint==3U ? 2U : 3U; }
+static unsigned spi_endpoint_slot(uint8_t endpoint) { return endpoint==0U ? 0U : (endpoint==1U||endpoint==0x81U) ? 1U : endpoint==3U ? 2U : 3U; }
 static void spi_observe_max(std::atomic<uint64_t> &target,uint64_t value) {
   uint64_t before=target.load(std::memory_order_relaxed);
   while(before<value && !target.compare_exchange_weak(before,value,std::memory_order_relaxed)) {}

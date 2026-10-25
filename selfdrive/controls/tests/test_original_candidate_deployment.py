@@ -1,4 +1,4 @@
-"""Pure signed-package/staging/rollback tests, never invokes installer main."""
+"""Inert signed-package/staging/rollback tests; no real service, CAN or device."""
 import base64
 import hashlib
 import json
@@ -6,6 +6,10 @@ from pathlib import Path
 import tempfile
 import unittest
 import os
+import sys
+import time
+import subprocess
+from types import SimpleNamespace
 from unittest.mock import patch
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
@@ -28,6 +32,7 @@ class CandidateDeploymentTests(unittest.TestCase):
         'data':base64.b64encode(data).decode(),'allowed_before':[None]})
     manifest={'release_id':next(iter(deploy.RELEASES)),'target_serial':deploy.SERIAL,
       'installer_sha256':deploy.sha(Path(deploy.__file__).read_bytes()),'files':files,
+      'source_commit':'c'*40,
       'firmware_changed':False,'actuation_source_changed':False,'road_qualified':False,
       'baseline_native':deploy.BASE_NATIVE,'protected':deploy.PROTECTED}
     if mutate:mutate(manifest)
@@ -93,8 +98,53 @@ class CandidateDeploymentTests(unittest.TestCase):
 
   def test_pending_ota_is_not_silently_overwritten(self):
     with tempfile.TemporaryDirectory() as tmp:
-      state=Path(tmp)/'state.json';state.write_text('{"phase":"armed"}')
+      state=Path(tmp)/'state.json'
       with self.assertRaises(AssertionError):deploy.no_pending_ota(state)
+      for phase in ('armed','downloading','verifying','countdown','waiting_parked',None):
+        state.write_text(json.dumps({'phase':phase}))
+        with self.assertRaises(AssertionError):deploy.no_pending_ota(state)
+      state.write_text('{"phase":"complete"}');deploy.no_pending_ota(state)
+
+  def run_inert_main(self,folder,root,public,phase,run=None):
+    config=folder/'config.json';config.write_text(json.dumps({'public_key':base64.b64encode(public).decode()}))
+    state=folder/'ota.json';state.write_text('{"phase":"complete"}')
+    load=deploy.public_from_config;ota=deploy.no_pending_ota;read_text=Path.read_text
+    def read(path,*args,**kwargs):
+      if path.as_posix().endswith('/proc/sys/kernel/random/boot_id'):return 'inert-boot'
+      return read_text(path,*args,**kwargs)
+    hardware=SimpleNamespace(HARDWARE=SimpleNamespace(get_serial=lambda:deploy.SERIAL))
+    with patch.dict(sys.modules,{'openpilot.system.hardware':hardware}), \
+      patch.object(sys,'argv',['installer',phase,'--folder',str(folder),'--root',str(root)]), \
+      patch.object(deploy,'public_from_config',side_effect=lambda:load(config)), \
+      patch.object(deploy,'no_pending_ota',side_effect=lambda:ota(state)), \
+      patch.object(deploy,'import_smoke',return_value={'inert':True}), \
+      patch.object(deploy,'parked',return_value={'mono':time.monotonic(),'continuous_seconds':10}), \
+      patch.object(Path,'read_text',read),patch.object(deploy.subprocess,'run',side_effect=run), \
+      patch.object(deploy.subprocess,'Popen') as reboot:
+      try:deploy.main()
+      finally:reboot.assert_not_called()
+
+  def test_main_reads_actual_public_key_config_and_stop_failure_preserves_runtime(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      folder=Path(tmp)/'tx';folder.mkdir();root=Path(tmp)/'root';root.mkdir()
+      (root/'prebuilt').touch();baseline=b'original-native'
+      (root/'selfdrive/pandad').mkdir(parents=True);(root/'selfdrive/pandad/pandad').write_bytes(baseline)
+      with patch.object(deploy,'BASE_NATIVE',deploy.sha(baseline)),patch.object(deploy,'PROTECTED',{}):
+        public=self.signed(folder)
+        with patch.object(deploy,'PUBLIC_SHA',deploy.sha(public)):
+          self.run_inert_main(folder,root,public,'stage')
+          self.assertEqual(json.loads((folder/'transaction.json').read_text())['phase'],'staged')
+          calls=[]
+          def fail_stop(args,**kwargs):
+            calls.append(args)
+            if 'stop' in args:raise subprocess.CalledProcessError(1,args)
+            return subprocess.CompletedProcess(args,0)
+          with self.assertRaises(subprocess.CalledProcessError):self.run_inert_main(folder,root,public,'install',fail_stop)
+          record=json.loads((folder/'transaction.json').read_text())
+          self.assertEqual(record['phase'],'aborted_before_write')
+          self.assertFalse(record['runtime_modified']);self.assertIn('start',calls[-1])
+          self.assertFalse((root/deploy.DIAG[0]).exists())
+          self.assertEqual((root/'selfdrive/pandad/pandad').read_bytes(),baseline)
 
   def test_transaction_paths_are_bound_back_to_signed_files(self):
     files={name:{'allowed_before':[None],'sha256':'a'*64,'bytes':1} for name in deploy.DIAG}

@@ -8,12 +8,25 @@
 
 int main(int argc,char **argv) {
   std::string test=argc>1 ? argv[1] : "";
-  if (test!="intervals" && test!="burst" && test!="sleep") return regression_main(argc,argv);
+  if (test!="intervals" && test!="burst" && test!="sleep" && test!="endpoint") return regression_main(argc,argv);
   PandaSpiHandle panda("");
   calls=0;fake_ms=0;scenario=Scenario::GOOD;
   std::vector<double> ends;
   on_transfer=[&](){ends.push_back(fake_ms);};
   unsigned char bytes[16] = {};
+  if(test=="endpoint") {
+#ifdef EXPECT_SPI_PROFILE
+    assert(spi_endpoint_slot(1)==1 && spi_endpoint_slot(0x81)==1);
+    assert(spi_endpoint_slot(0xab)==3 && spi_endpoint_slot(3)==2);
+    assert(panda.bulk_read(0x81,bytes,sizeof(bytes),1)==16);
+    assert(spi_count(spi_profile_stats.attempts[1])==1);
+    assert(spi_count(spi_profile_stats.attempts[3])==0);
+    assert(panda.bulk_read(0xab,bytes,sizeof(bytes),1)==16);
+    assert(spi_count(spi_profile_stats.attempts[3])==1);
+    puts("PASS actual bulk_read 0x81 RX and 0xab drain classified separately");
+#endif
+    return 0;
+  }
   if(test=="burst") {
     // Original state path: six LX3 writes, state read, health, 3 CAN-health,
     // LX3-status, heartbeat. Same call count; arbitrary inert payloads.

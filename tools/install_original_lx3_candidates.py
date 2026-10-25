@@ -4,7 +4,7 @@ No setting writes, CAN publishers, Panda clients, firmware flash or device build
 The experimental ready profile is deliberately absent from the install allowlist.
 """
 from pathlib import Path
-import argparse,base64,hashlib,importlib.util,json,os,struct,subprocess,sys,tempfile,time
+import argparse,base64,hashlib,importlib.util,json,os,re,struct,subprocess,sys,tempfile,time
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 DIAG=('selfdrive/carrot/can_diagnostics/automatic.py','selfdrive/carrot/can_diagnostics/automatic_runtime.py')
@@ -20,6 +20,13 @@ PROTECTED={'selfdrive/car/card.py':'139d6cfc396148170f980ccbf68bb810542a360fbe3b
 PRESERVE=('DisableDM','HardwareC3xLite','CalibrationParams','CarSelected3','OpenpilotEnabledToggle',
  'C3xLiteHapticNotifications','HapticFeedbackWhenSpeedCamera','CanfdDebug','MyDrivingMode')
 sha=lambda raw:hashlib.sha256(raw).hexdigest()
+
+
+def public_from_config(path=Path('/data/community/hud_updates/config.json')):
+ config=json.loads(path.read_text())
+ public=base64.b64decode(config['public_key'],validate=True)
+ assert len(public)==32 and sha(public)==PUBLIC_SHA
+ return public
 
 
 def atomic(path,raw,mode=0o600):
@@ -52,6 +59,7 @@ def verify(folder,public):
  envelope=json.loads(raw);body=base64.b64decode(envelope['payload'],validate=True)
  Ed25519PublicKey.from_public_bytes(public).verify(base64.b64decode(envelope['signature'],validate=True),body)
  manifest=json.loads(body);rid=manifest['release_id'];assert rid in RELEASES
+ assert re.fullmatch('[0-9a-f]{40}',manifest['source_commit'])
  assert manifest['target_serial']==SERIAL and manifest['installer_sha256']==sha(Path(__file__).read_bytes())
  assert manifest['firmware_changed'] is False and manifest['actuation_source_changed'] is False
  assert manifest['road_qualified'] is False and manifest['baseline_native']==BASE_NATIVE
@@ -68,6 +76,8 @@ def verify(folder,public):
    assert raw[:6]==b'\x7fELF\x02\x01' and struct.unpack_from('<H',raw,18)[0]==183
    native=manifest['native_build']
    assert native['profile']=='observed' and native['spi_ready_profile']==0
+   assert b'observed' in raw and b'turnaround' not in raw
+   assert native['source_commit']==manifest['source_commit']
    assert native['runtime_sha256']==row['sha256'] and native['protocol_pass']
    assert native['schema_sha256']==PROTECTED['cereal/car.capnp'] and not native['working_tree_dirty']
    assert all(files[path]['sha256']==native['files'][path] for path in NATIVE[:2])
@@ -86,10 +96,10 @@ def before(root,manifest,files):
 
 
 def no_pending_ota(state=Path('/data/community/hud_updates/state.json')):
- if not state.is_file():return
+ assert state.is_file(),'HUD update completion state required'
  assert state.stat().st_size<2*1024**2
  phase=json.loads(state.read_text()).get('phase')
- assert phase not in ('armed','applying','rollback_armed','rolling_back','recovery_required'),phase
+ assert phase=='complete',phase
 
 
 def parked(seconds=10):
@@ -187,8 +197,7 @@ def main():
  args=p.parse_args();root=args.root.resolve();folder=args.folder.resolve()
  from openpilot.system.hardware import HARDWARE
  assert HARDWARE.get_serial()==SERIAL
- config=json.loads(Path('/data/community/hud_updates/config.json').read_text())
- manifest,files,bundle_sha=verify(folder,base64.b64decode(config['verification_public_key'],validate=True))
+ manifest,files,bundle_sha=verify(folder,public_from_config())
  rid=manifest['release_id'];record_path=folder/'transaction.json';order=RELEASES[rid]
  if args.phase=='stage':
   assert not record_path.exists();no_pending_ota();before(root,manifest,files)
@@ -213,10 +222,10 @@ def main():
    for name in order:assert sha((folder/'new'/name).read_bytes())==files[name]['sha256']
    import_smoke(folder)
   no_pending_ota()
-  gate=parked();record['gate_before_stop']=gate;save(record_path,record)
-  subprocess.run(['sudo','-n','systemctl','stop','comma.service'],check=True)
+  gate=parked();record['gate_before_stop']=gate;record['phase']='stopping';save(record_path,record)
   writes_started=False
   try:
+   subprocess.run(['sudo','-n','systemctl','stop','comma.service'],check=True)
    stopped()
    no_pending_ota()
    if args.phase=='rollback':
@@ -239,6 +248,7 @@ def main():
    if writes_started:
     try:restore(root,folder,record);record.update(phase='restored_after_failure',runtime_modified=False);save(record_path,record)
     except BaseException:record['phase']='recovery_required';save(record_path,record);raise
+   else:record.update(phase='aborted_before_write',runtime_modified=False);save(record_path,record)
    subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True);raise
   # Reboot only after the validated parked transaction. No manager/control
   # process starts briefly between native replacement and reboot.

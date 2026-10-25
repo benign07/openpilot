@@ -103,6 +103,25 @@ class CapsuleTests(unittest.TestCase):
     cap.context({},109);self.assertEqual(len(sink.items),2)
     self.send(cap,2,110);self.assertEqual(len(sink.items),2)
 
+  def test_storage_disabled_trace_cannot_prevent_next_trip_capsule(self):
+    with tempfile.TemporaryDirectory() as root:
+      rec=AutoRecorder(ChunkStore(root,reserve=0),{'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV'})
+      try:
+        rec.update(services(100),100);old=rec.trip
+        rec.storage_disabled=True;rec.trace={'inert':True}
+        off=services(101);off['deviceState']['data']['started']=False
+        with patch.object(rec,'close_trace',side_effect=OSError('persistent disk failure')) as close:
+          rec.update(off,101);close.assert_not_called()
+        self.assertIsNone(rec.trip);self.assertIsNone(rec.trace)
+        rec.update(services(102),102);self.assertNotEqual(rec.trip,old)
+        self.assertEqual(rec.priority.trip,rec.trip)
+        rec.can_frame(2,0x162,packet(),102_000_000_000,102)
+        rec.can_frame(2,0x162,packet(1),102_100_000_000,102.1)
+        self.assertIsNotNone(rec.priority.trigger)
+      finally:
+        rec.close()
+        if rec.store.stream is not None:rec.store.stream.close()
+
   def test_initial_nonzero_does_not_claim_onset(self):
     cap,sink=self.make_capsule();self.send(cap,1)
     self.assertTrue(sink.items[0][0]['trigger']['initial_fault_present'])
@@ -202,6 +221,16 @@ class CapsuleTests(unittest.TestCase):
 
 
 class WriterTests(unittest.TestCase):
+  def test_own_failed_temp_removed_foreign_temp_and_renamed_gzip_preserved(self):
+    with tempfile.TemporaryDirectory() as root:
+      foreign=Path(root)/'.priority-foreign.writing';foreign.write_bytes(b'preserve')
+      writer=PriorityCapsuleWriter(root)
+      with patch('os.fsync',side_effect=OSError('injected fsync')):
+        with self.assertRaises(OSError):writer.write({'capsule_phase':'onset'},[],{})
+      self.assertEqual(list(Path(root).glob('.priority-*.writing')),[foreign])
+      writer.write({'capsule_phase':'onset'},[],{})
+      self.assertEqual(writer.written,1);self.assertEqual(foreign.read_bytes(),b'preserve')
+
   def test_oversized_optional_settings_are_omitted_without_losing_capsule(self):
     with tempfile.TemporaryDirectory() as root:
       writer=PriorityCapsuleWriter(root)

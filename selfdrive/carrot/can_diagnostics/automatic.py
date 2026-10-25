@@ -460,9 +460,19 @@ class PriorityCapsuleWriter:
     if total+len(compressed)+4096>self.QUOTA or len(self.pending_manifests)>=self.MAX_FILES:raise OSError('priority reserve occupied')
     ident = uuid.uuid4().hex;temp = self.root/('.priority-'+ident+'.writing')
     target = self.root/(ident+'.jsonl.gz')
-    with temp.open('xb') as stream:
-      stream.write(compressed);stream.flush();os.fsync(stream.fileno())
-    os.replace(temp,target)
+    created = False
+    try:
+      with temp.open('xb') as stream:
+        created = True
+        stream.write(compressed);stream.flush();os.fsync(stream.fileno())
+      os.replace(temp,target)
+    except BaseException:
+      # Only the temporary file created by this call is ours to remove.
+      # A valid renamed gzip must survive a later manifest failure.
+      if created:
+        try:temp.unlink(missing_ok=True)
+        except OSError:pass  # Still counted against reserve on the next scan.
+      raise
     record={'id':ident,'bytes':len(compressed),
       'sha256':hashlib.sha256(compressed).hexdigest(),'schema':1,'reason':'first_fault_'+header['capsule_phase'],
       'priority_capsule':True}
@@ -919,7 +929,8 @@ class AutoRecorder:
         # completed route stale; a missing deviceState must still recover it.
         self.stale_route, self.recording_route = self.recording_route, None
       self.priority.finish(now,reason)
-      self.close_trace(now, reason)
+      if not self.storage_disabled:self.close_trace(now, reason)
+      else:self.trace = None
       if not self.storage_disabled:self.store.seal(reason)
       self.trip = None
       self.state = reason
