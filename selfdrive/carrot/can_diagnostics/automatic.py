@@ -13,6 +13,10 @@ import re
 import shutil
 import time
 import uuid
+import binascii
+import queue
+import threading
+from functools import wraps
 
 
 def clean(value):
@@ -32,6 +36,23 @@ def atomic_json(path, data):
     stream.flush()
     os.fsync(stream.fileno())
   os.replace(tmp, path)
+
+
+def isolate_diagnostic_storage(function):
+  """A diagnostic disk error is visible, but must not restart the CAN reader."""
+  @wraps(function)
+  def wrapped(self,*args,**kwargs):
+    try:return function(self,*args,**kwargs)
+    except OSError as error:
+      self.storage_io_errors+=1
+      self.storage_disabled=True
+      detail={'error':type(error).__name__,'errno':error.errno,'operation':function.__name__,
+              'ordinary_writer_disabled_until_recorder_restart':True}
+      self.metadata['diagnostic_storage_fault']=detail
+      self.store.error='storage_io_error:'+str(error.errno)
+      self.state='storage_io_error'
+      return False
+  return wrapped
 
 
 class ChunkStore:
@@ -147,6 +168,11 @@ class ChunkStore:
     data = path.read_bytes()  # Each chunk is bounded to 2 MiB plus one record.
     result = {'id': path.name.split('.')[0], 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
               'reason': reason, 'schema': 1}
+    if reason=='interrupted_seal_recovered':
+      try:
+        with gzip.open(path,'rb') as stream:header=json.loads(stream.readline(65537))
+        if isinstance(header,dict) and header.get('priority_capsule') is True:result['priority_capsule']=True
+      except (ValueError,UnicodeError,OSError,EOFError):pass
     atomic_json(self.manifest_path(path), result)
     return result
 
@@ -166,11 +192,17 @@ class ChunkStore:
     quarantined, mismatched or symlinked records. Downloads already opened by
     FileResponse can finish on their original descriptor.
     """
-    if not self.rolling or now - self.last_retention_scan < 30:
+    if not self.rolling:
       return
-    self.last_retention_scan = now
     needed = self.chunk_bytes + 65536
     try:
+      free = shutil.disk_usage(self.root).free
+      disk_deficit=free<self.reserve+self.chunk_bytes
+      urgent = self.usage+needed>self.quota and not disk_deficit
+      if now-self.last_retention_scan < (1.0 if urgent else 30.0):
+        return
+      self.last_retention_scan = now
+      target = max(needed,min(3*needed,self.quota//4))
       self.usage = sum(p.stat().st_size for p in self.root.rglob('*') if p.is_file())
       candidates = sorted(self.root.glob('*.manifest.json'), key=lambda p: (p.stat().st_mtime_ns, p.name))
       # Keep the newest two completed records even when no older file can help.
@@ -183,7 +215,7 @@ class ChunkStore:
       for stamp, name, manifest in candidates[:64]:
         if scanned_bytes >= 8 * 1024**2 or time.monotonic() >= deadline:
           break
-        if self.usage + needed <= self.quota and shutil.disk_usage(self.root).free >= self.reserve + self.chunk_bytes:
+        if self.usage + target <= self.quota and shutil.disk_usage(self.root).free >= self.reserve + self.chunk_bytes:
           break
         self.retention_cursor = (stamp, name)
         chunk = manifest.name.split('.')[0]
@@ -197,6 +229,8 @@ class ChunkStore:
           row = json.loads(manifest.read_text(encoding='utf-8'))
           if not isinstance(row, dict):
             raise ValueError('invalid manifest')
+          if row.get('priority_capsule') is True:
+            continue  # Independently bounded first-fault evidence, same export API.
           size = data.stat().st_size
           if (row.get('id') != chunk or type(row.get('bytes')) is not int or row['bytes'] != size
               or not 0 < size <= self.chunk_bytes + 65536
@@ -224,6 +258,7 @@ class ChunkStore:
           self.usage -= size + manifest_size
           self.retired_chunks += 1
           self.retired_bytes += size + manifest_size
+          if disk_deficit:break
         except (OSError, ValueError, gzip.BadGzipFile, EOFError, zlib.error):
           self.retention_skipped += 1
     except OSError:
@@ -232,7 +267,8 @@ class ChunkStore:
   def begin(self, metadata, now):
     if self.stream:
       return True
-    if self.usage + self.chunk_bytes + 65536 > self.quota or shutil.disk_usage(self.root).free < self.reserve + self.chunk_bytes:
+    target = max(self.chunk_bytes+65536,min(3*(self.chunk_bytes+65536),self.quota//4))
+    if self.usage + target > self.quota or shutil.disk_usage(self.root).free < self.reserve + self.chunk_bytes:
       self.make_room(now)
     if self.usage + self.chunk_bytes + 65536 > self.quota or shutil.disk_usage(self.root).free < self.reserve + self.chunk_bytes:
       self.error = 'storage_full_preserving_records'
@@ -303,6 +339,283 @@ def control_mode(services, now):
   return 'stock_cruise' if cs.get('cruiseState', {}).get('enabled') else 'driver'
 
 
+class PriorityCapsuleWriter:
+  """One bounded disk worker; no filesystem work in the CAN ingestion path."""
+  RAW_LIMIT = 2 * 1024**2
+  QUOTA = 8 * 1024**2
+  MAX_FILES = 16
+  RESERVE = 128 * 1024**2
+
+  def __init__(self, root):
+    self.root = Path(root)
+    self.queue = queue.Queue(maxsize=2)
+    self.thread = None
+    self.stopping = threading.Event()
+    self.lifecycle_lock = threading.Lock()
+    self.pending_manifests = {}
+    self.unverified_records = self.scan_disappeared = self.header_trimmed = 0
+    self.errors = self.queue_dropped = self.written = 0
+
+  def submit(self, header, rows, summary):
+    with self.lifecycle_lock:
+      try:self.queue.put_nowait((header, rows, summary))
+      except queue.Full:
+        self.queue_dropped += 1
+        return False
+      self.stopping.clear()
+      if self.thread is None:
+        self.thread = threading.Thread(target=self._worker, name='lx3-first-fault', daemon=True)
+        self.thread.start()
+    return True
+
+  def _worker(self):
+    while True:
+      try:item = self.queue.get(timeout=.2)
+      except queue.Empty:
+        with self.lifecycle_lock:
+          if self.stopping.is_set() and self.queue.empty():
+            self.thread=None
+            return
+        continue
+      try:self.write(*item)
+      except Exception:self.errors += 1  # Never stop the passive CAN reader.
+      finally:self.queue.task_done()
+
+  def close(self):
+    with self.lifecycle_lock:
+      self.stopping.set()
+      thread=self.thread
+    if thread is not None:thread.join(timeout=3)
+
+  def write(self, header, rows, summary):
+    encode = lambda row: (json.dumps(clean(row), separators=(',', ':'), ensure_ascii=False,
+                                     allow_nan=False)+'\n').encode()
+    header=dict(header)
+    for optional in ('settings','source_hashes'):
+      first=encode({'kind':'header','schema':1,'priority_capsule':True,**header})
+      if len(first)<=65536:break
+      if optional in header:
+        header.pop(optional);header.setdefault('header_omitted',[]).append(optional);self.header_trimmed+=1
+    first=encode({'kind':'header','schema':1,'priority_capsule':True,**header})
+    if len(first)>65536:raise ValueError('oversized essential capsule header')
+    body = bytearray(first)
+    stored = 0
+    for row in rows:
+      raw = encode(row)
+      if len(body)+len(raw)>self.RAW_LIMIT-8192:break
+      body.extend(raw);stored += 1
+    tail = {'kind':'event', 'name':'priority_capsule_summary', **summary,
+            'stored_rows':stored, 'serialization_dropped':len(rows)-stored}
+    body.extend(encode(tail));assert len(body)<=self.RAW_LIMIT
+    compressed = gzip.compress(bytes(body), compresslevel=1, mtime=0)
+    if shutil.disk_usage(self.root).free < self.RESERVE+len(compressed):raise OSError('capsule disk reserve')
+    owned = []
+    occupied = 0
+    for path,record in list(self.pending_manifests.items()):
+      try:
+        if hashlib.sha256(path.read_bytes()).hexdigest()!=record['sha256']:raise ValueError('pending data changed')
+        atomic_json(ChunkStore.manifest_path(path),record)
+        self.pending_manifests.pop(path)
+      except Exception:
+        self.errors+=1
+        occupied+=path.stat().st_size if path.exists() and not path.is_symlink() else 0
+    for path in self.root.glob('*.manifest.json'):
+      data=None;is_priority=False
+      try:
+        if path.is_symlink() or path.stat().st_size>4096:continue
+        record=json.loads(path.read_text(encoding='utf8'))
+        if not isinstance(record,dict) or record.get('priority_capsule') is not True:continue
+        is_priority=True
+        ident=path.name.split('.')[0];data=self.root/(ident+'.jsonl.gz')
+        if (not re.fullmatch('[a-f0-9]{32}',ident) or record.get('id')!=ident or data.is_symlink()
+            or not data.is_file() or not 0<data.stat().st_size<=self.RAW_LIMIT+65536):raise ValueError('invalid priority record')
+        raw=data.read_bytes()
+        if record.get('bytes')!=len(raw) or record.get('sha256')!=hashlib.sha256(raw).hexdigest():raise ValueError('priority checksum mismatch')
+        with gzip.open(data,'rb') as stream:
+          hdr=json.loads(stream.readline(65537))
+          if (hdr.get('priority_capsule') is not True or hdr.get('kind')!='header' or hdr.get('schema')!=1
+              or len(stream.read(self.RAW_LIMIT+1))>self.RAW_LIMIT):raise ValueError('invalid priority gzip')
+        owned.append((path.stat().st_mtime_ns,path,data,len(raw)+path.stat().st_size,
+                      'initial_present' not in str(record.get('reason',''))))
+      except FileNotFoundError:self.scan_disappeared+=1
+      except (ValueError,UnicodeError,OSError,EOFError):
+        if is_priority:
+          self.unverified_records+=1
+          try:
+            occupied+=path.lstat().st_size
+            if data is not None:occupied+=data.lstat().st_size
+          except FileNotFoundError:self.scan_disappeared+=1
+    # Failed writes count against this reserve too; do not unlink unverified
+    # leftovers, foreign files, current chunks, videos or the ordinary rlogs.
+    leftovers = sum(p.stat().st_size for p in self.root.glob('.priority-*.writing') if not p.is_symlink())
+    total = sum(x[3] for x in owned)+leftovers+occupied
+    owned.sort(key=lambda row:(row[4],row[0],row[1].name))
+    while owned and (total+len(compressed)+4096>self.QUOTA or len(owned)+len(self.pending_manifests)>=self.MAX_FILES):
+      _,manifest,data,size,_ = owned.pop(0)
+      retiring = manifest.with_suffix('.retiring');os.replace(manifest,retiring)
+      try:data.unlink()
+      except OSError:
+        os.replace(retiring,manifest);raise
+      retiring.unlink();total -= size
+    if total+len(compressed)+4096>self.QUOTA or len(self.pending_manifests)>=self.MAX_FILES:raise OSError('priority reserve occupied')
+    ident = uuid.uuid4().hex;temp = self.root/('.priority-'+ident+'.writing')
+    target = self.root/(ident+'.jsonl.gz')
+    with temp.open('xb') as stream:
+      stream.write(compressed);stream.flush();os.fsync(stream.fileno())
+    os.replace(temp,target)
+    record={'id':ident,'bytes':len(compressed),
+      'sha256':hashlib.sha256(compressed).hexdigest(),'schema':1,'reason':'first_fault_'+header['capsule_phase'],
+      'priority_capsule':True}
+    self.pending_manifests[target]=record
+    atomic_json(ChunkStore.manifest_path(target),record)
+    self.pending_manifests.pop(target)
+    self.written += 1
+
+
+class FirstFaultCapsule:
+  """Rate-limited independent evidence survives ordinary-store quota failures.
+
+  This cannot recover frames lost upstream or during an actual reader stall.
+  Stale/evicted/dropped records and timestamp coverage remain explicit.
+  """
+  ADDRESSES = {0x10B,0xCB,0x12A,0xEA,0x162,0x1AA,0x175,0x4B9}
+  PRE_NS = 2_000_000_000
+  POST_NS = 8_000_000_000
+  MAX_ROWS = 8192
+
+  def __init__(self, sink):
+    self.sink = sink
+    self.begin(None, {})
+
+  def begin(self, trip, metadata):
+    self.trip,self.metadata = trip,metadata
+    self.pre = deque(maxlen=6000)
+    self.rows = []
+    self.last = {}
+    self.signatures = {}
+    self.initial_present = False
+    self.previous_fault = None
+    self.last_fault_ns = None
+    self.trigger = None
+    self.complete = False
+    self.stale = self.evicted = self.dropped = self.bad_crc = self.out_of_order = 0
+    self.last_context = self.last_panda = -math.inf
+    self.latest_spi = {}
+
+  def _put(self,row):
+    ns = row.get('observed_mono_ns',row['mono_ns'])
+    if self.trigger is None:
+      if len(self.pre)==self.pre.maxlen:self.evicted += 1
+      self.pre.append(row)
+      while self.pre and ns-self.pre[0].get('observed_mono_ns',self.pre[0]['mono_ns'])>self.PRE_NS:self.pre.popleft()
+    elif len(self.rows)<self.MAX_ROWS:self.rows.append(row)
+    else:self.dropped += 1
+
+  def can_frame(self,bus,address,data,mono_ns,now,direction,source_ns=None):
+    if (self.complete or self.trip is None or self.metadata.get('car_fingerprint')!='HYUNDAI_PALISADE_LX3_HEV'
+        or address not in self.ADDRESSES or not 0<=bus<256 or len(data)>64):return
+    if not 0<=now-mono_ns/1e9<=2.0:
+      self.stale += 1;return
+    key = direction,bus,address
+    if len(self.last)>=64 and key not in self.last:
+      self.dropped += 1
+      if key==('rx',2,0x162):self.last.pop(next(iter(self.last)))
+      else:return
+    previous = self.last.get(key)
+    if previous is not None and mono_ns<previous:
+      self.out_of_order += 1;return
+    fault = None
+    if direction=='rx' and bus==2 and address==0x162 and len(data)==32:
+      crc = binascii.crc_hqx(data[2:]+b'\x62\x01',0)^0x9f5b
+      if int.from_bytes(data[:2],'little')==crc:
+        bits=int.from_bytes(data,'little');fault=tuple((bits>>bit)&7 for bit in (213,216,219,234,237,246))
+      else:self.bad_crc += 1
+    fault_before,prior_fault_ns = self.previous_fault,self.last_fault_ns
+    # The collected vehicle evidence identifies LSS 0->1. Unknown nonzero
+    # enums in other systems must not consume this one-per-trip LSS window.
+    rising = fault is not None and fault_before is not None and fault_before[2]==0 and fault[2]!=0
+    bits=int.from_bytes(data,'little')
+    fields={0xEA:((48,1),(54,1),(144,2),(149,1)),0xCB:((28,2),),
+      0x162:((52,1),(213,3),(216,3),(219,3),(234,3),(237,3),(246,3)),
+      0x175:((66,2),(68,1))}
+    if address in fields:signature=tuple((bits>>start)&((1<<size)-1) for start,size in fields[address])
+    elif address==0x10B:signature=(data[10]&0x8f) if len(data)==16 else None
+    elif address==0x4B9:signature=data
+    else:
+      specs=AutoRecorder.ADAS_STATE_FIELDS.get(address)
+      signature=tuple((bits>>start)&((1<<size)-1) for _,start,size in specs[1]) if specs and len(data)==specs[0] else None
+    changed=key not in self.signatures or self.signatures[key]!=signature
+    self.signatures[key]=signature
+    if fault is not None:self.previous_fault,self.last_fault_ns=fault,mono_ns
+    full_rate=self.trigger is None or int(now*1e9)-self.trigger['observed_mono_ns']<=1_000_000_000
+    if previous is not None and mono_ns-previous<50_000_000 and not changed and not full_rate:return
+    self.last[key]=mono_ns
+    row={'kind':'can_sample','mono_ns':mono_ns,'direction':direction,'bus':bus,'address':address,
+         'observed_mono_ns':int(now*1e9),
+         'producer_age_ns':int(now*1e9)-mono_ns,
+         'dlc':len(data),'data':data.hex(), **({'source_log_mono_ns':source_ns} if source_ns is not None else {})}
+    self._put(row)
+    observation={'mono_ns':mono_ns,'observed_mono_ns':int(now*1e9),'before':fault_before,
+        'after':fault,'previous_source_observation_ns':prior_fault_ns,
+        'rule':'source_LSS_zero_to_nonzero','initial_fault_present':fault_before is None}
+    if fault_before is None and fault is not None and fault[2]==1 and not self.initial_present:
+      self.initial_present=True
+      self.emit('initial_present',now,trigger_override=observation,rows_override=list(self.pre))
+    if rising and self.trigger is None:
+      self.trigger=observation
+      self.rows=list(self.pre);self.pre.clear();self.emit('onset',now)
+
+  def context(self,services,now):
+    if self.complete or self.trip is None or self.metadata.get('car_fingerprint')!='HYUNDAI_PALISADE_LX3_HEV':return
+    if self.trigger is not None and int(now*1e9)>=self.trigger['observed_mono_ns']+self.POST_NS:
+      self.finish(now,'window_elapsed');return
+    if now-self.last_context<.2:return
+    self.last_context=now
+    fields={'carControl':('enabled','latActive','longActive','hudControl'),
+      'carState':('vEgo','canValid','gearShifter','steeringAngleDeg','steeringTorque','leftBlinker','rightBlinker'),
+      'selfdriveState':('enabled','active','alertType')}
+    snapshots={}
+    for name,keys in fields.items():
+      service=services.get(name,{})
+      snapshots[name]={key:service.get(key) for key in ('mono_ns','valid','alive')}
+      snapshots[name]['data']={key:service.get('data',{}).get(key) for key in keys}
+    self._put({'kind':'sample','mono_ns':int(now*1e9),'services':snapshots})
+
+  def panda(self,states,mono_ns,now):
+    if (self.complete or self.trip is None or now-self.last_panda<.2
+        or self.metadata.get('car_fingerprint')!='HYUNDAI_PALISADE_LX3_HEV'):return
+    if not 0<=now-mono_ns/1e9<=.5:
+      self.stale+=1;return
+    self.last_panda=now
+    keys=('safety_model','safety_param','controls_allowed','rx_checks_invalid','rx_overflow','tx_overflow',
+          'tx_blocked','spi_checksum_errors','faults','lx3_authority_state')
+    self._put({'kind':'panda_snapshot','mono_ns':mono_ns,'states':[
+      {k:state.get(k) for k in keys} for state in states[:1]],'observed_mono_ns':int(now*1e9)})
+
+  def emit(self,phase,now,reason=None,trigger_override=None,rows_override=None):
+    trigger=self.trigger if trigger_override is None else trigger_override
+    rows=self.rows if rows_override is None else rows_override
+    if self.sink is None or trigger is None:return
+    metadata={key:self.metadata.get(key) for key in ('boot_id','route','car_fingerprint','dbc_sha256','source_hashes','settings','diagnostic_storage_fault')}
+    header={**metadata,'trip_id':self.trip,'mono_ns':int(now*1e9),'utc_ns':time.time_ns(),
+      'capture':'bounded_first_fault_not_full_can','capsule_phase':phase,'trigger':dict(trigger),
+      'latest_spi_host_stats':self.latest_spi,
+      'ordinary_post_per_key_max_hz':20,'pre_requested_ns':self.PRE_NS,'post_requested_ns':self.POST_NS,
+      'full_rate_pre_requested_ns':self.PRE_NS,'full_rate_post_requested_ns':1_000_000_000}
+    header['window_clock']='host_arrival; each frame retains normalized producer and original source clocks'
+    summary={'mono_ns':int(now*1e9),'reason':reason,'stale':self.stale,'evicted':self.evicted,
+      'dropped':self.dropped,'bad_crc':self.bad_crc,'out_of_order':self.out_of_order,
+      'first_record_ns':min((r['mono_ns'] for r in rows),default=None),
+      'last_record_ns':max((r['mono_ns'] for r in rows),default=None),
+      'queue_dropped':self.sink.queue_dropped,'writer_errors':self.sink.errors,
+      'scope':'host_observation_not_ecu_fault_cause_or_full_rate_timing_proof'}
+    if not self.sink.submit(clean(header),clean(rows),summary):self.dropped+=1
+
+  def finish(self,now,reason):
+    if not self.complete and self.trigger is not None:self.emit('final',now,reason)
+    self.complete=True
+
+
 class AutoRecorder:
   # Keep 10 Hz samples throughout the drive and an unthrottled, bounded
   # selection around physical LX3 button presses. The ordinary rlog remains
@@ -350,8 +663,15 @@ class AutoRecorder:
   BLINDSPOT_TRACE_MAX_PER_TRIP = 4
   BLINDSPOT_TRACE_INTERVAL = 30.0
 
-  def __init__(self, store, metadata):
+  def __init__(self, store, metadata, priority_writer=None):
     self.store, self.metadata = store, metadata
+    self.priority = FirstFaultCapsule(priority_writer or (PriorityCapsuleWriter(store.root) if hasattr(store,'root') else None))
+    self.spi_error_counts={}
+    self.spi_error_dirty=False
+    self.spi_error_last_emit=-math.inf
+    self.spi_error_source_ns=None
+    self.storage_io_errors=0
+    self.storage_disabled=False
     self.trip = None
     self.recording_route = None
     self.stale_route = None
@@ -447,6 +767,7 @@ class AutoRecorder:
       if mono_ns - self.BUTTON_TRACE_PRE_NS <= pre_ns < mono_ns:
         self.append_trace_frame(self.can_row(pre_ns, direction, bus, address, data, source_mono_ns, identity), now)
 
+  @isolate_diagnostic_storage
   def diagnostic_trigger(self, reason, mono_ns, now, **details):
     if self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV' or self.state != 'recording':
       return
@@ -495,6 +816,7 @@ class AutoRecorder:
                        'trace_id': self.trace['id'] if self.trace_active(now) else None,
                        'classification': 'observation_not_causal_diagnosis', **details}, now)
 
+  @isolate_diagnostic_storage
   def observer_tick(self, now):
     before = self.last_observer_tick
     self.last_observer_tick = now
@@ -586,6 +908,7 @@ class AutoRecorder:
     self.last_event[name] = now
     self.store.append({'kind': 'event', 'name': name, 'mono_ns': int(now * 1e9), **details}, now)
 
+  @isolate_diagnostic_storage
   def update(self, services, now):
     ignition_fresh = fresh(services, 'deviceState', now, 3)
     started = ignition_fresh and services['deviceState']['data'].get('started') is True
@@ -595,13 +918,18 @@ class AutoRecorder:
         # CurrentRoute is not cleared offroad. Only a confirmed off marks the
         # completed route stale; a missing deviceState must still recover it.
         self.stale_route, self.recording_route = self.recording_route, None
+      self.priority.finish(now,reason)
       self.close_trace(now, reason)
-      self.store.seal(reason)
+      if not self.storage_disabled:self.store.seal(reason)
       self.trip = None
       self.state = reason
       return
     if self.trip is None:
       self.trip = uuid.uuid4().hex
+      self.priority.begin(self.trip,self.metadata)
+      self.spi_error_counts={}
+      self.spi_error_dirty=False
+      self.spi_error_last_emit=-math.inf
       self.route_observed_ns = int(now * 1e9)
       self.previous, self.can_last, self.faults, self.last_event = {}, {}, {}, {}
       self.last_panda_sample = -math.inf
@@ -639,6 +967,11 @@ class AutoRecorder:
       self.last_observer_tick = None
       self.chunk_rotations = 0
       self.max_chunk_rotation_ms = 0.0
+    self.priority.context(services,now)
+    self.spi_error_flush(now)
+    if self.storage_disabled:
+      self.state='storage_io_error'
+      return
     route = self.metadata.get('route')
     route = None if route == self.stale_route else route
     route_rotation_started = None
@@ -647,6 +980,7 @@ class AutoRecorder:
       # one immutable route header; never append the next route below it.
       if self.store.stream is not None:
         route_rotation_started = time.monotonic()
+      if self.priority.trigger is not None:self.priority.finish(now,'route_changed')
       self.close_trace(now, 'route_changed')
       self.store.seal('route_changed')
       # Same-boot native pre-event evidence remains useful. Its source clock
@@ -836,7 +1170,10 @@ class AutoRecorder:
       self.adas_seen_chunk[key] = self.adas_chunk_generation
       self.adas_dropped_since_previous = 0
 
+  @isolate_diagnostic_storage
   def can_frame(self, bus, address, data, mono_ns, now, direction='rx', source_mono_ns=None, identity=None):
+    priority_direction = ('tx_rejected' if bus>=192 else 'tx_echo' if bus>=128 else direction) if direction=='rx' else direction
+    self.priority.can_frame(bus,address,data,mono_ns,now,priority_direction,source_mono_ns)
     if (self.state == 'recording' and self.metadata.get('car_fingerprint') is None
         and address in self.ADAS_STATE_FIELDS):
       self.adas_unknown_fingerprint_frames += 1
@@ -909,7 +1246,9 @@ class AutoRecorder:
     self.can_last[key] = now
     self.store.append({'kind': 'can_sample', **self.can_row(mono_ns, direction, bus, address, data, source_mono_ns, identity)}, now)
 
+  @isolate_diagnostic_storage
   def panda_snapshot(self, states, mono_ns, now, source_mono_ns=None):
+    self.priority.panda(states,mono_ns,now)
     if not states:
       return
     if self.state != 'recording':
@@ -958,6 +1297,36 @@ class AutoRecorder:
       self.diagnostic_trigger('panda_authority_edge', mono_ns, now, changes=edge_details)
     if self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
       self.transport_observation(current, mono_ns, now)
+
+  @isolate_diagnostic_storage
+  def spi_host_stats(self, fields, source_mono_ns, now):
+    if self.trip is None or self.metadata.get('car_fingerprint')!='HYUNDAI_PALISADE_LX3_HEV':return
+    name='spi_profile_stats' if 'profile' in fields else 'spi_host_stats'
+    row={'kind':'event','name':name,'mono_ns':int(now*1e9),
+      'source_log_mono_ns':source_mono_ns,'counters':dict(fields),
+      'timestamp_scope':'observed_host_time_and_unmodified_native_mono_ms'}
+    self.priority.latest_spi[name]=row
+    if not self.priority.complete:self.priority._put(row)
+    if self.state=='recording' and self.rotate_full_chunk(now):self.store.append(row,now)
+
+  @isolate_diagnostic_storage
+  def spi_error_observation(self,category,source_mono_ns,now):
+    if self.trip is None or self.metadata.get('car_fingerprint')!='HYUNDAI_PALISADE_LX3_HEV':return
+    self.spi_error_counts[category]=self.spi_error_counts.get(category,0)+1
+    self.spi_error_dirty=True
+    self.spi_error_source_ns=source_mono_ns
+    self.spi_error_flush(now)
+
+  def spi_error_flush(self,now):
+    if self.trip is None or not self.spi_error_dirty or now-self.spi_error_last_emit<1:return
+    self.spi_error_last_emit=now
+    self.spi_error_dirty=False
+    row={'kind':'event','name':'spi_log_observations','mono_ns':int(now*1e9),
+      'source_log_mono_ns':self.spi_error_source_ns,'counts':dict(self.spi_error_counts),
+      'scope':'sampled_received_log_messages_not_complete_native_error_counter'}
+    self.priority.latest_spi['legacy_log_observations']=row
+    if not self.priority.complete:self.priority._put(row)
+    if self.state=='recording' and self.rotate_full_chunk(now):self.store.append(row,now)
 
   def transport_observation(self, current, mono_ns, now):
     identity = (current.get('safety_model'), current.get('safety_param'),
@@ -1010,6 +1379,7 @@ class AutoRecorder:
     self.transport_seen.update(counters)
     self.transport_gaps.clear()
 
+  @isolate_diagnostic_storage
   def longitudinal_evidence(self, row, source_ns, now):
     """Forward bounded producer evidence through the existing phone export."""
     if (self.metadata.get('car_fingerprint') != 'HYUNDAI_PALISADE_LX3_HEV'
@@ -1036,6 +1406,7 @@ class AutoRecorder:
                        'trip_id': self.trip, 'boot_id': self.metadata.get('boot_id')}, now)
     self.longitudinal_frames += 1
 
+  @isolate_diagnostic_storage
   def lateral_evidence(self, row, source_ns, now):
     # Existing event envelope keeps older HUD/PC receivers compatible. This is
     # evidence of a planner request, never a physical displacement or ECU ACK.
@@ -1060,6 +1431,7 @@ class AutoRecorder:
                        'source_log_mono_ns': source_ns, 'route': self.recording_route,
                        'trip_id': self.trip, 'boot_id': self.metadata.get('boot_id'), 'evidence': row}, now)
 
+  @isolate_diagnostic_storage
   def video_index(self, index, source_ns, now, observed_route, observed_ns, native_offset_ns):
     """Preserve native clock evidence only with a qualified current route."""
     if self.state != 'recording':
@@ -1079,8 +1451,11 @@ class AutoRecorder:
       self.video_index_dropped += 1
 
   def close(self):
-    self.close_trace(time.monotonic(), 'server_shutdown')
-    self.store.seal('server_shutdown')
+    self.priority.finish(time.monotonic(),'recorder_closed')
+    if self.priority.sink is not None:self.priority.sink.close()
+    if not self.storage_disabled:
+      self.close_trace(time.monotonic(), 'server_shutdown')
+      self.store.seal('server_shutdown')
     self.state = 'stopped'
 
   def status(self):
@@ -1089,10 +1464,18 @@ class AutoRecorder:
             'error': self.store.error, 'sampled_out': self.sampled_out, 'stale_can_packets': self.stale_packets,
             'stale_can_frames': self.stale_can_frames, 'stale_panda_snapshots': self.stale_panda_snapshots,
             'storage_dropped': self.storage_dropped, 'dropped_no_stream': self.store.dropped_no_stream,
+            'storage_io_errors':self.storage_io_errors,'ordinary_writer_disabled':self.storage_disabled,
             'recovery_quarantined': self.store.recovery_quarantined,
             'diagnostic_retention': {'policy': 'oldest_completed_first' if self.store.rolling else 'preserve_on_full',
                                      'retired_chunks': self.store.retired_chunks, 'retired_bytes': self.store.retired_bytes,
                                      'skipped_unverified': self.store.retention_skipped},
+            'priority_capsule': {'triggered':self.priority.trigger is not None, 'complete':self.priority.complete,
+              'writer_errors':self.priority.sink.errors if self.priority.sink is not None else 0,
+              'queue_dropped':self.priority.sink.queue_dropped if self.priority.sink is not None else 0,
+              'written':self.priority.sink.written if self.priority.sink is not None else 0,
+              'unverified_preserved':self.priority.sink.unverified_records if self.priority.sink is not None else 0,
+              'pending_manifests':len(self.priority.sink.pending_manifests) if self.priority.sink is not None else 0,
+              'stale':self.priority.stale,'evicted':self.priority.evicted,'dropped':self.priority.dropped},
             'video_index_source': 'completed_qlog_on_pc_not_live_published',
             'chunk_rotations': self.chunk_rotations, 'max_chunk_rotation_ms': self.max_chunk_rotation_ms,
             'button_traces': self.trace_count, 'button_trace_active': self.trace is not None,

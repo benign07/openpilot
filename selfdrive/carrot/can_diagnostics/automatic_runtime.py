@@ -8,7 +8,7 @@ import threading
 import time
 from collections import deque
 
-from .automatic import AutoRecorder, ChunkStore
+from .automatic import AutoRecorder, ChunkStore, PriorityCapsuleWriter
 
 FIELDS = {
   'deviceState': ('started', 'startedMonoTime', 'cpuTempC', 'gpuTempC', 'memoryTempC', 'pmicTempC',
@@ -45,6 +45,8 @@ PARAMS = ('MyDrivingMode', 'MyDrivingModeAuto', 'LongitudinalPersonality', 'TFol
 PARAMS += tuple('CruiseMaxVals'+str(i) for i in range(7)) + (
   'AChangeCostStarting', 'CruiseEcoControl', 'LongActuatorDelay', 'VEgoStopping', 'StoppingAccel',
   'LongTuningKpV', 'LongTuningKiV', 'LongTuningKf')
+PARAMS += ('C3xLiteHapticEngage','C3xLiteHapticTraffic','C3xLiteHapticLaneChange',
+  'C3xLiteHapticStopping','C3xLiteHapticNavigation','C3xLiteHapticReverse','C3xLiteHapticPattern')
 PARAMS += ('UseLaneLineSpeed', 'UseLaneLineCurveSpeed', 'PathOffset', 'AdjustLaneOffset',
            'LatMpcInputOffset', 'LaneLineCheck')
 PARAMS += ('OpenpilotEnabledToggle', 'RecordRoadCam', 'DisableLogging')
@@ -122,6 +124,52 @@ def packet_evidence_time(stream, source_mono_ns, native_offset_ns):
   return source_mono_ns - native_offset_ns if stream in ('can', 'pandaStates') else source_mono_ns
 
 
+def spi_host_fields(message):
+  """Bounded native counters only; no generic log interpretation or CAN input."""
+  if not isinstance(message,str) or not message.startswith('SPI_HOST_STATS ') or len(message)>2048:return None
+  allowed={'mono_ms','attempts','retries','header_io','header_nack','header_timeout','data_io','data_nack',
+    'data_timeout','read_io','bad_length','bad_checksum','recovery_failed','failed','success',
+    'window_max_call_attempts','window_max_charged_us','window_max_budget_permille'}
+  fields={}
+  for token in message.split()[1:]:
+    pair=token.split('=')
+    if len(pair)!=2 or pair[0] not in allowed or pair[0] in fields or not pair[1].isascii() or not pair[1].isdigit():return None
+    value=int(pair[1])
+    if value>=2**64:return None
+    fields[pair[0]]=value
+  return fields if fields.keys()==allowed else None
+
+
+def spi_profile_fields(message):
+  if not isinstance(message,str) or not message.startswith('SPI_PROFILE_STATS ') or len(message)>4096:return None
+  fields={}
+  expected={group+'_'+endpoint for group in ('attempts','header_nack','data_nack','checksum') for endpoint in ('ctrl','rx','tx','other')}
+  expected|={'lock_us_'+endpoint+'_max' for endpoint in ('ctrl','rx','tx','other')}
+  expected|={'ready_requested_us','ready_actual_us','ready_max_us','ready_overshoot_max_us','call_wall_max_us','profile','source_sha'}
+  for token in message.split()[1:]:
+    pair=token.split('=')
+    if len(pair)!=2 or pair[0] not in expected or pair[0] in fields:return None
+    key,value=pair
+    if key=='profile':
+      if value not in ('observed','turnaround'):return None
+    elif key=='source_sha':
+      if len(value)!=64 or any(char not in '0123456789abcdef' for char in value):return None
+    else:
+      if not value.isascii() or not value.isdigit() or int(value)>=2**64:return None
+      value=int(value)
+    fields[key]=value
+  return fields if fields.keys()==expected else None
+
+
+def spi_error_category(message):
+  if not isinstance(message,str) or len(message)>512 or not message.startswith(('SPI:','transfer failed,')):return None
+  for needle,category in (('bad checksum','bad_checksum'),('length','bad_length'),('got NACK','nack'),
+      ('timed out','timeout'),('failed to send header','header_io'),('failed to send data','data_io'),
+      ('failed to read','read_io'),('failed to send ACK','ack_io'),('transfer failed,','transfer_failed')):
+    if needle in message:return category
+  return None
+
+
 def read_param(params, key):
   # This device's typed Params API does not accept the legacy encoding keyword.
   value = params.get(key)
@@ -186,6 +234,7 @@ class AutomaticController:
     self.shutdown = threading.Event()
     self.worker = None
     self.recorder = None
+    self.priority_writer = PriorityCapsuleWriter(self.root)
     self.error = None
     self.restart_count = 0
     self.retry_after_seconds = 0
@@ -315,7 +364,7 @@ class AutomaticController:
     if dbc.exists():
       metadata['dbc_sha256'] = hashlib.sha256(dbc.read_bytes()).hexdigest()
     with self.lock:
-      self.recorder = AutoRecorder(ChunkStore(self.root, rolling=True), metadata)
+      self.recorder = AutoRecorder(ChunkStore(self.root, rolling=True), metadata, priority_writer=self.priority_writer)
       self.error = None
       self.retry_after_seconds = 0
     last_metadata = last_context = last_storage = -100
@@ -396,7 +445,7 @@ class AutomaticController:
             continue
           with self.lock:
             for frame in getattr(event, name):
-              if frame.address in self.recorder.ADDRESSES:
+              if frame.address in self.recorder.ADDRESSES or frame.address in self.recorder.priority.ADDRESSES:
                 source_ns = int(event.logMonoTime)
                 self.recorder.can_frame(frame.src, frame.address, bytes(frame.dat),
                                         packet_evidence_time(name, source_ns, native_offset_ns), time.monotonic(),
@@ -421,10 +470,19 @@ class AutomaticController:
         if not event.valid or event.which() != 'logMessage':
           continue
         text = str(event.logMessage)
-        if len(text) > 65536 or not any(key in text for key in ('lx3_longitudinal_evidence', 'lx3_lateral_margin')):
+        if len(text) > 65536 or not any(key in text for key in ('lx3_longitudinal_evidence', 'lx3_lateral_margin',
+            'SPI_HOST_STATS ','SPI_PROFILE_STATS ','SPI:','transfer failed,')):
           continue
         try:
           message = json.loads(text).get('msg', {})
+          stats=spi_host_fields(message) or spi_profile_fields(message)
+          if stats is not None:
+            with self.lock:self.recorder.spi_host_stats(stats,int(event.logMonoTime),time.monotonic())
+            continue
+          error=spi_error_category(message)
+          if error is not None:
+            with self.lock:self.recorder.spi_error_observation(error,int(event.logMonoTime),time.monotonic())
+            continue
           row = message.get('lx3_longitudinal_evidence')
           lateral = message.get('lx3_lateral_margin')
         except (ValueError, AttributeError):

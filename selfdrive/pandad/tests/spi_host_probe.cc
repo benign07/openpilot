@@ -17,7 +17,7 @@
 
 enum class Scenario { GOOD, OVERSIZED, ABOVE_REQUEST, RECOVERY_STUCK, DATA_BACKPRESSURE, HEADER_NACK, BAD_CHECKSUM,
                       HEADER_STUCK, CONTROL_DATA_STUCK, CAN_HEADER_STUCK, MIXED_NACK, DISCONNECT_BACKPRESSURE,
-                      BOUNDARY_OK, BOUNDARY_FAIL };
+                      BOUNDARY_OK, BOUNDARY_FAIL, BAD_LENGTH_ALTERNATING };
 static Scenario scenario = Scenario::GOOD;
 static double fake_ms = 0;
 static unsigned calls = 0;
@@ -27,12 +27,18 @@ static unsigned request_max = 12;
 static unsigned flow_nacks = 0;
 static unsigned header_nacks = 0;
 static std::function<void()> on_transfer;
+static std::function<bool(unsigned)> sleep_hook;
 static constexpr unsigned CALL_LIMIT = 20000;
 static constexpr unsigned BACKPRESSURE_NACKS = 100;
 static constexpr double IO_MS = 0.25;
 // Header + ACK poll + three recovery fills, followed by the clamped 2ms sleep.
+#ifdef EXPECT_SPI_TURNAROUND
+static constexpr double MAX_HEADER_CHARGE_MS = 5 * IO_MS + 2.0 + 1.0;
+static constexpr double MAX_DATA_CHARGE_MS = 7 * IO_MS + 2.0 + 1.4;
+#else
 static constexpr double MAX_HEADER_CHARGE_MS = 5 * IO_MS + 2.0;
 static constexpr double MAX_DATA_CHARGE_MS = 7 * IO_MS + 2.0;
+#endif
 namespace util {
 int safe_ioctl(int, unsigned long request, void *argument, const char *) {
   if (request != SPI_IOC_MESSAGE(1)) return 0;
@@ -56,13 +62,15 @@ int safe_ioctl(int, unsigned long request, void *argument, const char *) {
       flow_nacks >= 210U && header_nacks++ < (scenario == Scenario::BOUNDARY_OK ? 36U : 37U);
     rx[0] = stuck || short_header || mixed_header || threshold_header ? 0x1F : 0x79;
   } else if (tx[0] == 0x13 && transfer->len == 3) {
+    if(scenario==Scenario::BAD_LENGTH_ALTERNATING && flow_nacks++%2==1) {rx[0]=0x1F;return static_cast<int>(transfer->len);}
     if (scenario == Scenario::CONTROL_DATA_STUCK || scenario == Scenario::DISCONNECT_BACKPRESSURE ||
         ((scenario == Scenario::DATA_BACKPRESSURE || scenario == Scenario::MIXED_NACK) && flow_nacks++ < BACKPRESSURE_NACKS) ||
         ((scenario == Scenario::BOUNDARY_OK || scenario == Scenario::BOUNDARY_FAIL) && flow_nacks++ < 210U)) {
       rx[0] = 0x1F;
       return static_cast<int>(transfer->len);
     }
-    response_length = scenario == Scenario::OVERSIZED ? 2047 : scenario == Scenario::ABOVE_REQUEST ? request_max + 1 : request_max;
+    response_length = scenario == Scenario::OVERSIZED ? 2047 :
+      (scenario == Scenario::ABOVE_REQUEST || scenario==Scenario::BAD_LENGTH_ALTERNATING) ? request_max + 1 : request_max;
     rx[0] = 0x85; rx[1] = response_length & 255; rx[2] = response_length >> 8;
   } else if (tx[0] == 0x14) {
     rx[0] = scenario == Scenario::RECOVERY_STUCK ? 0 : 0x1F;
@@ -81,6 +89,12 @@ int safe_ioctl(int, unsigned long request, void *argument, const char *) {
 }
 }
 
+#ifndef EXPECT_SPI_DIAGNOSTICS
+// Inert counter object only lets the same fixture compile the original driver
+// which predates host diagnostics; it adds no code to that production source.
+#include "selfdrive/pandad/spi_diagnostics.h"
+static SpiDiagnostics spi_diagnostics;
+#endif
 #include SPI_PRODUCTION_SOURCE
 
 int main(int argc, char **argv) {
@@ -97,6 +111,7 @@ int main(int argc, char **argv) {
                test == "mixed_nack" ? Scenario::MIXED_NACK :
                test == "disconnect_backpressure" ? Scenario::DISCONNECT_BACKPRESSURE :
                test == "boundary_ok" ? Scenario::BOUNDARY_OK : test == "boundary_fail" ? Scenario::BOUNDARY_FAIL :
+               test == "length_alternating" ? Scenario::BAD_LENGTH_ALTERNATING :
                test == "checksum" ? Scenario::BAD_CHECKSUM : Scenario::GOOD;
     // Explicitly simulated: production SPI has no writer clearing connected.
     if (scenario == Scenario::DISCONNECT_BACKPRESSURE) on_transfer = [&panda]() { if (calls >= 80U) panda.connected = false; };
@@ -119,7 +134,14 @@ int main(int argc, char **argv) {
       if (scenario == Scenario::HEADER_STUCK || scenario == Scenario::CONTROL_DATA_STUCK || scenario == Scenario::CAN_HEADER_STUCK) {
         assert(result == SpiError::NACK);  // Private header classification never escapes.
         const double max_charge = scenario == Scenario::CONTROL_DATA_STUCK ? MAX_DATA_CHARGE_MS : MAX_HEADER_CHARGE_MS;
+#ifdef EXPECT_SPI_PROFILE
+        // Lock/intentional readiness waits are wall time, not failed I/O.
+        const double charged=spi_diagnostics.charged_us_max()/1000.0;
+        assert(charged>=120 && charged<120+max_charge);
+        assert(fake_ms+.001>=charged); // Diagnostics round charged time up to microseconds.
+#else
         assert(fake_ms >= 120 && fake_ms < 120 + max_charge);
+#endif
         assert(spi_diagnostics.budget_permille_max() >= 1000);
       }
       if (scenario == Scenario::BOUNDARY_FAIL) {
@@ -135,6 +157,16 @@ int main(int argc, char **argv) {
     if (test == "nack") assert(spi_diagnostics.get(SpiStage::DATA_NACK) >= BACKPRESSURE_NACKS);
     if (test == "header_nack") assert(spi_diagnostics.get(SpiStage::HEADER_NACK) >= 4U);
     if (test == "checksum") assert(spi_diagnostics.get(SpiStage::BAD_CHECKSUM) > 0);
+#ifdef EXPECT_SPI_PROFILE
+    if (test=="oversized" || test=="request" || test=="length_alternating") {
+      assert(spi_diagnostics.get(SpiStage::BAD_LENGTH)==2 && fake_ms<20.0);
+    }
+    printf("SPI_METRICS attempts=%llu charged_us=%llu wall_us=%llu ready_us=%llu lock_ctrl_us=%llu\n",
+      static_cast<unsigned long long>(spi_diagnostics.get(SpiStage::ATTEMPTS)),
+      static_cast<unsigned long long>(spi_diagnostics.charged_us_max()),
+      static_cast<unsigned long long>(std::ceil(fake_ms*1000.0)),
+      spi_count(spi_profile_stats.actual_us),spi_count(spi_profile_stats.lock_us_max[0]));
+#endif
     SpiDiagnostics report;
     assert(!report.report_due(4999) && report.report_due(5000));
     assert(!report.report_due(5001) && report.report_due(10000));

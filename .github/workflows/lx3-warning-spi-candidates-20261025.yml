@@ -1,0 +1,83 @@
+name: LX3 original first-fault and SPI candidates
+on:
+  push:
+    branches: [review/lx3-warning-spi-candidates-20261025]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  passive-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11','3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest numpy pycapnp aiohttp cryptography requests
+      - name: Passive contracts and exact installed full-quota counterexample
+        run: |
+          set -o pipefail
+          ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
+          python -m pytest --noconftest -o addopts= selfdrive/carrot/can_diagnostics/test_priority_capsule.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/controls/tests/test_recording_rotation.py selfdrive/controls/tests/test_lx3_notification_resume.py selfdrive/controls/tests/test_haptic_options.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_original_haptic_deployment.py selfdrive/controls/tests/test_original_candidate_deployment.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=passive.xml 2>&1 | tee passive.log
+          python tools/check_lx3_priority_capture.py --out priority-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-priority-contract-${{ matrix.python }}
+          path: |
+            passive.xml
+            passive.log
+            priority-evidence
+  inert-native:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          for profile in baseline observed turnaround; do python tools/prepare_original_lx3_transport.py "$profile" --out "/tmp/original-native/$profile"; done
+          python tools/check_original_lx3_transport.py --profiles /tmp/original-native --out native-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-inert-native
+          path: native-evidence
+  original-arm:
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        profile: [baseline,observed,turnaround]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Original ABI SDK and original-only native source profile
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang python3-venv
+          python3 -m venv /tmp/lx3-original-build
+          /tmp/lx3-original-build/bin/pip install scons setuptools==80.9.0 Cython==3.2.4 numpy pycapnp pyzmq requests pyserial zstandard
+          export PATH="/tmp/lx3-original-build/bin:$PATH"
+          python tools/lx3_spi_arm_artifact.py sdk
+          python tools/prepare_original_lx3_transport.py '${{ matrix.profile }}' --out /tmp/original-native
+      - name: Build isolated original ARM native target, verify ABI and CAN protocol
+        run: |
+          set -o pipefail
+          export PATH="/tmp/lx3-original-build/bin:$PATH"
+          cd /tmp/original-native
+          scons sdk="$GITHUB_WORKSPACE/arm-sdk" -j2 2>&1 | tee build.log
+          python "$GITHUB_WORKSPACE/tools/record_original_lx3_transport.py" /tmp/original-native
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-native-arm-${{ matrix.profile }}
+          path: |
+            /tmp/original-native/build.log
+            /tmp/original-native/profile.json
+            /tmp/original-native/evidence
+            /tmp/original-native/selfdrive/pandad/pandad
+            /tmp/original-native/selfdrive/pandad/spi.cc
+            /tmp/original-native/selfdrive/pandad/spi_diagnostics.h
+            /tmp/original-native/selfdrive/pandad/tests/test_pandad_canprotocol

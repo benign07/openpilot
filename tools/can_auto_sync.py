@@ -92,6 +92,12 @@ def fresh(services, key, now):
 
 
 def chunk_summary(rows):
+  if rows and rows[0].get('priority_capsule') is True:
+    # The onset checkpoint and final window overlap each other and ordinary
+    # chunks. Preserve/download them, but never count them as extra driving.
+    return {'trip':[rows[0].get('boot_id'),rows[0].get('trip_id')],
+            'events':{},'modes':{},'histograms':{},'invalid_samples':0,
+            'priority_capsule':True,'quality_excluded':True}
   events, modes, histograms = Counter(), Counter(), defaultdict(Counter)
   event_trips = defaultdict(set)
   coverage = {'invalid_samples': 0}
