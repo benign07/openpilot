@@ -17,6 +17,8 @@ def signed(path,public):
   return json.loads(body)
 
 def recover(folder,root,authorization,serial):
+  import fcntl
+  lock=(folder/'installer.lock').open('a+b');fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
   public=base64.b64decode(json.loads(Path('/data/community/hud_updates/config.json').read_text())['public_key'],validate=True)
   assert sha(public)==PIN
   descriptor=signed(Path(__file__).parent/'RECOVERY.signed.json',public)

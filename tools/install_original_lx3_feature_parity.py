@@ -27,7 +27,8 @@ def support(folder):
   spec=importlib.util.spec_from_file_location('feature_transaction_core',core_file)
   core=importlib.util.module_from_spec(spec);spec.loader.exec_module(core)
   prerequisites=['common/params_keys.h','common/params_pyx.so','opendbc_repo/opendbc/car/car.capnp',
-    'selfdrive/controls/lib/approach_comfort.py','selfdrive/controls/lib/flexible_gap.py','selfdrive/controls/lib/notification_preferences.py']
+    'selfdrive/controls/lib/approach_comfort.py','selfdrive/controls/lib/flexible_gap.py','selfdrive/controls/lib/notification_preferences.py',
+    'opendbc_repo/opendbc/car/hyundai/manual_steering.py','selfdrive/carrot/manual_steering.py','opendbc_repo/opendbc/car/interfaces.py']
   core.ORDER=prerequisites+[n for n in policy['files'] if n not in prerequisites]
   core.PROTECTED=policy['protected']
   return core,policy
@@ -131,13 +132,17 @@ def make_smoke_view(root,overlay,dest,order):
     elif source.is_file() and source.suffix in ('.py','.capnp'):target.write_bytes(source.read_bytes())
     elif source.exists():target.symlink_to(source,target_is_directory=source.is_dir())
   visit('.')
+  # The installed fork has a nested regular openpilot package. A namespace
+  # candidate loses to that later regular package even with parent first.
+  # Make the isolated view an explicit package; never edit the live shim.
+  (dest/'__init__.py').write_text('"""Isolated feature qualification package."""\n')
 
 def smoke_environment(parent,view):
   return {**os.environ,'PYTHONPATH':str(parent)+':'+str(view)+':'+str(view/'opendbc_repo')+':'+os.environ.get('PYTHONPATH',''),
     'PYTHONDONTWRITEBYTECODE':'1','PWD':str(parent)}
 
 def import_smoke(root,folder,core):
-  parent=folder/'smoke-v2';view=parent/'openpilot'
+  parent=folder/'smoke-v3';view=parent/'openpilot'
   if not view.exists():make_smoke_view(root,folder/'new',view,core.ORDER)
   program=r'''
 from pathlib import Path
@@ -149,7 +154,12 @@ from openpilot.selfdrive.car import card,cruise
 from openpilot.selfdrive.controls import controlsd
 from openpilot.selfdrive.controls.lib import longitudinal_planner,approach_comfort,flexible_gap
 from openpilot.selfdrive.carrot.server.services import settings
-assert str(Path(sys.argv[1]).resolve()) in str(Path(carcontroller.__file__).resolve())
+import cereal,opendbc.car.structs,openpilot.common.params_pyx
+view=Path(sys.argv[1]).resolve()
+for m in (cereal,opendbc.car.structs,openpilot.common.params_pyx,carcontroller,hyundaicanfd,card,controlsd,cruise,longitudinal_planner,approach_comfort,flexible_gap):
+ assert Path(m.__file__).resolve().is_relative_to(view),(m.__name__,m.__file__)
+assert (view/'cereal/car.capnp').resolve()==(view/'opendbc_repo/opendbc/car/car.capnp').resolve()
+probe=cereal.car.CarControl.new_message();probe.manualSteeringResume=True
 with tempfile.TemporaryDirectory(prefix='feature-smoke-') as temp:
  p=Params(temp);assert len(p.all_keys())==333
  p.put_int('DisableDM',1);assert p.get_int('DisableDM')==1
@@ -158,14 +168,17 @@ with tempfile.TemporaryDirectory(prefix='feature-smoke-') as temp:
  p.put_int('ApproachTrafficCalm',30);assert p.get_int('ApproachTrafficCalm')==30
  p.put_int('C3xLiteHapticPattern',2)
  h=lx3_haptic_notifications.HapticNotifications();h.configure_from_params(p);assert h.pattern==2
+ desired=json.loads(Path(sys.argv[2]).read_text())['driving_preferences']
+ path=Path(temp)/'driving_preferences.json';path.write_text(json.dumps({'schema':1,'values':desired}))
+ preferences=approach_comfort.DrivingPreferences(path);assert preferences.read()==desired and preferences.error is None
 c=structs.CarControl.new_message();c.manualSteeringResume=True;c.manualSteeringScale=.5;c.lx3Authority.epoch=42
 with structs.CarControl.from_bytes(c.to_bytes()) as d:assert d.manualSteeringResume and d.lx3Authority.epoch==42
 assert 'display_context' in inspect.signature(__import__('opendbc.car.interfaces',fromlist=['CarInterfaceBase']).CarInterfaceBase.apply).parameters
 print(json.dumps({'key_count':333,'new_schema_roundtrip':True,'current_speed_and_planner_imports':True,
- 'haptic_configuration_retained':True,'display_context_dependency':True,'no_CAN_publisher_instantiated':True}))
+ 'haptic_configuration_retained':True,'display_context_dependency':True,'driving_preferences_schema_valid':True,'no_CAN_publisher_instantiated':True}))
 '''
   env=smoke_environment(parent,view)
-  result=subprocess.run([sys.executable,'-c',program,str(view)],cwd=parent,env=env,capture_output=True,text=True,timeout=60)
+  result=subprocess.run([sys.executable,'-c',program,str(view),str(folder/'settings-migration.json')],cwd=parent,env=env,capture_output=True,text=True,timeout=60)
   core.atomic(folder/'import-smoke.stdout',result.stdout.encode());core.atomic(folder/'import-smoke.stderr',result.stderr.encode())
   assert result.returncode==0,result.stderr[-3000:]
   report=json.loads(result.stdout.splitlines()[-1]);core.save(folder/'import-smoke.json',report);return report
@@ -219,10 +232,10 @@ def main():
     else:
       assert record['phase'] in ('complete','installed_pending_reboot_verification','recovery_required')
       core.validate_restore(root,folder,record);validate_settings_restore(record,paths)
-    record['gate']=core.parked();core.save(record_file,record)
-    subprocess.run(['sudo','-n','systemctl','stop','comma.service'],check=True)
+    prior_phase=record['phase'];record['gate']=core.parked();record['phase']='stopping';core.save(record_file,record)
     changed=False
     try:
+      subprocess.run(['sudo','-n','systemctl','stop','comma.service'],check=True)
       core.stopped();schema_link(root)
       assert json.loads(Path('/data/community/hud_updates/state.json').read_text())['phase']=='complete'
       if args.phase=='rollback':
@@ -238,8 +251,9 @@ def main():
         assert all(sha((params_dir/k).read_bytes())==h for k,h in record['protected_settings'].items())
         record['settings_attempted']=True;core.save(record_file,record)
         for k,raw in after_preferences(migration(folder,m)).items():core.atomic(paths[k],raw,0o600)
-        command="from openpilot.common.params import Params;p=Params();assert len(p.all_keys())==333 and p.get_int('DisableDM')==1;assert p.get_bool('CruiseStartCurrentSpeed') and p.get_bool('ApproachComfortEnabled')"
-        subprocess.run([sys.executable,'-c',command],cwd=root,check=True,timeout=10)
+        command="import sys,json;from openpilot.common.params import Params;from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences;from cereal import car;p=Params();assert len(p.all_keys())==333 and p.get_int('DisableDM')==1;assert all(p.get(k)==v for k,v in json.loads(sys.argv[1]).items());prefs=DrivingPreferences();assert prefs.read()==json.loads(sys.argv[2]) and prefs.error is None;c=car.CarControl.new_message();c.manualSteeringResume=True"
+        expected=migration(folder,m)
+        subprocess.run([sys.executable,'-c',command,json.dumps(expected['params']),json.dumps(expected['driving_preferences'])],cwd=root,check=True,timeout=10)
         assert time.monotonic()-record['gate']['mono']<15,'Fresh stop window exceeded'
         record.update(phase='installed_pending_reboot_verification',runtime_modified=True,source_layer_before_rollback='S0/D1')
       core.save(record_file,record)
@@ -253,6 +267,8 @@ def main():
           record['phase']='recovery_required';core.save(record_file,record);raise
       elif changed:
         record['phase']='recovery_required';core.save(record_file,record);raise
+      else:
+        record['phase']=prior_phase;record['last_attempt']='aborted_before_writes';core.save(record_file,record)
       subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True);raise
     subprocess.Popen(['sudo','-n','sh','-c','sleep 3; reboot'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
   print('RESULT_JSON='+json.dumps({k:v for k,v in record.items() if k not in ('settings','protected_settings')}),flush=True)

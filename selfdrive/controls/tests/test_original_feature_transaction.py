@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
 
 ROOT=Path(__file__).resolve().parents[3]
 def load(name,path):
-  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);sys.modules[name]=m;spec.loader.exec_module(m);return m
 deploy=load('feature_transaction',ROOT/'tools/install_original_lx3_feature_parity.py')
 profile=load('feature_composer',ROOT/'tools/prepare_original_lx3_feature_parity.py')
 issuer=load('feature_issuer',ROOT/'tools/issue_original_feature_recovery.py')
@@ -117,3 +117,22 @@ def test_staged_namespace_cannot_fall_back_to_live_source_alias(tmp_path,absolut
   result=subprocess.run([sys.executable,'-c',program,str(view)],cwd=parent,env=deploy.smoke_environment(parent,view),capture_output=True,text=True)
   assert result.returncode==0,result.stderr
   assert not (root/name).exists()
+
+@pytest.mark.skipif(os.name=='nt',reason='POSIX package search precedence exercised on Linux')
+def test_staged_namespace_wins_over_nested_regular_live_package(tmp_path):
+  root=tmp_path/'live';root.mkdir();overlay=tmp_path/'new';overlay.mkdir()
+  for folder in ('selfdrive','selfdrive/controls','selfdrive/controls/lib','cereal','openpilot'):
+    p=root/folder;p.mkdir(exist_ok=True);(p/'__init__.py').write_text('')
+  (root/'openpilot/__init__.py').write_text('from pathlib import Path\n__path__=[str(Path(__file__).resolve().parents[1])]\n')
+  n='selfdrive/controls/lib/approach_comfort.py';p=overlay/n;p.parent.mkdir(parents=True);p.write_text("VALUE='new'\n")
+  parent=tmp_path/'smoke';view=parent/'openpilot';deploy.make_smoke_view(root,overlay,view,[n])
+  program="import openpilot; from openpilot.selfdrive.controls.lib import approach_comfort as m; from pathlib import Path; import sys; assert m.VALUE=='new'; assert Path(openpilot.__file__).resolve().parent==Path(sys.argv[1]); assert Path(m.__file__).resolve().is_relative_to(Path(sys.argv[1]))"
+  r=subprocess.run([sys.executable,'-c',program,str(view)],cwd=parent,env=deploy.smoke_environment(parent,view),capture_output=True,text=True)
+  assert r.returncode==0,r.stderr
+
+def test_exact_migrated_JSON_loads_without_fallback(tmp_path,monkeypatch):
+  _,_,_,_,_,_,_,prefs,_,_=fixture(tmp_path,monkeypatch)
+  helper=load('candidate_driving_preferences',ROOT/'selfdrive/controls/lib/approach_comfort.py')
+  path=tmp_path/'driving_preferences.json';path.write_bytes(deploy.after_preferences(prefs)['driving_preferences.json'])
+  store=helper.DrivingPreferences(path)
+  assert store.read()==prefs['driving_preferences'] and store.error is None
