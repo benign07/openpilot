@@ -1,0 +1,47 @@
+Original LX3 stable-feature parity plus strengthened diagnostics
+
+Restores the donor device's approach comfort/flexible following gap/speed-gap
+reduction/launch following, accepted-engagement current speed, manual blinker
+steering fade/resume, lateral margin and OEM surround display code and settings UI.
+Keep original physically confirmed haptic helper and per-event options, D1 first
+fault capture and S0 native/host diagnostics. Optional heavy road-camera vehicle
+overlay remains removed as requested; existing compact applied-status labels stay.
+
+33-file separate deployment, including original-ABI 324->333 Params extension
+and one append-only CarControl resume boolean. Original prior324 descriptors and
+per-flag deletion semantics preserved. Steering/MDPS builder AST unchanged.
+Panda firmware, native pandadS0, authority ABI, model assets/compiled caches,
+calibration, identity and DisableDM1 remain the original device's own files.
+Actual four MPC solver binaries were identical between both inspected devices.
+
+Exact CI 40202712512 / e617fa5124630750979751e4b33a3623b0a6496b: three jobs success; Python3.11 and3.12 each578 cases,
+zero failures/errors/skips; ARM333 registry/flags/ABI checks. Real original-device
+temporary-copy import qualification passed with executing source hashes unchanged.
+This does not claim a complete driving-stack rebuild, road or motor qualification.
+
+Owner-specific preference migration is signed by hash but the private sidecar is
+NOT published. Includes accepted-current-speed and donor approach settings; keep
+target RecordRoadCam1 and original haptic event settings. Apply only by the separate
+serial/hash/signature-bound installer with fresh continuous P/zero/inactive and a
+stopped service. No shared HUD source-OTA pointer was advanced for native/schema.
+
+Rollback FEATURE layer first, THEN immutable S0/D1 if needed. Recovery helper is
+bound to this bundle, needs fresh signed physical confirmation/BOOTTIME/boot-id,
+requires stopped services and only restores files; never starts/reboots. Linux
+CI covers partial restores and schema alias preservation; actual recovery unused.
+
+LSS/cluster warning and MCU SPI causes remain unresolved. Three inspected onsets
+suggest source/executed lateral state disagreement, not established causation.
+New feature code is not represented as their repair. Record installation,
+postboot verification and road results separately. Additional reference device
+and EV9 are not installed by this release. No phone APK update required for the
+existing API/settings contract; initial native/schema deployment is separate.
+
+RID01 stopped safely because LiveTorqueParameters legitimately refreshed between
+stage and stop. All33 files restored and old service restarted; no boot. RID03
+only freezes own latest two learned cache hashes AFTER estimator writers exit,
+BEFORE any source write. Never edits their bytes or copies donor calibration.
+Static identity/DM/haptic/recording settings remain strict stage-hash checked.
+Recorded stage/stopped cache hashes preserve this distinction for postboot checks.
+Real module names are checked in cmdline, including setproctitle truncation,
+with real Linux child regression; exact frozen-set/boot proof repeated at pre-reboot.
