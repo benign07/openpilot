@@ -224,7 +224,7 @@ def test_new_virtual_setting_api_requires_parked_before_writing(monkeypatch):
   node=next(n for n in ast.parse(path.read_text(encoding='utf-8')).body
             if isinstance(n,ast.AsyncFunctionDef) and n.name=='api_param_set')
   writes=[]
-  scope={'web':web,'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'HAS_PARAMS':False,
+  scope={'web':web,'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'CRUISE_BUTTON_PREFERENCES':{},'HAS_PARAMS':False,
          'get_settings_cached':lambda: ({},{},{},[]),'set_param_value':lambda *args:writes.append(args)}
   exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),scope)
   async def body():return {'name':'LaunchFollowStrength','value':10}
@@ -252,7 +252,7 @@ def test_defaults_reset_virtual_store_and_parked_rejection_precedes_native_reset
   metadata['stock']={'default':1}
   def restore(values):
     native.append(values);return {'result':{'fail_cnt':0},'preview':{'entries':[]}}
-  scope={'web':web,'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'HAS_PARAMS':True,
+  scope={'web':web,'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'CRUISE_BUTTON_PREFERENCES':{},'HAS_PARAMS':True,
     'get_settings_cached':lambda: ({},{},metadata,[]),
     '_is_carrot_default_reset_param':lambda *args:True,
     'driving_preferences':p,'restore_param_values_validated':restore}

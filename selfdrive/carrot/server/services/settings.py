@@ -3,12 +3,14 @@ import os
 from typing import Any, Dict, List, Tuple
 
 from ..config import DEFAULT_SETTINGS_PATH
-from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES
+from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, CRUISE_BUTTON_PREFERENCES
 
 
 def inject_driving_preferences(data):
   """Virtual options use their own versioned store, never unknown Params keys."""
   descriptions = {
+    'CruiseOffKeepLateral': ('크루즈 해제 시 조향보조 유지',
+      'LX3 전용. 켜면 핸들 크루즈 버튼을 다시 눌러 속도 제어를 끌 때, 이미 요청된 조향보조는 유지합니다. 조향보조가 꺼져 있었다면 새로 켜지지 않습니다. LFA 버튼으로 조향보조를 끌 수 있으며 고장·입력 이상·통신 및 Panda 권한 검사는 그대로 적용됩니다. 꺼짐은 기존처럼 크루즈와 조향 요청을 함께 해제합니다. 기본 꺼짐. 버튼 전환 때 정상 권한 확인을 다시 거치며, 허용되지 않은 조향 출력을 유지하는 기능이 아닙니다. 옵션은 정차 후 변경합니다.'),
     'LaunchFollowStrength': ('재출발 앞차 추종 보완',
       '정지 후 움직이기 시작한 뒤, 같은 레이더 앞차가 안정적으로 멀어지고 목표거리보다1m 넘게 여유가 생기면 기존 가속표를 이 비율(%) 이내에서 보완합니다. 상대속도가 약0.6초 동안 지속적으로 증가하면 이 설정으로 허용한 보완 상한까지 점진적으로 사용합니다. 한 번의 값 튐은 증가로 인정하지 않으며 실제 가속은 MPC·커브·감속 제한이 결정합니다. 정지 해제·최소거리·제동·Panda 권한은 바꾸지 않습니다. 접근 감속·끼어들기·가까운 두 번째 앞차에는 적용하지 않습니다. 0은 기존 동작, 시험 시작은10을 권장합니다. 최대 양가속1.6m/s²를 넘기는 보완은 하지 않습니다. 실제 출발 지연이나 간격 개선을 보장하지 않습니다.'),
     'YellowLineBiasCm': ('노란 중앙선 쪽 여유 조절',
@@ -27,7 +29,7 @@ def inject_driving_preferences(data):
   descriptions['LateralMarginShadow'] = title, text+' 기록 전용은 차로 추종이 꺼져 있어도 후보를 계산하며 경로를 바꾸지 않습니다.'
   existing = {p.get('name') for p in data.get('params', [])}
   names = []
-  for name, (lo, hi, default) in DRIVING_PREFERENCES.items():
+  for name, (lo, hi, default) in {**DRIVING_PREFERENCES, **CRUISE_BUTTON_PREFERENCES}.items():
     if name in existing:continue
     title, description = descriptions[name]
     data.setdefault('params', []).append({'name': name, 'group': 'LX3 주행 보완',
@@ -39,6 +41,7 @@ def inject_driving_preferences(data):
   # Development controls have one prominent home. Move existing comfort/gap
   # entries by name, preserving defaults/limits and profile/favorite identity.
   sections = [
+    ('cruise_button','크루즈 버튼·조향보조','Cruise button and steering',['CruiseOffKeepLateral']),
     ('launch_follow','재출발 추종','Launch following',['LaunchFollowStrength']),
     ('lateral_margin','차선 내 측방 여유','Within-lane margin',
       ['YellowLineBiasCm','NearbyVehicleBiasCm','LateralMarginShadow']),

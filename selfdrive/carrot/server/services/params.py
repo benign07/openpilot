@@ -8,10 +8,13 @@ import sys
 import threading
 import zlib
 from typing import Any, Dict, List, Optional
-from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, DrivingPreferences
+from openpilot.selfdrive.controls.lib.approach_comfort import (
+  DRIVING_PREFERENCES, DrivingPreferences, CRUISE_BUTTON_PREFERENCES, CruiseButtonPreferences,
+)
 from openpilot.selfdrive.controls.lib.notification_preferences import KEY as BORDER_KEY, NotificationPreferences
 
 driving_preferences = DrivingPreferences()
+cruise_button_preferences = CruiseButtonPreferences()
 notification_preferences = NotificationPreferences()
 
 try:
@@ -149,6 +152,8 @@ def get_param_value(name: str, default: Any) -> Any:
     return notification_preferences.read()
   if name in DRIVING_PREFERENCES:
     return driving_preferences.read()[name]
+  if name in CRUISE_BUTTON_PREFERENCES:
+    return cruise_button_preferences.read()[name]
   # 'GitPullTime' is a synthetic key backed by services/git_state.py.
   # Imported lazily to avoid a circular import at module load.
   from .git_state import read_custom_meta_value
@@ -171,6 +176,8 @@ def get_param_values(names: list[str], defaults: Optional[Dict[str, Any]] = None
 
   values: Dict[str, Any] = {}
   virtual_values = driving_preferences.read() if any(n in DRIVING_PREFERENCES for n in names) else {}
+  if any(n in CRUISE_BUTTON_PREFERENCES for n in names):
+    virtual_values.update(cruise_button_preferences.read())
   if BORDER_KEY in names:
     virtual_values[BORDER_KEY] = notification_preferences.read()
   if not HAS_PARAMS:
@@ -282,6 +289,9 @@ def set_param_value(name: str, value: Any, p: Optional[Dict[str, Any]] = None) -
     return
   if name in DRIVING_PREFERENCES:
     driving_preferences.set(name, value)
+    return
+  if name in CRUISE_BUTTON_PREFERENCES:
+    cruise_button_preferences.set(name, value)
     return
   if not HAS_PARAMS:
     _mem_store[name] = str(value)

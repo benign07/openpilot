@@ -70,6 +70,17 @@ def reconcile_lateral(cruise, CS, always_lateral, now_ns):
     key == citation and 0 <= now_ns - stamp < DECISION_MAX_NS for citation,stamp in citations)
     for key,generation,age,axes in ((a.pendingKey,a.pendingGeneration,a.pendingAgeMs,a.pendingAxes),
                                   (a.longPendingKey,a.longPendingGeneration,a.longPendingAgeMs,a.longPendingAxes)))
+  # Native status can arrive before the bulk CAN frame carrying MAIN release.
+  # Preserve only the request latched from an accepted LAT at this MAIN press.
+  # This is not a citation/grant: configure_control still emits no LAT output
+  # until the host sees its own release and native grants its new generation.
+  latch = getattr(cruise, 'lx3_main_keep_lateral', None)
+  if (latch and getattr(cruise, '_keep_lateral_on_cruise_off', False) and verified(a) and
+      a.epoch == latch[0] and 0 <= now_ns-latch[2] < 2_000_000_000 and
+      0 <= now_ns-a.statusMonoTime <= STATUS_MAX_NS and a.buttonHealthy and a.reason == 3 and
+      a.pendingAxes & LAT and a.pendingKey >> 8 == 8 and a.pendingAgeMs < 600 and
+      a.pendingGeneration > latch[1]):
+    pending = True
   revoked = valid_status and not (a.allowed & LAT or a.armed & LAT) and not pending and (
     cruise.lx3_lat_was_allowed or not live)
   if cruise._lat_enabled and (blocked or revoked):
@@ -77,6 +88,8 @@ def reconcile_lateral(cruise, CS, always_lateral, now_ns):
     cruise.lx3_lat_key = cruise.lx3_lat_time = 0
     cruise.lx3_lateral_refused = True
     cruise._add_log('LFA request refused or permission revoked; press LFA after the condition clears')
+  if not cruise._lat_enabled:
+    cruise.lx3_main_keep_lateral = None
   if valid_status:
     cruise.lx3_lat_was_allowed = bool(a.allowed & LAT)
 

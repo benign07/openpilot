@@ -7,6 +7,7 @@ from openpilot.common.constants import CV
 from opendbc.car import structs
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
 from openpilot.selfdrive.car.lx3_authority import reconcile_lateral, verified, STATUS_MAX_NS
+from openpilot.selfdrive.controls.lib.approach_comfort import CruiseButtonPreferences
 import time
 GearShifter = structs.CarState.GearShifter
 
@@ -159,6 +160,7 @@ class VCruiseCarrot:
     self.lx3_remote_cycle = False
     self.lx3_lat_was_allowed = False
     self.lx3_lateral_refused = False
+    self.lx3_main_keep_lateral = None
     self.lx3_auto_blocked = False
     self.lx3_auto_pending = None
     self.frame = 0
@@ -183,6 +185,8 @@ class VCruiseCarrot:
     self._cruise_speed_unit_basic = 1
     self._cruise_button_mode = 2
     self._start_current_speed = self.params.get_bool('CruiseStartCurrentSpeed')
+    self._button_preferences = CruiseButtonPreferences()
+    self._keep_lateral_on_cruise_off = False
     self._cancel_button_mode = 0
     self._lfa_button_mode = 0
     self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
@@ -282,6 +286,7 @@ class VCruiseCarrot:
       self._paddle_mode = self.params.get_int("PaddleMode")
       self._cruise_button_mode = self.params.get_int("CruiseButtonMode")
       self._start_current_speed = self.params.get_bool('CruiseStartCurrentSpeed')
+      self._keep_lateral_on_cruise_off = bool(self._button_preferences.read()['CruiseOffKeepLateral'])
       self._cancel_button_mode = self.params.get_int("CancelButtonMode")
       self._lfa_button_mode = self.params.get_int("LfaButtonMode")
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
@@ -304,6 +309,7 @@ class VCruiseCarrot:
     self.lx3_remote_cycle = False
     self.lx3_lateral_refused = False
     if self.lx3_authority:
+      self._update_lx3_main_latch(CS, time.monotonic_ns())
       reconcile_lateral(self, CS, self.params.get_bool('AlwaysLateral'), time.monotonic_ns())
     self._add_log("")
     self.update_params(is_metric)
@@ -436,16 +442,7 @@ class VCruiseCarrot:
         if not b.physical or b.pressed:
           continue
         if b.type == ButtonType.mainCruise:
-          self._lat_enabled = CS.cruiseState.available
-          self._cruise_cancel_state = not CS.cruiseState.available
-          if CS.cruiseState.available:
-            # A physical MAIN enable has the same explicit resumption intent
-            # as RES/SET; clear Carrot's post-park automatic-resume timer.
-            self.autoCruiseControl_cancel_timer = 0
-            self.lx3_lat_key = self.lx3_long_key = b.physicalKey
-            self.lx3_lat_time = self.lx3_long_time = b.observedMonoTime
-          else:
-            self.lx3_auto_until = 0
+          self._handle_lx3_main_release(CS, b)
         elif b.type in (ButtonType.accelCruise, ButtonType.decelCruise):
           self.lx3_long_key, self.lx3_long_time = b.physicalKey, b.observedMonoTime
           if self._lat_enabled and CS.lx3Authority.armed & 1:
@@ -453,6 +450,51 @@ class VCruiseCarrot:
       if self._cruise_cancel_state:
         self.lx3_auto_until = 0
       reconcile_lateral(self, CS, self.params.get_bool('AlwaysLateral'), time.monotonic_ns())
+
+  def _handle_lx3_main_release(self, CS, button):
+    # The caller accepts only this cycle's real MAIN release. Native MAIN
+    # revokes old grants and offers a new physical pending event. A retained
+    # request cites that new event and earns normal LAT permission again;
+    # actuator output never continues with the revoked generation.
+    available = bool(CS.cruiseState.available)
+    latch = self.lx3_main_keep_lateral
+    keep = (self._keep_lateral_on_cruise_off and latch is not None and self._lat_enabled and
+            CS.lx3Authority.epoch == latch[0] and 0 <= button.observedMonoTime-latch[2] < 2_000_000_000)
+    self._lat_enabled = available or keep
+    self.lx3_main_keep_lateral = None
+    self._cruise_cancel_state = not available
+    if available:
+      self.autoCruiseControl_cancel_timer = 0
+      self.lx3_lat_key = self.lx3_long_key = button.physicalKey
+      self.lx3_lat_time = self.lx3_long_time = button.observedMonoTime
+    else:
+      self.lx3_auto_until = 0
+      if self._lat_enabled:
+        self.lx3_lat_key, self.lx3_lat_time = button.physicalKey, button.observedMonoTime
+
+  def _update_lx3_main_latch(self, CS, now_ns):
+    # Capture actual accepted lateral at press, not a still-pending LFA intent.
+    # Normal always-lateral pedal semantics remain unchanged.
+    a = CS.lx3Authority
+    fresh = verified(a) and 0 <= now_ns-a.statusMonoTime <= STATUS_MAX_NS
+    blocked = (not self._keep_lateral_on_cruise_off or not self._lat_enabled or not fresh or
+               not a.buttonHealthy or not CS.canValid or CS.canTimeout or a.oemEmergency or
+               CS.steerFaultTemporary or CS.steerFaultPermanent or
+               str(CS.gearShifter) not in ('drive','sport','manumatic','eco') or
+               (not self.params.get_bool('AlwaysLateral') and
+                (CS.brakePressed or (CS.gasPressed and a.config & 2))))
+    if blocked:
+      self.lx3_main_keep_lateral = None
+      return
+    for b in CS.buttonEvents:
+      if not b.physical:continue
+      if b.type == ButtonType.mainCruise and b.pressed:
+        self.lx3_main_keep_lateral = (a.epoch,a.lateralGeneration,b.observedMonoTime) if a.allowed & 1 else None
+      elif b.type != ButtonType.mainCruise:
+        self.lx3_main_keep_lateral = None
+    latch = self.lx3_main_keep_lateral
+    if latch and (a.epoch != latch[0] or not 0 <= now_ns-latch[2] < 2_000_000_000):
+      self.lx3_main_keep_lateral = None
 
   @staticmethod
   def _current_start_speed(CS):

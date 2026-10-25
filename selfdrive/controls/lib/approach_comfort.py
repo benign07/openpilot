@@ -42,14 +42,16 @@ _PREFERENCE_LOCK = threading.RLock()
 
 
 class DrivingPreferences:
+  DEFINITIONS = DRIVING_PREFERENCES
+
   def __init__(self, path='/data/community/driving_preferences.json'):
     self.path = Path(path)
     self.signature = None
-    self.values = {k: v[2] for k, v in DRIVING_PREFERENCES.items()}
+    self.values = {k: v[2] for k, v in self.DEFINITIONS.items()}
     self.error = None
 
   def read(self):
-    defaults = {k: v[2] for k, v in DRIVING_PREFERENCES.items()}
+    defaults = {k: v[2] for k, v in self.DEFINITIONS.items()}
     try:
       stat = self.path.stat()
       signature = (stat.st_mtime_ns, stat.st_size)
@@ -64,7 +66,7 @@ class DrivingPreferences:
       if set(values) - set(defaults):
         raise ValueError('unknown driving preference')
       for name, value in values.items():
-        lo, hi, _ = DRIVING_PREFERENCES[name]
+        lo, hi, _ = self.DEFINITIONS[name]
         if type(value) is not int or not lo <= value <= hi:
           raise ValueError('invalid driving preference value')
       self.values = {**defaults, **values}
@@ -77,9 +79,9 @@ class DrivingPreferences:
     return dict(self.values)
 
   def set(self, name, value):
-    if name not in DRIVING_PREFERENCES:
+    if name not in self.DEFINITIONS:
       raise ValueError('unknown driving preference')
-    lo, hi, _ = DRIVING_PREFERENCES[name]
+    lo, hi, _ = self.DEFINITIONS[name]
     if type(value) is not int or not lo <= value <= hi:
       raise ValueError('invalid driving preference value')
     with _PREFERENCE_LOCK:
@@ -96,7 +98,7 @@ class DrivingPreferences:
       self.read()
       if self.error and (self.path.exists() or self.path.is_symlink()):
         os.replace(self.path, self.path.with_name(self.path.name+'.invalid.'+uuid.uuid4().hex))
-      return self._write({k:v[2] for k,v in DRIVING_PREFERENCES.items()})
+      return self._write({k:v[2] for k,v in self.DEFINITIONS.items()})
 
   def _write(self, values):
     self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,6 +117,17 @@ class DrivingPreferences:
       temporary.unlink(missing_ok=True)
     self.signature = None
     return self.read()
+
+
+CRUISE_BUTTON_PREFERENCES = {'CruiseOffKeepLateral': (0, 1, 0)}
+
+
+class CruiseButtonPreferences(DrivingPreferences):
+  """Separate file: rolling back cannot invalidate existing driving preferences."""
+  DEFINITIONS = CRUISE_BUTTON_PREFERENCES
+
+  def __init__(self, path='/data/community/cruise_button_preferences.json'):
+    super().__init__(path)
 
 
 class LaunchFollow:
