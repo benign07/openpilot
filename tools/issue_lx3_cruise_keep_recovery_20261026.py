@@ -1,7 +1,7 @@
 """Issue from a NEW owner message and fresh SSH boot observation, never fabricate either."""
 from pathlib import Path
 import argparse,base64,hashlib,importlib.util,json,tempfile,time
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
 PIN='56d7f915ed4d802bccf46db83f0d7b147579466ed060abdf1dab96759babd223'
 sha=lambda b:hashlib.sha256(b).hexdigest()
@@ -14,8 +14,11 @@ def main():
  for n in ('folder','owner-confirmation','device-observation','signing-key','out'):p.add_argument('--'+n,type=Path,required=True)
  a=p.parse_args();assert not a.out.exists()
  key=Ed25519PrivateKey.from_private_bytes(a.signing_key.read_bytes());public=key.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw);assert sha(public)==PIN
- helper=load('bound_MAIN_recovery',a.folder/'recovery/manual_recovery.py')
- descriptor=helper.signed(a.folder/'recovery/RECOVERY.signed.json',public)
+ raw_descriptor=(a.folder/'recovery/RECOVERY.signed.json').read_bytes();assert len(raw_descriptor)<65536
+ envelope=json.loads(raw_descriptor);body=base64.b64decode(envelope['payload'],validate=True)
+ Ed25519PublicKey.from_public_bytes(public).verify(base64.b64decode(envelope['signature'],validate=True),body)
+ descriptor=json.loads(body)
+ assert descriptor['kind']=='lx3-cruise-keep-source-recovery-v1' and descriptor['target_serial']=='80acfe79'
  assert descriptor['issuer_sha256']==sha(Path(__file__).read_bytes())
  assert descriptor['helper_sha256']==sha((a.folder/'recovery/manual_recovery.py').read_bytes())
  assert descriptor['installer_sha256']==sha((a.folder/'installer.py').read_bytes())
