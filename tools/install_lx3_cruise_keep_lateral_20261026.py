@@ -31,6 +31,7 @@ def verify(folder,root,config=Path('/data/community/hud_updates/config.json')):
  envelope=json.loads(raw);payload=base64.b64decode(envelope['payload'],validate=True)
  Ed25519PublicKey.from_public_bytes(public).verify(base64.b64decode(envelope['signature'],validate=True),payload)
  m=json.loads(payload);assert m['release_id']==RID and m['target_serial']==SERIAL
+ assert m['car_fingerprint']=='HYUNDAI_PALISADE_LX3_HEV'
  assert m['installer_sha256']==sha(Path(__file__).read_bytes())
  assert m['support_sha256']['haptic_core.py']==CORE_SHA
  for n,h in m['support_sha256'].items():
@@ -83,6 +84,11 @@ def main():
  assert root.resolve()==root and folder==Path('/data/lx3_separate_installs')/RID and folder.resolve()==folder
  from openpilot.system.hardware import HARDWARE
  assert HARDWARE.get_serial()==SERIAL
+ from openpilot.common.params import Params
+ from cereal import car
+ with car.CarParams.from_bytes(Params().get('CarParams')) as cp:
+  assert cp.carFingerprint=='HYUNDAI_PALISADE_LX3_HEV' and not cp.passive and not cp.dashcamOnly
+  assert any(s.safetyParam==2238 for s in cp.safetyConfigs)
  import fcntl
  lock=(folder/'installer.lock').open('a+b');fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
  assert json.loads(Path('/data/community/hud_updates/state.json').read_text())['phase']=='complete'

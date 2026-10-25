@@ -18,7 +18,7 @@ def fixture(tmp_path,monkeypatch):
   data=(ROOT/n).read_bytes();old=git(n);rows.append({'path':n,'before':deploy.sha(old),'bytes':len(data),'sha256':deploy.sha(data),'data':base64.b64encode(data).decode()})
  key=Ed25519PrivateKey.generate();public=key.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)
  monkeypatch.setattr(deploy,'PUBLIC_SHA',deploy.sha(public));config=tmp_path/'public.json';config.write_text(json.dumps({'public_key':base64.b64encode(public).decode()}))
- m={'release_id':deploy.RID,'target_serial':deploy.SERIAL,'source_commit':'fixture','installer_sha256':deploy.sha(Path(deploy.__file__).read_bytes()),
+ m={'release_id':deploy.RID,'target_serial':deploy.SERIAL,'car_fingerprint':'HYUNDAI_PALISADE_LX3_HEV','source_commit':'fixture','installer_sha256':deploy.sha(Path(deploy.__file__).read_bytes()),
   'support_sha256':{n:deploy.sha((folder/n).read_bytes()) for n in ('haptic_core.py','feature_core.py')},'files':rows,'protected':dict(deploy.FIXED_NATIVE)}
  def sign():
   raw=json.dumps(m).encode();(folder/'package.signed.json').write_text(json.dumps({'payload':base64.b64encode(raw).decode(),'signature':base64.b64encode(key.sign(raw)).decode()}))
