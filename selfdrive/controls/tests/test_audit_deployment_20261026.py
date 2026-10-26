@@ -164,6 +164,59 @@ def test_mid_install_failure_restores_all_sources_before_restart(package, monkey
   deploy.verify_json(manifest['preserved_json'], community)
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Qualified shared atomic helper uses Linux directory fsync')
+@pytest.mark.parametrize('notification_exists', [False, True])
+def test_rollback_preserves_normal_hud_changes_and_original_record(package, monkeypatch, notification_exists):
+  folder, root, community, params, manifest, files, bundle, core, feature, record = staged(package)
+  # Exercise the real install checks with non-empty original Params evidence.
+  for name, raw in {'UseLaneLineSpeed': b'0', 'AlwaysLateral': b'1'}.items():
+    (params / name).write_bytes(raw)
+    record['protected_settings'][name] = deploy.sha(raw)
+  (folder / 'transaction.json').write_text(json.dumps(record))
+  calls, gates, reboots, freezes = [], [], [], []
+  def gate():
+    gates.append(True)
+    return {'mono': time.monotonic(), 'continuous_seconds': 10}
+  freeze = feature.freeze_stopped_settings
+  def freeze_install(*args):
+    freezes.append(True)
+    return freeze(*args)
+  monkeypatch.setattr(core, 'parked', gate)
+  monkeypatch.setattr(feature, 'freeze_stopped_settings', freeze_install)
+  monkeypatch.setattr(deploy, 'writers_stopped', lambda *a: None)
+  monkeypatch.setattr(deploy.subprocess, 'run', lambda cmd, **k: calls.append(cmd))
+  monkeypatch.setattr(deploy.subprocess, 'Popen', lambda *a, **k: reboots.append(a))
+  installed = deploy.transaction('install', root, folder, manifest, files, bundle, core, feature, community, params)
+  assert installed['phase'] == 'installed_pending_reboot_verification'
+  original_json = dict(installed['preserved_json'])
+  original_params = dict(installed['protected_settings'])
+
+  # Normal owner choices after installation must not prevent source rollback.
+  (params / 'UseLaneLineSpeed').write_bytes(b'60')
+  (params / 'EnableCornerRadar').write_bytes(b'2')
+  (community / 'driving_preferences.json').write_text('{"schema":1,"values":{"NearbyVehicleBiasCm":5}}')
+  (community / 'cruise_button_preferences.json').write_text('{"schema":1,"values":{"CruiseOffKeepLateral":0}}')
+  if notification_exists:
+    (community / 'notification_preferences.json').write_text('{"schema":1,"border":0}')
+  current_json = {n: deploy.digest_or_none(community / n) for n in deploy.JSON_NAMES}
+  current_params = {n: deploy.digest_or_none(params / n) for n in deploy.PARAM_KEYS}
+  restored = deploy.transaction('rollback', root, folder, manifest, files, bundle, core, feature, community, params)
+
+  assert restored['phase'] == 'restored_before_audit_layer'
+  assert all(deploy.sha((root / n).read_bytes()) == row['before'] for n, row in files.items())
+  assert restored['preserved_json'] == original_json
+  assert restored['protected_settings'] == original_params
+  assert restored['rollback_preserved_json'] == current_json
+  assert restored['rollback_protected_settings'] == current_params
+  assert restored['rollback_protected_settings']['HardwareC3xLite'] is None
+  assert (restored['rollback_preserved_json']['notification_preferences.json'] is not None) == notification_exists
+  assert {n: deploy.digest_or_none(community / n) for n in deploy.JSON_NAMES} == current_json
+  assert {n: deploy.digest_or_none(params / n) for n in deploy.PARAM_KEYS} == current_params
+  deploy.validate_record(manifest, files, restored, bundle)
+  assert len(gates) == 2 and len(reboots) == 2 and len(freezes) == 1
+  assert calls == [['sudo', '-n', 'systemctl', 'stop', 'comma.service']] * 2
+
+
 def test_prepare_uses_installed_before_and_preserves_all_unmodified_hashes(package, monkeypatch):
   spec = importlib.util.spec_from_file_location('audit_prepare_test', ROOT / 'tools/prepare_lx3_audit_20261026.py')
   prepare = importlib.util.module_from_spec(spec)

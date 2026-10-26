@@ -151,8 +151,8 @@ def verify_json(expected, community):
     require(name in JSON_NAMES and digest_or_none(community / name) == digest, 'Owner JSON changed: ' + name)
 
 
-def verify_params(record, params_dir):
-  for name, digest in record['protected_settings'].items():
+def verify_params(record, params_dir, field='protected_settings'):
+  for name, digest in record[field].items():
     require(digest_or_none(params_dir / name) == digest, 'Protected Params changed: ' + name)
 
 
@@ -227,10 +227,10 @@ def transaction(phase, root, folder, manifest, files, bundle, core, feature, com
     core.before(root, files)
     require(all(sha((folder / 'new' / n).read_bytes()) == files[n]['sha256'] for n in ORDER), 'Staged source changed')
     core.validate_restore(root, folder, record)
+    verify_json(record['preserved_json'], community)
   else:
     require(record['phase'] in ('stopping', 'installing', 'complete', 'installed_pending_reboot_verification', 'recovery_required'), 'Wrong rollback phase')
     core.validate_restore(root, folder, record)
-  verify_json(record['preserved_json'], community)
   gate = core.parked()  # A prior preflight file never replaces this fresh continuous P/zero gate.
   previous = record['phase']
   record.update(phase='stopping', gate_before_stop=gate)
@@ -240,8 +240,16 @@ def transaction(phase, root, folder, manifest, files, bundle, core, feature, com
     subprocess.run(['sudo', '-n', 'systemctl', 'stop', 'comma.service'], check=True, timeout=10)
     writers_stopped(core, feature)
     require(json.loads((community / 'hud_updates/state.json').read_text())['phase'] == 'complete', 'Concurrent HUD transaction')
-    feature.freeze_stopped_settings(params_dir, record, True)
-    verify_json(record['preserved_json'], community)
+    if phase == 'install':
+      feature.freeze_stopped_settings(params_dir, record, True)
+      verify_json(record['preserved_json'], community)
+    else:
+      # A source-only rollback must preserve the owner's current choices, not
+      # require recreating the staging-time bytes. Keep the manifest-bound
+      # original fields intact for record validation and interrupted retries.
+      record['rollback_preserved_json'] = {n: digest_or_none(community / n) for n in JSON_NAMES}
+      record['rollback_protected_settings'] = {n: digest_or_none(params_dir / n) for n in PARAM_KEYS}
+      core.save(record_path, record)
     require(time.monotonic() - gate['mono'] < 15, 'Expired stopped transaction window')
     if phase == 'install':
       core.before(root, files)
@@ -262,8 +270,8 @@ def transaction(phase, root, folder, manifest, files, bundle, core, feature, com
       changed = True
       core.restore(root, folder, record, restore_preferences=False)
       core.before(root, files)
-      verify_json(record['preserved_json'], community)
-      verify_params(record, params_dir)
+      verify_json(record['rollback_preserved_json'], community)
+      verify_params(record, params_dir, field='rollback_protected_settings')
       require(time.monotonic() - gate['mono'] < 15, 'Rollback exceeded stopped transaction window')
       record['phase'] = 'restored_before_audit_layer'
     core.save(record_path, record)
