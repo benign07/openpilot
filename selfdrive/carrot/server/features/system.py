@@ -1,6 +1,8 @@
 import asyncio
 import os
 import subprocess
+import threading
+import time
 from typing import Any
 
 from aiohttp import web
@@ -125,6 +127,94 @@ def _reject_if_engaged(request: web.Request) -> web.Response | None:
   return web.json_response({"ok": False, "error": "Disengage first"}, status=409)
 
 
+def _maintenance_offroad_precondition(sm, params, now: float | None = None) -> bool:
+  """Reject onroad/unknown requests before touching another IPC subscription."""
+  now = time.monotonic() if now is None else now
+  try:
+    age = now - sm.logMonoTime['deviceState'] / 1e9
+    if (not sm.alive['deviceState'] or not sm.valid['deviceState'] or not 0 <= age < 1.5 or
+        sm['deviceState'].started or not params.get_bool('IsOffroad') or params.get_bool('IsOnroad')):
+      return False
+    for name in ('carState', 'carControl', 'selfdriveState', 'controlsState'):
+      stamp = sm.logMonoTime.get(name, 0)
+      if stamp != 0 and not now - stamp / 1e9 >= 1.:
+        return False
+    return True
+  except (AttributeError, KeyError, TypeError, ValueError):
+    return False
+
+
+def _maintenance_offroad_safe(sm, params, panda=None, now: float | None = None,
+                              boot_now: float | None = None) -> bool:
+  """Offroad maintenance only; never a setting/installation permission."""
+  if not _maintenance_offroad_precondition(sm, params, now):
+    return False
+  try:
+    # pandad's C++ Event timestamps use CLOCK_BOOTTIME, unlike hardwared's
+    # Python deviceState timestamps. Never compare the two clock domains.
+    boot_now = time.clock_gettime(time.CLOCK_BOOTTIME) if boot_now is None else boot_now
+    if (panda is None or not panda['valid'] or not panda['alive'] or
+        not 0 <= boot_now - panda['stamp_ns'] / 1e9 < .5 or not panda['states']):
+      return False
+    for state in panda['states']:
+      if (state['panda_type'] == 'unknown' or state['ignition_line'] or
+          state['ignition_can'] or state['controls_allowed']):
+        return False
+    return True
+  except (AttributeError, KeyError, TypeError, ValueError):
+    return False
+
+
+_maintenance_panda_reader = None
+_maintenance_panda_lock = threading.Lock()
+
+
+def _read_maintenance_panda():
+  """One lazy, locked reader, polled only on offroad maintenance requests.
+
+  msgq does not reclaim a subscriber slot on close, so do not open a new
+  subscriber for each request. No polling thread or HUD contract is added.
+  """
+  global _maintenance_panda_reader
+  with _maintenance_panda_lock:
+    if _maintenance_panda_reader is None:
+      from cereal import messaging
+      _maintenance_panda_reader = messaging.SubMaster(['pandaStates'])
+    sm = _maintenance_panda_reader
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline:
+      sm.update(100)
+      if sm.updated['pandaStates']:
+        return {'valid': bool(sm.valid['pandaStates']), 'alive': bool(sm.alive['pandaStates']),
+                'stamp_ns': int(sm.logMonoTime['pandaStates']),
+                'states': [{'panda_type': str(p.pandaType), 'ignition_line': bool(p.ignitionLine),
+                            'ignition_can': bool(p.ignitionCan), 'controls_allowed': bool(p.controlsAllowed)}
+                           for p in sm['pandaStates']]}
+    return None
+
+
+async def _require_maintenance_safe(request: web.Request) -> None:
+  try:
+    await require_parked(request)
+  except web.HTTPConflict:
+    broker = request.app.get('realtime_broker')
+    lock = request.app.get('realtime_broker_poll_lock')
+    if broker is not None and lock is not None:
+      try:
+        async with lock:
+          await asyncio.to_thread(broker.poll, 0)
+          offroad = _maintenance_offroad_precondition(broker.sm, broker.params)
+        if offroad:
+          panda = await asyncio.to_thread(_read_maintenance_panda)
+          async with lock:
+            await asyncio.to_thread(broker.poll, 0)
+            if _maintenance_offroad_safe(broker.sm, broker.params, panda):
+              return
+      except Exception:
+        pass
+    raise
+
+
 async def api_heartbeat_status(request: web.Request) -> web.Response:
   return web.json_response({"ok": True, "hb": request.app.get("hb_last")})
 
@@ -173,7 +263,7 @@ async def api_live_runtime(request: web.Request) -> web.Response:
 
 
 async def api_reboot(request: web.Request) -> web.Response:
-  await require_parked(request)
+  await _require_maintenance_safe(request)
   try:
     if HAS_PARAMS:
       Params().put_bool("DoReboot", True)
@@ -259,7 +349,7 @@ async def api_regulatory(request: web.Request) -> web.Response:
 
 
 async def api_poweroff(request: web.Request) -> web.Response:
-  await require_parked(request)
+  await _require_maintenance_safe(request)
   if not HAS_PARAMS:
     return web.json_response({"ok": False, "error": "params unavailable"}, status=500)
   try:
@@ -270,7 +360,7 @@ async def api_poweroff(request: web.Request) -> web.Response:
 
 
 async def api_recalibrate(request: web.Request) -> web.Response:
-  await require_parked(request)
+  await _require_maintenance_safe(request)
   if not HAS_PARAMS:
     return web.json_response({"ok": False, "error": "params unavailable"}, status=500)
   try:

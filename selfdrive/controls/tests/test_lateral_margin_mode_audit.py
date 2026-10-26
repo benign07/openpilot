@@ -1,7 +1,7 @@
 """Exercise the production planner glue without native Params or an MPC binary.
 
-The de-identified scene widths/speeds cover the 2026-10-26 audit: a rejected
-margin must not silently select lane following instead of the model action.
+Off/shadow preserve the base mode; actual mode retains the owner's explicit
+30 km/h opt-in while respecting positive thresholds and existing path gates.
 """
 import ast
 import math
@@ -125,7 +125,7 @@ class Harness:
     return [self.step(**kwargs) for _ in range(frames)]
 
 
-@pytest.mark.parametrize('settings', [OFF, ACTUAL, SHADOW], ids=['off', 'actual', 'shadow'])
+@pytest.mark.parametrize('settings', [OFF, SHADOW], ids=['off', 'shadow'])
 @pytest.mark.parametrize('width', [2.70, 2.92, 2.96], ids=['scene_a', 'scene_b', 'scene_c'])
 def test_native_zero_never_selects_lanes_for_a_margin(settings, width):
   h = Harness(settings, lane_speed=0, lane_width=width)
@@ -139,8 +139,6 @@ def test_native_zero_never_selects_lanes_for_a_margin(settings, width):
     np.testing.assert_array_equal(h.planner.path_xyz[:, 1], np.zeros(33))
   assert not any(modes)
   assert sum(a != b for a, b in zip(modes, modes[1:])) == 0
-  if settings == ACTUAL:
-    assert h.planner.margin.reason == 'native_lane_mode_disabled'
 
 
 @pytest.mark.parametrize('settings', [OFF, ACTUAL, SHADOW], ids=['off', 'actual', 'shadow'])
@@ -196,13 +194,14 @@ def test_shadow_can_still_record_laneless_candidates_without_changing_the_path()
   np.testing.assert_array_equal(h.planner.path_xyz[:, 1], np.zeros(33))
 
 
-def test_preference_changes_do_not_latch_a_native_zero_mode_on():
+def test_preference_changes_follow_explicit_opt_in_without_writing_native_zero():
   h = Harness(ACTUAL, lane_speed=0)
   modes = []
   for settings in (ACTUAL, OFF, SHADOW, ACTUAL):
     h.settings = dict(settings)
-    modes.extend(h.run(40))
-    assert h.planner.effective_lane_speed == 0
+    modes = h.run(40)
+    actual = settings == ACTUAL
+    assert h.planner.effective_lane_speed == (30 if actual else 0)
+    assert modes[-1] == actual
     assert h.planner.margin_applied == 0.
-  assert not any(modes)
-  assert h.planner.margin.reason == 'native_lane_mode_disabled'
+    assert h.params.values['UseLaneLineSpeed'] == 0

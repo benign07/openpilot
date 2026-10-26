@@ -63,6 +63,10 @@ class ServiceState(dict):
 class TestAuditServicesMaintenance(unittest.TestCase):
   def setUp(self):
     self.effects = []
+    self.panda_reads = []
+    self.panda = {'valid': True, 'alive': True, 'stamp_ns': 150_000_000_000,
+                  'states': [{'panda_type': 'tres', 'ignition_line': False,
+                              'ignition_can': False, 'controls_allowed': False}]}
     web = NS(HTTPConflict=Conflict, json_response=lambda body, status=200: NS(status=status, body=body))
     safety = load_nodes("selfdrive/carrot/server/services/setting_safety.py",
                         {"parked_state_error", "require_parked"},
@@ -81,9 +85,14 @@ class TestAuditServicesMaintenance(unittest.TestCase):
         effects.append(("remove", key))
 
     self.scope = load_nodes("selfdrive/carrot/server/features/system.py",
-                           {"api_reboot", "api_poweroff", "api_recalibrate"},
+                           {"api_reboot", "api_poweroff", "api_recalibrate",
+                            "_require_maintenance_safe", "_maintenance_offroad_safe",
+                            "_maintenance_offroad_precondition"},
                            {"web": web, "require_parked": safety["require_parked"],
                             "HAS_PARAMS": True, "Params": ParamsSpy,
+                            "time": NS(monotonic=lambda: 100., CLOCK_BOOTTIME=7,
+                                       clock_gettime=lambda _: 150.), "asyncio": asyncio,
+                            "_read_maintenance_panda": lambda: self.panda_reads.append(1) or self.panda,
                             "subprocess": NS(Popen=lambda args: effects.append(("Popen", args)))})
 
   async def invoke(self, name, condition="parked"):
@@ -159,6 +168,166 @@ class TestAuditServicesMaintenance(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(polls, [0])
         self.assertEqual(self.effects, operations)
+
+
+  def offroad_state(self):
+    sm = ServiceState()
+    for name in tuple(sm):
+      del sm[name]
+      sm.logMonoTime[name] = 0
+      sm.alive[name] = sm.valid[name] = False
+    sm['deviceState'] = NS(started=False)
+    sm.logMonoTime['deviceState'] = 99_000_000_000
+    sm.alive['deviceState'] = sm.valid['deviceState'] = True
+    values = {'IsOffroad': True, 'IsOnroad': False}
+    return sm, values, NS(get_bool=lambda key: values[key])
+
+  def test_power_only_offroad_maintenance_has_normal_handler_effects(self):
+    for name, key in (('api_reboot', 'DoReboot'), ('api_poweroff', 'DoShutdown'),
+                      ('api_recalibrate', 'DoReboot')):
+      with self.subTest(handler=name):
+        sm, _, params = self.offroad_state()
+        polls = []
+        broker = NS(sm=sm, params=params, poll=lambda timeout: polls.append(timeout))
+        request = NS(app={'realtime_broker': broker, 'realtime_broker_poll_lock': asyncio.Lock()})
+        self.effects.clear()
+        response = asyncio.run(self.scope[name](request))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(polls, [0, 0, 0])
+        self.assertIn(('put_bool', key, True), self.effects)
+
+  def test_offroad_requires_fresh_device_and_agreeing_manager_state(self):
+    for condition in ('stale', 'future', 'invalid', 'not_alive', 'started', 'no_offroad', 'onroad'):
+      with self.subTest(condition=condition):
+        sm, values, params = self.offroad_state()
+        if condition == 'stale': sm.logMonoTime['deviceState'] = 97_500_000_000
+        elif condition == 'future': sm.logMonoTime['deviceState'] = 100_100_000_000
+        elif condition == 'invalid': sm.valid['deviceState'] = False
+        elif condition == 'not_alive': sm.alive['deviceState'] = False
+        elif condition == 'started': sm['deviceState'].started = True
+        elif condition == 'no_offroad': values['IsOffroad'] = False
+        else: values['IsOnroad'] = True
+        self.assertFalse(self.scope['_maintenance_offroad_safe'](sm, params, self.panda))
+
+  def test_missing_panda_cannot_turn_spi_disconnect_into_offroad_permission(self):
+    sm, _, params = self.offroad_state()
+    self.assertFalse(self.scope['_maintenance_offroad_safe'](sm, params))
+
+  def test_offroad_never_overrides_fresh_vehicle_or_control_producers(self):
+    for service, field, value in (
+      ('carState', 'gearShifter', 'drive'), ('carState', 'vEgo', .03),
+      ('carState', 'vEgo', float('nan')), ('carState', 'canValid', False),
+      ('carControl', 'enabled', True), ('carControl', 'latActive', True),
+      ('carControl', 'longActive', True), ('selfdriveState', 'active', True),
+      ('selfdriveState', 'enabled', True)):
+      for stamp in (99_900_000_000, 100_100_000_000):
+        with self.subTest(service=service, field=field, stamp=stamp):
+          sm, _, params = self.offroad_state()
+          sm[service] = ServiceState()[service]
+          setattr(sm[service], field, value)
+          sm.logMonoTime[service] = stamp
+          self.assertFalse(self.scope['_maintenance_offroad_safe'](sm, params, self.panda))
+
+  def test_install_and_driving_setting_guard_stays_strict_without_vehicle_state(self):
+    sm, _, params = self.offroad_state()
+    self.assertTrue(self.scope['_maintenance_offroad_safe'](sm, params, self.panda))
+    safety = load_nodes('selfdrive/carrot/server/services/setting_safety.py', {'parked_state_error'},
+                        {'time': NS(monotonic=lambda: 100.), 'math': math})
+    self.assertIsNotNone(safety['parked_state_error'](sm))
+
+
+  def test_offroad_http_requests_cannot_ignore_fresh_lateral_or_moving_state(self):
+    for handler in ('api_reboot', 'api_poweroff', 'api_recalibrate'):
+      for service in ('carState', 'carControl'):
+        with self.subTest(handler=handler, service=service):
+          sm, _, params = self.offroad_state()
+          sm[service] = ServiceState()[service]
+          sm.logMonoTime[service] = 99_900_000_000
+          if service == 'carState': sm[service].vEgo = 10.
+          else: sm[service].latActive = True
+          broker = NS(sm=sm, params=params, poll=lambda _: None)
+          request = NS(app={'realtime_broker': broker, 'realtime_broker_poll_lock': asyncio.Lock()})
+          self.effects.clear()
+          with self.assertRaises(Conflict):
+            asyncio.run(self.scope[handler](request))
+          self.assertEqual(self.effects, [])
+
+  def test_fresh_poll_ignition_transition_rejects_offroad_maintenance(self):
+    sm, _, params = self.offroad_state()
+    polls = []
+
+    def poll(_):
+      polls.append(0)
+      if len(polls) == 2:
+        sm['deviceState'].started = True
+
+    broker = NS(sm=sm, params=params, poll=poll)
+    request = NS(app={'realtime_broker': broker, 'realtime_broker_poll_lock': asyncio.Lock()})
+    with self.assertRaises(Conflict):
+      asyncio.run(self.scope['api_reboot'](request))
+    self.assertEqual(self.effects, [])
+
+  def test_panda_ignition_and_freshness_proof_cannot_be_defaulted(self):
+    import copy
+    for condition in ('stale', 'future', 'invalid', 'not_alive', 'empty', 'unknown',
+                      'ignition_line', 'ignition_can', 'controls_allowed'):
+      with self.subTest(condition=condition):
+        sm, _, params = self.offroad_state()
+        panda = copy.deepcopy(self.panda)
+        if condition == 'stale': panda['stamp_ns'] = 149_400_000_000
+        elif condition == 'future': panda['stamp_ns'] = 150_100_000_000
+        elif condition == 'invalid': panda['valid'] = False
+        elif condition == 'not_alive': panda['alive'] = False
+        elif condition == 'empty': panda['states'] = []
+        elif condition == 'unknown': panda['states'][0]['panda_type'] = 'unknown'
+        else: panda['states'][0][condition] = True
+        self.assertFalse(self.scope['_maintenance_offroad_safe'](sm, params, panda))
+
+  def test_all_control_producers_must_stop_before_independent_offroad_path(self):
+    for service in ('carState', 'carControl', 'selfdriveState', 'controlsState'):
+      with self.subTest(service=service):
+        sm, _, params = self.offroad_state()
+        sm.logMonoTime[service] = 99_900_000_000
+        self.assertFalse(self.scope['_maintenance_offroad_safe'](sm, params, self.panda))
+        sm.logMonoTime[service] = 99_000_000_000
+        self.assertTrue(self.scope['_maintenance_offroad_safe'](sm, params, self.panda))
+
+  def test_rejected_driving_requests_never_open_a_panda_subscription(self):
+    for condition in ('drive_gear', 'moving', 'lat_only', 'long_only'):
+      with self.subTest(condition=condition):
+        self.panda_reads.clear()
+        with self.assertRaises(Conflict):
+          asyncio.run(self.invoke('api_reboot', condition))
+        self.assertEqual(self.panda_reads, [])
+
+  def test_repeated_maintenance_reads_reuse_one_locked_submaster(self):
+    import sys
+    import types
+    from unittest.mock import patch
+    creations = []
+
+    class Reader(dict):
+      def __init__(self, services):
+        creations.append(services)
+        super().__init__(pandaStates=[NS(pandaType='tres', ignitionLine=False,
+                                       ignitionCan=False, controlsAllowed=False)])
+        self.updated = self.valid = self.alive = {'pandaStates': True}
+        self.logMonoTime = {'pandaStates': 150_000_000_000}
+
+      def update(self, timeout):
+        assert timeout == 100
+
+    cereal = types.ModuleType('cereal')
+    cereal.messaging = NS(SubMaster=Reader)
+    scope = load_nodes('selfdrive/carrot/server/features/system.py',
+                       {'_read_maintenance_panda', '_maintenance_panda_reader', '_maintenance_panda_lock'},
+                       {'threading': threading, 'time': NS(monotonic=lambda: 100.)})
+    with patch.dict(sys.modules, {'cereal': cereal}):
+      for _ in range(45):
+        sample = scope['_read_maintenance_panda']()
+        self.assertEqual(sample['stamp_ns'], 150_000_000_000)
+        self.assertFalse(sample['states'][0]['ignition_line'])
+    self.assertEqual(creations, [['pandaStates']])
 
 
 class Alert(IntEnum):

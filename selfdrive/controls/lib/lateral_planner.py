@@ -59,7 +59,8 @@ class LateralPlanner:
     self.lanelines_active = False
     self.lanelines_active_tmp = False
 
-    self.useLaneLineSpeedApply = self.params.get_int("UseLaneLineSpeed")
+    self.lane_speed_setting = self.params.get_int("UseLaneLineSpeed")
+    self.useLaneLineSpeedApply = self.lane_speed_setting
     self.pathOffset = float(self.params.get_int("PathOffset")) * 0.01
     self.useLaneLineMode = False
     self.plan_a = np.zeros((TRAJECTORY_SIZE, ))
@@ -93,6 +94,7 @@ class LateralPlanner:
     self.readParams -= 1
     if self.readParams <= 0:
       self.readParams = 10
+      self.lane_speed_setting = self.params.get_int("UseLaneLineSpeed")
       self.useLaneLineSpeedApply = sm['carState'].useLaneLineSpeed
       self.pathOffset = float(self.params.get_int("PathOffset")) * 0.01
       self.lateralPathCost = self.params.get_float("LatMpcPathCost") * 0.01
@@ -138,10 +140,13 @@ class LateralPlanner:
     #lane_change_prob = self.LP.l_lane_change_prob + self.LP.r_lane_change_prob
     #self.DH.update(sm['carState'], md, sm['carControl'].latActive, lane_change_prob, sm)
 
-    # A path preference must not select a different steering controller. Keep
-    # the owner's native lane setting and its existing hysteresis/slowdown gates
-    # for actual, shadow and disabled margin options alike.
-    self.effective_lane_speed = self.useLaneLineSpeedApply
+    # Explicit owner opt-in: actual margins also select stock lane following
+    # from 30 km/h when the native setting is disabled. Respect an explicitly
+    # positive native threshold; shadow/off never select another base path.
+    margin_active = (self.margin_supported and not self.margin_settings['LateralMarginShadow'] and
+                     any(self.margin_settings[k] for k in ('YellowLineBiasCm', 'NearbyVehicleBiasCm')))
+    self.effective_lane_speed = (30 if margin_active and self.lane_speed_setting == 0 and self.useLaneLineSpeedApply == 0
+                                 else self.useLaneLineSpeedApply)
     if self.effective_lane_speed == 0 or self.laneless_only:
       self.useLaneLineMode = False
     elif speed_kph >= self.effective_lane_speed + 2:
@@ -225,6 +230,8 @@ class LateralPlanner:
             'lat_active':bool(sm['carControl'].latActive),'input_valid':bool(valid),
             'curve_speed':float(self.curve_speed),'lane_curve_threshold':float(self.lane_curve_threshold),
             'native_lane_speed':float(self.useLaneLineSpeedApply),'effective_lane_speed':float(self.effective_lane_speed),
+            'lane_speed_setting':int(self.lane_speed_setting),
+            'lane_source':('margin_owner_opt_in' if self.effective_lane_speed != self.useLaneLineSpeedApply else 'runtime'),
             'speed_mps':float(v_ego_car),'curvature':float(measured_curvature),
             'corridor':corridor,'qualification':self.margin.evidence,
             'left_occupied':bool(cs.leftBlindspot),'right_occupied':bool(cs.rightBlindspot),

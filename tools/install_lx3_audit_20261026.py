@@ -18,7 +18,7 @@ import time
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-RID = 'lx3-lateral-margin-audit-20261026-01'
+RID = 'lx3-owner-compat-audit-20261026-02'
 SERIAL = '80acfe79'
 PUBLIC_SHA = '56d7f915ed4d802bccf46db83f0d7b147579466ed060abdf1dab96759babd223'
 CORE_SHA = 'd08e4062811ec1099cd3afc9b84bda2174f712a72f3ef5db0a0a6dc0d7ba6a03'

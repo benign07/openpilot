@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace as NS
@@ -11,8 +12,12 @@ import numpy as np
 
 
 def main():
-  assert os.environ.get('GITHUB_ACTIONS') == 'true', 'Isolated CI only, not a device tool'
-  parser=argparse.ArgumentParser();parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
+  parser=argparse.ArgumentParser();parser.add_argument('--output',type=Path,required=True)
+  parser.add_argument('--isolated-local',action='store_true',help='Run in a disposable x86 PC source snapshot, never on a vehicle device')
+  args=parser.parse_args()
+  assert os.environ.get('GITHUB_ACTIONS') == 'true' or (
+    args.isolated_local and platform.machine().lower() in ('x86_64','amd64') and not Path('/TICI').exists()
+  ), 'Isolated CI or explicit disposable x86 PC snapshot only, not a device tool'
   from cereal import car,log,custom
   from openpilot.common.params import Params
   from openpilot.selfdrive.controls.lib import lateral_planner as lp
@@ -74,30 +79,38 @@ def main():
         active_values.append(active.margin_applied)
       assert baseline.lanelines_active and active_values[-1]<-.049
       assert max(abs(v) for v in active_values)<=.05+1e-9
-      # Margin preferences never select lane following or write native Params.
+      # The owner explicitly opted into stock lane following from 30 km/h
+      # when actual margins are on and native selection is disabled.
       cs.useLaneLineSpeed=0
       now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm};active.readParams=0
       active.update(sm,carrot)
       assert not active.lanelines_active and active.effective_lane_speed==0
       assert active.margin_applied==0 and active.margin.reason=='native_lane_mode_disabled'
       assert params.get_int('UseLaneLineSpeed')==5
+      params.put_int('UseLaneLineSpeed',0)
+      active.readParams=0;active.update(sm,carrot)
+      assert active.lanelines_active and active.effective_lane_speed==30
+      assert params.get_int('UseLaneLineSpeed')==0
       active.margin_preferences.set('YellowLineBiasCm',0);active.readParams=0
       active.update(sm,carrot)
       assert not active.lanelines_active and active.margin_applied==0 and active.effective_lane_speed==0
-      # OFF, actual and shadow share the native-zero baseline path. Shadow may
-      # still record a candidate; actual records why no path preference applies.
+      # OFF/shadow retain the native-zero model path; actual is a deliberate
+      # lane-mode opt-in, still bounded by all existing margin conditions.
       active.margin_preferences.set('YellowLineBiasCm',5)
       for planner in (baseline,off,shadow,active):planner.readParams=0
       for i in range(160):
         now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm}
         for planner in (baseline,off,shadow,active):planner.update(sm,carrot)
-        for planner in (off,shadow,active):
+        for planner in (off,shadow):
           assert not planner.lanelines_active and planner.effective_lane_speed==0
           assert planner.margin_applied==0
           assert planner.path_xyz.tobytes()==baseline.path_xyz.tobytes()
         assert off.lat_mpc.x_sol.tobytes()==baseline.lat_mpc.x_sol.tobytes()
         assert shadow.lat_mpc.x_sol.tobytes()==baseline.lat_mpc.x_sol.tobytes()
-        assert active.margin.reason=='native_lane_mode_disabled'
+        assert active.lanelines_active and active.effective_lane_speed==30
+        assert active.lat_mpc.solution_status==0 and np.isfinite(active.lat_mpc.x_sol).all()
+        assert abs(active.margin_applied)<=.05+1e-9
+      assert active.margin_applied<-.049
       assert shadow.margin.value<-.049
       # Derive the sign from the exact production controlsd convention.
       import ast, math
@@ -126,8 +139,8 @@ def main():
       'baseline_source_sha256':hashlib.sha256(raw).hexdigest(),
       'actual_native_lateral_cycles':160,'off_path_and_solver_byte_identical':True,
       'shadow_path_and_solver_byte_identical':True,'active_shift_bounded':True,
-      'native_lane_zero_preserved_for_active_margin':True,'laneless_exit_reset':True,
-      'laneless_off_actual_shadow_path_byte_identical':True,
+      'owner_actual_margin_native_zero_lane_opt_in_preserved':True,'laneless_exit_reset':True,
+      'laneless_off_shadow_path_byte_identical':True,
       'laneless_shadow_byte_identical':True,'production_curvature_sign_veto':True,
       'non_lx3_isolated':True,'diagnostic_records':len(records),
       'scope':'synthetic actual solver checks; no closed-loop vehicle or safety qualification'}

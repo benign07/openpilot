@@ -22,7 +22,8 @@ def inject_driving_preferences(data):
   }
   for name in ('YellowLineBiasCm','NearbyVehicleBiasCm'):
     title, text = descriptions[name]
-    text += ' 이 옵션은 기본 차로 추종 설정이나 경로 선택을 바꾸지 않습니다. 차로 추종이 꺼져 있으면 추가 보정은0이며, 기존 차로 모드와 나머지 조건을 통과한 경우에만 새 보정을 요청합니다.'
+    text = text.replace('차로 추종 사용속도가0이면 실제 조향에는 반영되지 않습니다.', '')
+    text += ' 기록 전용을 끄고 이동량을 켜면, 저장된 차로 추종 사용속도와 현재 LFA 차로 모드가 모두0일 경우30km/h부터 기존 차로 추종도 함께 사용합니다(기존 속도 히스테리시스±2km/h). 양수 설정과 LFA 길게 누름으로 바꾼 차로 모드는 그대로 따릅니다. 끄거나 기록 전용으로 바꾸면 원래 설정으로 돌아갑니다. 차로 추종이 선택돼도 폭·점유·신뢰도 등의 보정 조건을 통과하지 못하면 추가 편향은0일 수 있습니다.'
     descriptions[name] = title, text
   title, text = descriptions['LateralMarginShadow']
   descriptions['LateralMarginShadow'] = title, text+' 기록 전용은 차로 추종이 꺼져 있어도 후보를 계산하며 경로를 바꾸지 않습니다.'
