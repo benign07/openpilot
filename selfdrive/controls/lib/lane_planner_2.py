@@ -89,7 +89,7 @@ class LateralMargin:
   def update(self, settings, radar, *, now_ns, radar_ns, valid, lane_mode, lat_active,
              blinkers, steering_pressed, maneuver, speed, curvature, left_code,
              right_code, left_occupied, right_occupied, probabilities, stds,
-             corridor, legacy_offset):
+             corridor, legacy_offset, native_lane_enabled=True):
     yellow_cm, nearby_cm = settings['YellowLineBiasCm'], settings['NearbyVehicleBiasCm']
     shadow = bool(settings['LateralMarginShadow'])
     # Hard side/corridor vetoes also apply during a routine withdrawal. A low
@@ -112,6 +112,10 @@ class LateralMargin:
     if self.previous_shadow != shadow:
       self.previous_shadow = shadow
       return self.reset('shadow_mode_changed')
+    if not native_lane_enabled and not shadow:
+      # Native laneless control consumes the model action, not this path. Do
+      # not imply that an enabled preference is steering around nearby traffic.
+      return self.reset('native_lane_mode_disabled')
     if not lat_active or (not lane_mode and not shadow):
       return self.reset('inactive_laneless_or_control_off')
     if not valid or not 0 <= now_ns-radar_ns <= 200_000_000:

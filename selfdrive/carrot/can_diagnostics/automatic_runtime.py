@@ -1,5 +1,6 @@
 """Worker-owned read-only msgq subscriptions, independent of HUD connections."""
 import hashlib
+import importlib
 import json
 from itertools import islice
 from pathlib import Path
@@ -52,13 +53,14 @@ PARAMS += ('UseLaneLineSpeed', 'UseLaneLineCurveSpeed', 'PathOffset', 'AdjustLan
 PARAMS += ('OpenpilotEnabledToggle', 'RecordRoadCam', 'DisableLogging')
 
 
-def settings_snapshot(params, driving_preferences=None):
+def settings_snapshot(params, driving_preferences=None, cruise_button_preferences=None):
   """Observe registered keys only; older native Params registries stay intact."""
   registered = {key.decode() if isinstance(key, bytes) else key for key in params.all_keys()}
   values = {key: read_param(params, key) for key in PARAMS if key in registered}
   values['unsupported_on_this_build'] = [key for key in PARAMS if key not in registered]
   values['driving_preferences'] = (driving_preferences.read() if driving_preferences is not None
                                    else {'status': 'module_not_installed'})
+  values['cruise_button_preferences'] = cruise_button_snapshot(cruise_button_preferences)
   return values
 
 
@@ -70,6 +72,33 @@ def optional_driving_preferences():
       raise
     return None
   return DrivingPreferences()
+
+
+def optional_cruise_button_preferences():
+  module_name = 'openpilot.selfdrive.controls.lib.approach_comfort'
+  try:
+    module = importlib.import_module(module_name)
+  except ModuleNotFoundError as exc:
+    if exc.name != module_name:
+      raise
+    return None
+  reader = getattr(module, 'CruiseButtonPreferences', None)
+  return reader() if reader is not None else None
+
+
+def cruise_button_snapshot(preferences):
+  """Keep effective fallback values distinct from an observed stored setting."""
+  if preferences is None:
+    return {'status': 'not_available_on_this_build', 'values': None}
+  try:
+    values = preferences.read()
+  except Exception as exc:
+    # Optional evidence must not take down the passive CAN reader.
+    return {'status': 'read_failed', 'values': None, 'error': type(exc).__name__}
+  error = preferences.error
+  status = ('invalid_preferences_defaulted' if error else
+            'missing_file_defaulted' if preferences.signature is None else 'observed')
+  return {'status': status, 'values': values, 'error': error}
 
 
 def vehicle_capture_context(cp):
@@ -300,6 +329,7 @@ class AutomaticController:
 
     params = Params()
     driving_preferences = optional_driving_preferences()
+    cruise_button_preferences = optional_cruise_button_preferences()
     sm = messaging.SubMaster(list(FIELDS))
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
     panda_socket = messaging.sub_sock('pandaStates', timeout=0, conflate=True)
@@ -353,6 +383,7 @@ class AutomaticController:
                'opendbc_repo/opendbc/car/hyundai/carcontroller.py', 'opendbc_repo/opendbc/car/hyundai/carstate.py',
                'opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py',
                'opendbc_repo/opendbc/car/hyundai/radar_interface.py', 'selfdrive/controls/controlsd.py',
+               'selfdrive/car/cruise.py', 'selfdrive/car/lx3_authority.py',
                'selfdrive/carrot/manual_steering.py', 'cereal/car.capnp',
                'selfdrive/carrot/carrot_functions.py', 'selfdrive/controls/lib/approach_comfort.py',
                'selfdrive/controls/lib/flexible_gap.py', 'selfdrive/controls/lib/longitudinal_planner.py',
@@ -405,7 +436,7 @@ class AutomaticController:
                                 meaning='clock_mapping_changed_not_producer_outage_proof')
         self.recorder.observer_tick(now)
       if now - last_metadata >= 5:
-        metadata['settings'] = settings_snapshot(params, driving_preferences)
+        metadata['settings'] = settings_snapshot(params, driving_preferences, cruise_button_preferences)
         raw = params.get('CarParams')
         update_vehicle_metadata(metadata, raw, car.CarParams, int(now*1e9))
         last_metadata = now

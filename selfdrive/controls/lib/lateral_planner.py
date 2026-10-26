@@ -138,12 +138,10 @@ class LateralPlanner:
     #lane_change_prob = self.LP.l_lane_change_prob + self.LP.r_lane_change_prob
     #self.DH.update(sm['carState'], md, sm['carControl'].latActive, lane_change_prob, sm)
 
-    # Owner opt-in: actual margin mode temporarily selects stock lane following
-    # from30km/h (including its existing +/-2km/h hysteresis). Native Params
-    # remain unchanged, so off/shadow and an OTA rollback restore that setting.
-    margin_active = (self.margin_supported and not self.margin_settings['LateralMarginShadow'] and
-                     any(self.margin_settings[k] for k in ('YellowLineBiasCm','NearbyVehicleBiasCm')))
-    self.effective_lane_speed = 30 if margin_active else self.useLaneLineSpeedApply
+    # A path preference must not select a different steering controller. Keep
+    # the owner's native lane setting and its existing hysteresis/slowdown gates
+    # for actual, shadow and disabled margin options alike.
+    self.effective_lane_speed = self.useLaneLineSpeedApply
     if self.effective_lane_speed == 0 or self.laneless_only:
       self.useLaneLineMode = False
     elif speed_kph >= self.effective_lane_speed + 2:
@@ -207,6 +205,7 @@ class LateralPlanner:
       self.margin_applied=self.margin.update(self.margin_settings,sm['radarState'],now_ns=now_ns,
         radar_ns=int(sm.logMonoTime['radarState']),valid=valid,
         lane_mode=self.lanelines_active and abs(self.curve_speed)>self.lane_curve_threshold,
+        native_lane_enabled=self.effective_lane_speed != 0,
         lat_active=sm['carControl'].latActive,blinkers=cs.leftBlinker or cs.rightBlinker,
         steering_pressed=cs.steeringPressed,maneuver=md.meta.desire!=log.Desire.none or carrot.atc_active,
         speed=v_ego_car,curvature=measured_curvature,left_code=int(cs.leftLaneLine),right_code=int(cs.rightLaneLine),

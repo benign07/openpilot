@@ -173,9 +173,7 @@ async def api_live_runtime(request: web.Request) -> web.Response:
 
 
 async def api_reboot(request: web.Request) -> web.Response:
-  blocked = _reject_if_engaged(request)
-  if blocked is not None:
-    return blocked
+  await require_parked(request)
   try:
     if HAS_PARAMS:
       Params().put_bool("DoReboot", True)
@@ -261,9 +259,7 @@ async def api_regulatory(request: web.Request) -> web.Response:
 
 
 async def api_poweroff(request: web.Request) -> web.Response:
-  blocked = _reject_if_engaged(request)
-  if blocked is not None:
-    return blocked
+  await require_parked(request)
   if not HAS_PARAMS:
     return web.json_response({"ok": False, "error": "params unavailable"}, status=500)
   try:
@@ -274,9 +270,7 @@ async def api_poweroff(request: web.Request) -> web.Response:
 
 
 async def api_recalibrate(request: web.Request) -> web.Response:
-  blocked = _reject_if_engaged(request)
-  if blocked is not None:
-    return blocked
+  await require_parked(request)
   if not HAS_PARAMS:
     return web.json_response({"ok": False, "error": "params unavailable"}, status=500)
   try:

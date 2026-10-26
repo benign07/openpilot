@@ -1,4 +1,4 @@
-name: LX3 cruise-off lateral request and stable feature regression
+name: LX3 margin mode and maintenance regression
 on:
   push:
     branches: [review/lx3-cruise-off-lateral-20261026]
@@ -24,11 +24,41 @@ jobs:
           set -o pipefail
           ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
           export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
-          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_cruise_off_keep_lateral.py selfdrive/controls/tests/test_cruise_keep_installation.py selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_composition.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_speed_follow_gap.py selfdrive/controls/tests/test_manual_steering_timing.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_lateral_margin.py selfdrive/controls/tests/test_haptic_options.py selfdrive/controls/tests/test_lx3_notification_resume.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_notification_border.py selfdrive/carrot/can_diagnostics/test_priority_capsule.py -q --junitxml=keep-lateral.xml 2>&1 | tee keep-lateral.log
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_cruise_off_keep_lateral.py selfdrive/controls/tests/test_cruise_keep_installation.py selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_composition.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_speed_follow_gap.py selfdrive/controls/tests/test_manual_steering_timing.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_lateral_margin.py selfdrive/controls/tests/test_haptic_options.py selfdrive/controls/tests/test_lx3_notification_resume.py selfdrive/controls/tests/test_notification_independence.py selfdrive/controls/tests/test_notification_border.py selfdrive/carrot/can_diagnostics/test_priority_capsule.py selfdrive/controls/tests/test_lateral_margin_mode_audit.py selfdrive/controls/tests/test_audit_services.py selfdrive/controls/tests/test_longitudinal_processing_delay_audit.py selfdrive/controls/tests/test_audit_deployment_20261026.py -q --junitxml=audit-regression.xml 2>&1 | tee audit-regression.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: keep-lateral-${{ matrix.python }}
+          name: audit-regression-${{ matrix.python }}
           path: |
-            keep-lateral.xml
-            keep-lateral.log
+            audit-regression.xml
+            audit-regression.log
+  native-lateral-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang build-essential libcurl4-openssl-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libgbm-dev libdrm-dev qtbase5-dev libqt5charts5-dev
+      - run: uv sync --frozen --no-dev --extra testing
+      - name: Build actual lateral solver and runtime bindings
+        run: |
+          set -o pipefail
+          uv run --no-sync scons --minimal -j2 common/params_pyx.so msgq_repo/msgq/ipc_pyx.so selfdrive/controls/lib/lateral_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so 2>&1 | tee native-lateral-build.log
+      - name: Real schema and linked lateral solver comparisons
+        run: |
+          set -o pipefail
+          uv run --no-sync python tools/check_lx3_preferences_native.py --output native-preferences.json 2>&1 | tee native-preferences.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-lateral-audit-not-vehicle-qualified
+          path: |
+            native-lateral-build.log
+            native-preferences.json
+            native-preferences.log

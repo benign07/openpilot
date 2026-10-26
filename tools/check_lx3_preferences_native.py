@@ -74,23 +74,31 @@ def main():
         active_values.append(active.margin_applied)
       assert baseline.lanelines_active and active_values[-1]<-.049
       assert max(abs(v) for v in active_values)<=.05+1e-9
-      # Owner authorized transient30km/h pairing; never writes native Params.
+      # Margin preferences never select lane following or write native Params.
       cs.useLaneLineSpeed=0
       now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm};active.readParams=0
       active.update(sm,carrot)
-      assert active.lanelines_active and active.effective_lane_speed==30
+      assert not active.lanelines_active and active.effective_lane_speed==0
+      assert active.margin_applied==0 and active.margin.reason=='native_lane_mode_disabled'
       assert params.get_int('UseLaneLineSpeed')==5
       active.margin_preferences.set('YellowLineBiasCm',0);active.readParams=0
       active.update(sm,carrot)
       assert not active.lanelines_active and active.margin_applied==0 and active.effective_lane_speed==0
-      # Shadow still observes a candidate with native lane mode0, without
-      # changing the path/solver relative to the real OTA10 implementation.
+      # OFF, actual and shadow share the native-zero baseline path. Shadow may
+      # still record a candidate; actual records why no path preference applies.
+      active.margin_preferences.set('YellowLineBiasCm',5)
+      for planner in (baseline,off,shadow,active):planner.readParams=0
       for i in range(160):
         now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm}
-        baseline.update(sm,carrot);shadow.update(sm,carrot)
-        assert shadow.path_xyz.tobytes()==baseline.path_xyz.tobytes()
+        for planner in (baseline,off,shadow,active):planner.update(sm,carrot)
+        for planner in (off,shadow,active):
+          assert not planner.lanelines_active and planner.effective_lane_speed==0
+          assert planner.margin_applied==0
+          assert planner.path_xyz.tobytes()==baseline.path_xyz.tobytes()
+        assert off.lat_mpc.x_sol.tobytes()==baseline.lat_mpc.x_sol.tobytes()
         assert shadow.lat_mpc.x_sol.tobytes()==baseline.lat_mpc.x_sol.tobytes()
-      assert not shadow.lanelines_active and shadow.margin.value<-.049 and shadow.margin_applied==0
+        assert active.margin.reason=='native_lane_mode_disabled'
+      assert shadow.margin.value<-.049
       # Derive the sign from the exact production controlsd convention.
       import ast, math
       control=ast.parse((Path(__file__).parents[1]/'selfdrive/controls/controlsd.py').read_text())
@@ -118,7 +126,8 @@ def main():
       'baseline_source_sha256':hashlib.sha256(raw).hexdigest(),
       'actual_native_lateral_cycles':160,'off_path_and_solver_byte_identical':True,
       'shadow_path_and_solver_byte_identical':True,'active_shift_bounded':True,
-      'owner_transient_lane30_pairing':True,'laneless_exit_reset':True,
+      'native_lane_zero_preserved_for_active_margin':True,'laneless_exit_reset':True,
+      'laneless_off_actual_shadow_path_byte_identical':True,
       'laneless_shadow_byte_identical':True,'production_curvature_sign_veto':True,
       'non_lx3_isolated':True,'diagnostic_records':len(records),
       'scope':'synthetic actual solver checks; no closed-loop vehicle or safety qualification'}
