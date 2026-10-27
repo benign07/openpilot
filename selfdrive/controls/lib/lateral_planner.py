@@ -11,8 +11,8 @@ from cereal import log
 
 from openpilot.common.params import Params
 #from openpilot.selfdrive.controls.lib.lane_planner import LanePlanner
-from openpilot.selfdrive.controls.lib.lane_planner_2 import LanePlanner, LateralMargin
-from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences
+from openpilot.selfdrive.controls.lib.lane_planner_2 import LanePlanner, LateralMargin, DriverPositionHold
+from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences, ResponsePreferences
 from collections import deque
 
 TRAJECTORY_SIZE = 33
@@ -82,6 +82,10 @@ class LateralPlanner:
     self.margin_last_log = 0
     self.margin_applied = 0.0
     self.lane_curve_threshold = 0
+    self.response_preferences = ResponsePreferences()
+    self.response_settings = self.response_preferences.values.copy()
+    self.driver_position_hold = DriverPositionHold()
+    self.driver_position_applied = 0.0
 
   def reset_mpc(self, x0=None):
     if x0 is None:
@@ -104,6 +108,7 @@ class LateralPlanner:
       STEERING_RATE_COST = self.params.get_float("LatMpcSteeringRateCost")
       if self.margin_supported:
         self.margin_settings = self.margin_preferences.read()
+        self.response_settings = self.response_preferences.read()
         self.lane_curve_threshold = self.params.get_int('UseLaneLineCurveSpeed')
 
     # clip speed , lateral planning is not possible at 0 speed
@@ -145,6 +150,7 @@ class LateralPlanner:
     # positive native threshold; shadow/off never select another base path.
     margin_active = (self.margin_supported and not self.margin_settings['LateralMarginShadow'] and
                      any(self.margin_settings[k] for k in ('YellowLineBiasCm', 'NearbyVehicleBiasCm')))
+    margin_active = margin_active or (self.margin_supported and self.response_settings['DriverPositionHold'])
     self.effective_lane_speed = (30 if margin_active and self.lane_speed_setting == 0 and self.useLaneLineSpeedApply == 0
                                  else self.useLaneLineSpeedApply)
     if self.effective_lane_speed == 0 or self.laneless_only:
@@ -183,19 +189,26 @@ class LateralPlanner:
     self.path_xyz[:, 1] += self.pathOffset
 
     self.margin_applied = 0.0
-    if self.margin_supported and any(self.margin_settings[k] for k in ('YellowLineBiasCm','NearbyVehicleBiasCm')):
+    self.driver_position_applied = 0.0
+    position_enabled = self.margin_supported and bool(self.response_settings['DriverPositionHold'])
+    if self.margin_supported and (position_enabled or any(self.margin_settings[k] for k in ('YellowLineBiasCm','NearbyVehicleBiasCm'))):
       cs=sm['carState'];now_ns=time.monotonic_ns()
       valid=(cs.canValid and not cs.canTimeout and model_active and
              all(sm.valid[k] and sm.alive[k] and 0<=now_ns-int(sm.logMonoTime[k])<=200_000_000
                  for k in ('carState','carControl','radarState','modelV2')) and
              abs(int(sm.logMonoTime['radarState'])-int(sm.logMonoTime['modelV2']))<=200_000_000)
       corridor=[]
+      observed_position=float('nan')
       if (valid and len(md.laneLines)>=3 and
           all(len(md.laneLines[i].x)==TRAJECTORY_SIZE and len(md.laneLines[i].y)==TRAJECTORY_SIZE
               and np.all(np.diff(md.laneLines[i].x)>0) for i in (1,2))):
         # Align final base path (including stock offsets) to actual line x.
         left=np.interp(self.path_xyz[:,0],md.laneLines[1].x,md.laneLines[1].y)
         right=np.interp(self.path_xyz[:,0],md.laneLines[2].x,md.laneLines[2].y)
+        # Original lane midpoint near the vehicle, BEFORE edge clipping. Road
+        # edges are safety bounds, never a substitute lane-center measurement.
+        if all(abs(md.laneLines[i].x[0])<=.5 and md.laneLines[i].x[-1]>0 for i in (1,2)):
+          observed_position=-.5*sum(float(np.interp(0.,md.laneLines[i].x,md.laneLines[i].y)) for i in (1,2))
         if len(md.roadEdges)>=2 and len(md.roadEdgeStds)>=2:
           for i in (0,1):
             edge=md.roadEdges[i]
@@ -212,19 +225,34 @@ class LateralPlanner:
         lane_mode=self.lanelines_active and abs(self.curve_speed)>self.lane_curve_threshold,
         native_lane_enabled=self.effective_lane_speed != 0,
         lat_active=sm['carControl'].latActive,blinkers=cs.leftBlinker or cs.rightBlinker,
-        steering_pressed=cs.steeringPressed,maneuver=md.meta.desire!=log.Desire.none or carrot.atc_active,
+        steering_pressed=cs.steeringPressed or (position_enabled and self.driver_position_hold.released_ns is not None),
+        maneuver=md.meta.desire!=log.Desire.none or carrot.atc_active,
         speed=v_ego_car,curvature=measured_curvature,left_code=int(cs.leftLaneLine),right_code=int(cs.rightLaneLine),
         left_occupied=cs.leftBlindspot,right_occupied=cs.rightBlindspot,
         probabilities=list(md.laneLineProbs)[1:3],stds=list(md.laneLineStds)[1:3],
         corridor=corridor,legacy_offset=float(self.LP.offset_total+self.pathOffset))
       if self.margin_applied != 0.0:
         self.path_xyz[:,1] += self.margin_applied
-      if now_ns-self.margin_last_log>=500_000_000 and any(self.margin_settings[k] for k in ('YellowLineBiasCm','NearbyVehicleBiasCm')):
+      self.driver_position_applied=self.driver_position_hold.update(enabled=position_enabled,now_ns=now_ns,
+        valid=valid and 30/3.6<=v_ego_car<=110/3.6,
+        lane_mode=self.lanelines_active and abs(self.curve_speed)>self.lane_curve_threshold,
+        lat_active=sm['carControl'].latActive,pressed=cs.steeringPressed,
+        blinkers=cs.leftBlinker or cs.rightBlinker,maneuver=md.meta.desire!=log.Desire.none or carrot.atc_active,
+        observed_position=observed_position,probabilities=list(md.laneLineProbs)[1:3],stds=list(md.laneLineStds)[1:3],
+        corridor=[(l,r,p+self.margin_applied,yaw) for l,r,p,yaw in corridor],
+        legacy_offset=float(self.LP.offset_total+self.pathOffset+self.margin_applied),
+        occupied=self.margin.withdraw_context[:2])
+      self.path_xyz[:,1] += self.driver_position_applied
+      if now_ns-self.margin_last_log>=500_000_000:
         self.margin_last_log=now_ns
         try:
           cloudlog.debug({'lx3_lateral_margin':{'schema':1,'mono_ns':now_ns,
             'settings':dict(self.margin_settings),'target':self.margin.target,'filtered':self.margin.value,
             'applied':self.margin_applied,'reason':self.margin.reason,
+            'driver_position':{'enabled':bool(position_enabled),'applied':self.driver_position_applied,
+              'captured':self.driver_position_hold.captured,'reason':self.driver_position_hold.reason,
+              'observed_lane_relative':observed_position if np.isfinite(observed_position) else None,
+              'hold_s':3.,'return_s':5.,'additional_limit_m':.1},
             'lane_mode':self.lanelines_active,'left_code':int(cs.leftLaneLine),'right_code':int(cs.rightLaneLine),
             'lane_mode_gate':bool(self.lanelines_active and abs(self.curve_speed)>self.lane_curve_threshold),
             'lat_active':bool(sm['carControl'].latActive),'input_valid':bool(valid),
@@ -243,6 +271,7 @@ class LateralPlanner:
           pass  # Diagnostic output cannot change the planner result.
     else:
       self.margin.reset('off')
+      self.driver_position_hold.reset('off')
 
     self.lat_mpc.set_weights(self.lateralPathCost, self.lateralMotionCost,
                              LATERAL_ACCEL_COST, LATERAL_JERK_COST,

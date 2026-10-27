@@ -11,10 +11,10 @@ from ..live_runtime.broker import RealtimeBroker
 from ..live_runtime.normalize import to_transport_safe
 from ..config import OFFROAD_ASSETS_DIR
 from ..services.device_info import get_calibration_status, get_device_network
-from ..services.params import HAS_PARAMS, Params, restore_param_values_validated, driving_preferences, notification_preferences, cruise_button_preferences
+from ..services.params import HAS_PARAMS, Params, restore_param_values_validated, driving_preferences, notification_preferences, cruise_button_preferences, response_preferences
 from openpilot.selfdrive.controls.lib.notification_preferences import KEY as BORDER_KEY
 from ..services.setting_safety import require_parked
-from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, CRUISE_BUTTON_PREFERENCES
+from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, CRUISE_BUTTON_PREFERENCES, RESPONSE_PREFERENCES
 from ..services.settings import get_settings_cached
 from ..services.time_sync import TIME_SYNC_DEBUG_DEFAULT, sync_system_time_from_browser
 
@@ -397,15 +397,18 @@ async def api_set_default(request: web.Request) -> web.Response:
     }
     virtual = {name:values.pop(name) for name in list(values) if name in DRIVING_PREFERENCES}
     button_defaults = {name:values.pop(name) for name in list(values) if name in CRUISE_BUTTON_PREFERENCES}
+    response_defaults = {name:values.pop(name) for name in list(values) if name in RESPONSE_PREFERENCES}
     border_default = values.pop(BORDER_KEY, None)
     # These optional control preferences have the same parked gate on reset
     # as on individual changes. Reject before ANY native settings are reset.
-    if virtual or button_defaults:
+    if virtual or button_defaults or response_defaults:
       await require_parked(request)
     if virtual:
       virtual = driving_preferences.reset_defaults()
     if button_defaults:
       virtual.update(cruise_button_preferences.reset_defaults())
+    if response_defaults:
+      virtual.update(response_preferences.reset_defaults())
     if border_default is not None:
       notification_preferences.set(border_default)
       virtual[BORDER_KEY] = border_default

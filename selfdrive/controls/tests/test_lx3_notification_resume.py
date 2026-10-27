@@ -2,6 +2,7 @@
 import ast
 from pathlib import Path
 from types import SimpleNamespace as NS
+from math import isfinite
 import pytest
 from openpilot.selfdrive.carrot.manual_steering import ManualSteeringPause
 from opendbc.car.hyundai.lx3_haptic_notifications import HapticNotifications
@@ -13,26 +14,33 @@ def controls():
   tree=ast.parse((root/'selfdrive/carrot/carrot_controls.py').read_text(encoding='utf-8'))
   tree.body=[n for n in tree.body if isinstance(n,ast.ClassDef)]
   params=NS(get_bool=lambda k:True,get_int=lambda k:-1 if k=='LaneChangeNeedTorque' else 300)
-  ns=dict(Params=lambda:params,DT_CTRL=.01,ManualSteeringPause=ManualSteeringPause,uses_lx3_authority=lambda cp:True)
+  ns=dict(Params=lambda:params,DT_CTRL=.01,ManualSteeringPause=ManualSteeringPause,uses_lx3_authority=lambda cp:True,
+          CarControllerParams=lambda cp:NS(STEER_THRESHOLD=250.),LX3_DRIVER_RELEASE_RATIO=.8,
+          LX3_DRIVER_YIELD_RATIO=.9,isfinite=isfinite)
   exec(compile(tree,'carrot_controls.py','exec'),ns)
   return ns['CarrotControls'](NS())
 
 
 def cs():
-  return NS(leftBlinker=True,rightBlinker=False,steeringPressed=True,steeringAngleDeg=5.,canValid=True,canTimeout=False,
+  return NS(leftBlinker=True,rightBlinker=False,steeringPressed=False,steeringTorque=0.,
+            steeringAngleDeg=5.,steeringRateDeg=0.,vEgo=15.,canValid=True,canTimeout=False,
             lx3Authority=NS(epoch=123,lateralGeneration=4,longitudinalGeneration=0,allowed=1,armed=1,
                             lateralDecisionKey=80,longitudinalDecisionKey=0))
 
 
-def test_new_accepted_lat_request_after_signal_ends_pause_despite_hands():
+def test_new_accepted_lat_request_after_signal_ends_pause_waits_for_driver_release():
   c=controls();s=cs()
+  s.steeringPressed=True;s.steeringTorque=300.
   for _ in range(101):c.lat_suspend_control(s,True)
   assert c.manual_steering.scale==0
   s.leftBlinker=False
   s.lx3Authority.lateralGeneration=5
+  assert not c.lat_suspend_control(s,True)
+  assert c.manual_steering.scale==0.
+  s.steeringPressed=False;s.steeringTorque=100.
   assert c.lat_suspend_control(s,True)
-  assert 0 < c.manual_steering.scale < .021
-  for _ in range(200):assert c.lat_suspend_control(s,True)
+  assert 0 < c.manual_steering.scale <= .051
+  for _ in range(20):assert c.lat_suspend_control(s,True)
   s.leftBlinker=False;c.lat_suspend_control(s,True)
   s.rightBlinker=True;c.lat_suspend_control(s,True)
   assert c.manual_steering.paused
@@ -54,7 +62,7 @@ def test_speed_engage_during_signal_cannot_override_manual_lane_change():
 
 
 def test_explicit_resume_actual_ceiling_starts_immediately_and_ramps():
-  c=controls();s=cs();ceiling=ManualSteeringCeiling()
+  c=controls();s=cs();ceiling=ManualSteeringCeiling(resume_seconds=.2,recovery_maximum=250.)
   ceiling.update(250.,1.,True)
   for _ in range(101):
     active=c.lat_suspend_control(s,True)
@@ -64,11 +72,11 @@ def test_explicit_resume_actual_ceiling_starts_immediately_and_ramps():
   s.lx3Authority.lateralGeneration=5
   active=c.lat_suspend_control(s,True)
   value=ceiling.update(250.,c.manual_steering.scale,active,resuming=c.manual_steering.resuming)
-  assert active and 0 < value <= 5.01
-  for _ in range(49):
+  assert active and 0 < value <= 12.51
+  for _ in range(19):
     active=c.lat_suspend_control(s,True)
     next_value=ceiling.update(250.,c.manual_steering.scale,active,resuming=c.manual_steering.resuming)
-    assert value <= next_value <= min(250.,value+5.01)
+    assert value <= next_value <= min(250.,value+12.51)
     value=next_value
   assert value==250.
   assert ceiling.update(250.,1.,False)==0
@@ -139,6 +147,7 @@ def test_legacy_schema_disables_new_resume_without_stopping_existing_control():
   c=controls();s=cs()
   for _ in range(101):c.lat_suspend_control(s,True,explicit_resume_supported=False)
   s.leftBlinker=False;s.lx3Authority.lateralGeneration=5
+  s.steeringPressed=True;s.steeringTorque=300.
   assert not c.lat_suspend_control(s,True,explicit_resume_supported=False)
   assert c.manual_steering.scale==0
 
@@ -158,14 +167,29 @@ def test_permission_recovery_or_bad_input_cannot_override_pause(kind):
   assert c.manual_steering.paused and c.manual_steering.scale==0
 
 
-def test_normal_automatic_resume_still_waits_clear_and_cannot_grant():
+def test_normal_automatic_resume_uses_point_two_seconds_and_cannot_grant():
   c=controls();s=cs()
   for _ in range(101):c.lat_suspend_control(s,True)
   s.leftBlinker=False;s.steeringPressed=False
-  for _ in range(49):assert not c.lat_suspend_control(s,True)
-  assert c.lat_suspend_control(s,True)
-  assert c.manual_steering.scale==0 and c.manual_steering.resuming
+  for i in range(1,21):
+    assert c.lat_suspend_control(s,True)
+    assert c.manual_steering.scale==pytest.approx(min(1.,i/20))
   assert not c.lat_suspend_control(s,False)
+  assert not c.manual_steering.resuming
+  assert ManualSteeringCeiling().update(250.,c.manual_steering.scale,False)==0.
+
+
+def test_raw_torque_spike_cannot_latch_host_off_after_signal_ends():
+  c=controls();s=cs()
+  s.steeringPressed=True;s.steeringTorque=300.
+  for _ in range(110):c.lat_suspend_control(s,True)
+  s.leftBlinker=False;s.steeringPressed=False;s.steeringTorque=210.
+  for _ in range(20):assert c.lat_suspend_control(s,True)
+  assert c.manual_steering.scale==1.
+  s.steeringTorque=230.;assert c.lat_suspend_control(s,True)
+  s.steeringTorque=210.
+  for _ in range(100):assert c.lat_suspend_control(s,True)
+  assert c.manual_steering.scale==1.
 
 
 def test_haptic_pulse_bounded_retrigger_rate_and_critical_preemption():

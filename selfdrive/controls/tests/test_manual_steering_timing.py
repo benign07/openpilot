@@ -107,7 +107,7 @@ def test_hud_description_matches_timing_and_preserves_parameter_contract():
   data = inject_driving_preferences(copy.deepcopy(original))
   new = next(p for p in data['params'] if p['name'] == old['name'])
   assert all(new[k] == old[k] for k in ('name', 'min', 'max', 'default', 'unit', 'control'))
-  assert '0.5초' in new['descr'] and '0.5seconds' in new['edescr']
+  assert '0.2초' in new['descr'] and '0.2seconds' in new['edescr']
   assert new['group'] == '개발 중 기능'
   def names(nodes):
     return [p for node in nodes for p in node.get('params', [])] + [p for node in nodes for p in names(node.get('groups', []))]

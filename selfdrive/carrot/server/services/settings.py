@@ -3,12 +3,14 @@ import os
 from typing import Any, Dict, List, Tuple
 
 from ..config import DEFAULT_SETTINGS_PATH
-from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, CRUISE_BUTTON_PREFERENCES
+from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, CRUISE_BUTTON_PREFERENCES, RESPONSE_PREFERENCES
 
 
 def inject_driving_preferences(data):
   """Virtual options use their own versioned store, never unknown Params keys."""
   descriptions = {
+    'DriverPositionHold': ('수동 위치 조정 잠시 유지',
+      'LX3 시험 기능·기본 꺼짐. 깜빡이 없이 확정된 조향 개입을0.3초 이상 유지하고, 개입 전과 놓기 직전의 안정된0.3초 평균 위치가 최소5cm 이상 달라졌을 때, 힘을 풀면 조정 위치를3초 유지하고5초 동안 기존 중앙 경로로 돌아옵니다. 조향보조 힘의0.2초 복구와 별개이며, 조향각이나 토크를 고정하지 않습니다. 추가 이동량은±10cm와 기존 총편향±40cm 범위로 제한합니다. 속도30~110km/h·신선하고 신뢰도 높은 양쪽 차선·충분한 차폭·정상 제어가 필요합니다. 점유 측 이동·깜빡이·차선변경 때 해제하며 일시적 인식 저하는 편향을 초당5cm씩 줄입니다. 관측창의 변동폭은4cm 이하여야 하며 불확실할수록 필요한 변위를 늘립니다. 예측 양보만 있고 확정 운전자 개입이 없는 경우나 위치가 계속 움직이는 중에 놓은 경우에는 유지하지 않을 수 있습니다. 저장 차로 추종속도와 현재 모드가 모두0이면30km/h부터 기존 차로 추종을 함께 사용합니다. 보정 위치·개입 전후와 영상 시점을 기록하지만 자동 학습으로 주행값을 변경하지 않습니다. 정차 후 변경합니다.'),
     'CruiseOffKeepLateral': ('크루즈 해제 시 조향보조 유지',
       'LX3 전용. 켜면 핸들 크루즈 버튼을 다시 눌러 속도 제어를 끌 때, 이미 요청된 조향보조는 유지합니다. 조향보조가 꺼져 있었다면 새로 켜지지 않습니다. LFA 버튼으로 조향보조를 끌 수 있으며 고장·입력 이상·통신 및 Panda 권한 검사는 그대로 적용됩니다. 꺼짐은 기존처럼 크루즈와 조향 요청을 함께 해제합니다. 기본 꺼짐. 버튼 전환 때 정상 권한 확인을 다시 거치며, 허용되지 않은 조향 출력을 유지하는 기능이 아닙니다. 옵션은 정차 후 변경합니다.'),
     'LaunchFollowStrength': ('재출발 앞차 추종 보완',
@@ -29,7 +31,7 @@ def inject_driving_preferences(data):
   descriptions['LateralMarginShadow'] = title, text+' 기록 전용은 차로 추종이 꺼져 있어도 후보를 계산하며 경로를 바꾸지 않습니다.'
   existing = {p.get('name') for p in data.get('params', [])}
   names = []
-  for name, (lo, hi, default) in {**DRIVING_PREFERENCES, **CRUISE_BUTTON_PREFERENCES}.items():
+  for name, (lo, hi, default) in {**DRIVING_PREFERENCES, **CRUISE_BUTTON_PREFERENCES, **RESPONSE_PREFERENCES}.items():
     if name in existing:continue
     title, description = descriptions[name]
     data.setdefault('params', []).append({'name': name, 'group': 'LX3 주행 보완',
@@ -44,7 +46,7 @@ def inject_driving_preferences(data):
     ('cruise_button','크루즈 버튼·조향보조','Cruise button and steering',['CruiseOffKeepLateral']),
     ('launch_follow','재출발 추종','Launch following',['LaunchFollowStrength']),
     ('lateral_margin','차선 내 측방 여유','Within-lane margin',
-      ['YellowLineBiasCm','NearbyVehicleBiasCm','LateralMarginShadow']),
+      ['DriverPositionHold','YellowLineBiasCm','NearbyVehicleBiasCm','LateralMarginShadow']),
     ('approach_comfort','부드러운 감속·차간거리','Approach comfort and gap',
       ['ApproachComfortEnabled','ApproachCoastStrength','ApproachBrakeMargin',
        'ApproachStopSmooth','ApproachTrafficCalm','ApproachFlexibleGap','ApproachFlexibleGapMin']),
@@ -64,9 +66,9 @@ def inject_driving_preferences(data):
         if note not in text:definitions[name][field]=(text+' '+note).strip()
   if 'ManualSteerWithBlinker' in definitions:
     definitions['ManualSteerWithBlinker'].update(
-      descr='LX3에서 자동차선변경을 끈 경우(-1), 한쪽 깜빡이를 켜면 기존 조향보조를 약1초 동안 줄여 수동조향으로 전환합니다. 깜빡이를 끈 뒤 조향입력 없음·조향각15도 미만·정상CAN이0.5초 유지되면, 현재 출력에서 약0.5초 동안 부드럽게 복귀합니다. 깜빡이를 끈 뒤 새 횡/종 제어요청이 실제 승인되면 대기 없이 같은 페이드인을 시작합니다. 깜빡이가 켜진 동안에는 자동 복귀하지 않습니다. 기존 제어권한·운전자 개입·각도·토크 제한이 우선하며 가감속 제어는 별개입니다. 취소·고장 정지는 지연하지 않습니다.',
-      edescr='LX3, automatic lane change OFF (-1): a single blinker fades assistance out over about1second. After blinkers are OFF, no steering input, angle below15degrees and healthy CAN must persist for0.5seconds. Assistance then fades in from its current level over about0.5seconds. A newly accepted lateral/longitudinal request after signals end can start the same fade-in without the clear delay. Existing permission, driver override, angle and torque limits remain; faults/cancellation stop immediately. Longitudinal control is separate.',
-      cdescr='仅LX3且自动变道关闭(-1)：单侧转向灯使辅助约1秒内减弱。关闭转向灯、无转向输入、转角小于15度且CAN正常持续0.5秒后，从当前输出约0.5秒内平顺恢复。关灯后新的横向或纵向请求获准，可立即开始同样的渐入。控制权限、驾驶员介入、角度与扭矩限制优先，取消或故障立即停止；速度控制独立。')
+      descr='LX3에서 자동차선변경이 꺼진 경우(-1), 한쪽 깜빡이가 조향보조를 약1초 동안 줄입니다. 차량 신호상 깜빡이 꺼짐이 확인되고 분명한 조향 힘이 풀리면 현재 출력에서 약0.2초 동안 복귀합니다. 가볍게 잡는 것은 유지하며 분명한 힘에는 양보합니다. 조향각15도 미만이거나 속도약29km/h 이상·85도 미만의 안정된 커브(조향속도12도/초 이하0.2초)일 때 복귀합니다. 저속 회전·계속 힘을 주는 중에는 기다립니다. 물리 레버 종료부터는 기존 깜빡이 신호 필터 지연이 추가될 수 있습니다. 실제 제어권한·정상CAN·기존 각도/토크 제한이 우선하고 취소·고장 정지는 즉시 적용합니다. 가감속 제어는 별개입니다.',
+      edescr='LX3 with automatic lane change OFF (-1): a single blinker fades assistance out over about1second. Once CarState confirms signals OFF and deliberate steering force is released, assistance recovers from its current output over about0.2seconds. Light grip retains tracking. Recovery requires angle below15degrees or a stable curve at >=8m/s, angle <85degrees and rate <=12degrees/s for0.2seconds. Low-speed turns or continued force wait. Existing lamp filtering may add delay after the physical lever ends. Actual permissions, healthy CAN and native angle/torque limits remain; cancellation and faults stop immediately. Longitudinal control is separate.',
+      cdescr='仅LX3且自动变道关闭(-1)：单侧转向灯约1秒减弱辅助。CarState确认关灯且明显转向力释放后约0.2秒恢复。轻握保持循迹，明显用力让行。需转角小于15度，或速度至少8m/s、转角小于85度、转向速率不超过12度/秒稳定0.2秒。低速转弯或继续用力则等待。实体开关关闭后可能有原灯信号滤波延迟。权限、正常CAN及原角度/扭矩限制优先，取消和故障立即停止，纵向独立。')
     sections.append(('manual_steering','깜빡이 수동조향','Manual steering',['ManualSteerWithBlinker']))
   # Reuse the existing switch; do not introduce an unknown native Params key
   # or a virtual preference that older rollback readers would reject.

@@ -20,7 +20,7 @@ from ..services.params import (
   set_param_value,
 )
 from ..services.settings import get_settings_cached
-from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, CRUISE_BUTTON_PREFERENCES
+from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, CRUISE_BUTTON_PREFERENCES, RESPONSE_PREFERENCES
 from ..services.setting_safety import require_parked
 
 
@@ -67,7 +67,7 @@ async def api_param_set(request: web.Request) -> web.Response:
   if not name:
     return web.json_response({"ok": False, "error": "missing name"}, status=400)
 
-  if name in DRIVING_PREFERENCES or name in CRUISE_BUTTON_PREFERENCES:
+  if name in DRIVING_PREFERENCES or name in CRUISE_BUTTON_PREFERENCES or name in RESPONSE_PREFERENCES:
     await require_parked(request)
 
   # clamp using settings if numeric

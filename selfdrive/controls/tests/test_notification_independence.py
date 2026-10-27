@@ -100,7 +100,7 @@ def test_menu_has_two_independent_options_and_preserves_hardware_parent():
   names = ('C3xLiteBuzzerMute', 'C3xLiteHapticNotifications')
   before = {p['name']: {k: p[k] for k in ('min', 'max', 'default')} for p in data['params'] if p['name'] in names}
   inject = shared.load(ROOT / 'selfdrive/carrot/server/services/settings.py', {'inject_driving_preferences'},
-                       {'DRIVING_PREFERENCES': {},'CRUISE_BUTTON_PREFERENCES': {}})['inject_driving_preferences']
+                       {'DRIVING_PREFERENCES': {},'CRUISE_BUTTON_PREFERENCES': {},'RESPONSE_PREFERENCES':{}})['inject_driving_preferences']
   inject(data)
   def leaves(nodes):
     for node in nodes:
@@ -177,7 +177,7 @@ def test_menu_preserves_all_existing_parameter_identities_and_favorite_names():
   identity = lambda d: {p['name']: tuple(p.get(k) for k in ('min', 'max', 'default', 'unit')) for p in d['params']}
   before = identity(data); favorites = ['HardwareC3xLite', 'C3xLiteBuzzerMute', 'C3xLiteHapticNotifications']
   inject = shared.load(ROOT / 'selfdrive/carrot/server/services/settings.py', {'inject_driving_preferences'},
-                       {'DRIVING_PREFERENCES': {},'CRUISE_BUTTON_PREFERENCES': {}})['inject_driving_preferences']
+                       {'DRIVING_PREFERENCES': {},'CRUISE_BUTTON_PREFERENCES': {},'RESPONSE_PREFERENCES':{}})['inject_driving_preferences']
   inject(data)
   assert {k:v for k,v in identity(data).items() if k in before} == before
   assert set(identity(data))-set(before) == {'NotificationBorderPulse'}

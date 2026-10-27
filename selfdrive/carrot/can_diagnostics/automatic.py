@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
+import copy
 import hashlib
 import gzip
 import zlib
@@ -598,7 +599,7 @@ class FirstFaultCapsule:
       self.stale+=1;return
     self.last_panda=now
     keys=('safety_model','safety_param','controls_allowed','rx_checks_invalid','rx_overflow','tx_overflow',
-          'tx_blocked','spi_checksum_errors','faults','lx3_authority_state')
+          'tx_blocked','spi_checksum_errors','faults','lx3_authority_state','buses')
     self._put({'kind':'panda_snapshot','mono_ns':mono_ns,'states':[
       {k:state.get(k) for k in keys} for state in states[:1]],'observed_mono_ns':int(now*1e9)})
 
@@ -624,6 +625,109 @@ class FirstFaultCapsule:
   def finish(self,now,reason):
     if not self.complete and self.trigger is not None:self.emit('final',now,reason)
     self.complete=True
+
+
+class DriverPositionReview:
+  """Passive review markers, never a driver preference label or control input."""
+  MAX_EPISODES = 128
+
+  def __init__(self):
+    self.reset()
+
+  def reset(self):
+    self.pre = deque(maxlen=12)
+    self.active = None
+    self.pending_since = self.clear_since = None
+    self.pending_peak = 0.
+    self.followups = deque(maxlen=2)
+    self.last_source = None
+    self.count = 0
+
+  def finish(self, now, reason):
+    if self.active is None:
+      return []
+    result = {'phase':'end', 'episode':self.active['episode'], 'reason':reason,
+              'duration_s':max(0.,now-self.active['started']), 'peak_torque_raw':self.active['peak']}
+    self.followups.append((now+2.,self.active['episode']))
+    self.active = None
+    self.pending_since = self.clear_since = None
+    return [result]
+
+  def observe(self, services, now, margin=None):
+    cs = services.get('carState', {}).get('data', {})
+    cc = services.get('carControl', {}).get('data', {})
+    out = services.get('carOutput', {}).get('data', {}).get('actuatorsOutput') or {}
+    controls = services.get('controlsState', {}).get('data', {})
+    model = services.get('modelV2', {}).get('data', {})
+    radar = services.get('radarState', {}).get('data', {})
+    fresh_service = lambda key: (fresh(services,key,now,.3) and services[key].get('alive',True) is True)
+    eligible = (all(fresh_service(key) for key in ('carState','carControl'))
+      and cc.get('latActive') is True and cs.get('canValid') is True and not cs.get('canTimeout')
+      and str(cs.get('gearShifter')) in ('drive','sport','manumatic','eco'))
+    torque, angle = cs.get('steeringTorque'), cs.get('steeringAngleDeg')
+    requested = (cc.get('actuators') or {}).get('steeringAngleDeg')
+    finite = lambda value: isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
+    error = angle-requested if finite(angle) and finite(requested) else None
+    # These are diagnostic thresholds only. They never feed steeringPressed,
+    # Panda, the planner or actuator limits. Resting hands alone are not labels.
+    effort = (eligible and finite(torque) and finite(cs.get('vEgo')) and cs['vEgo']>.5
+      and not (cs.get('leftBlinker') or cs.get('rightBlinker'))
+      and abs(torque)>=150 and (cs.get('steeringPressed') is True or (error is not None and abs(error)>=.5)))
+    source = services.get('carState',{}).get('mono_ns')
+    if eligible and self.last_source is not None and source is not None and source <= self.last_source:
+      return []  # Cached observations do not confirm an episode.
+    self.last_source = source
+    snapshot = copy.deepcopy({'mono_ns':int(now*1e9), 'source_mono_ns':source, 'eligible':bool(eligible),
+      'speed_mps':cs.get('vEgo'), 'torque_raw':torque, 'steering_pressed':cs.get('steeringPressed'),
+      'actual_angle_deg':angle, 'requested_angle_deg':requested, 'angle_error_deg':error,
+      'output':out if fresh_service('carOutput') else None,
+      'curvature':controls.get('curvature') if fresh_service('controlsState') else None,
+      'desired_curvature':controls.get('desiredCurvature') if fresh_service('controlsState') else None,
+      'manual_scale':cc.get('manualSteeringScale'), 'blinkers':[cs.get('leftBlinker'),cs.get('rightBlinker')],
+      'model_frame':model.get('frameId') if fresh_service('modelV2') else None,
+      'geometry':model.get('lateral_geometry') if fresh_service('modelV2') else None,
+      'lane_probabilities':model.get('laneLineProbs') if fresh_service('modelV2') else None,
+      'lane_stds':model.get('laneLineStds') if fresh_service('modelV2') else None,
+      'nearby':{k:radar.get(k) for k in ('leadsLeft','leadsRight','leadsCutIn')} if fresh_service('radarState') else None,
+      'blindspots':[cs.get('leftBlindspot'),cs.get('rightBlindspot')],
+      'margin':margin if margin and 0<=now-margin.get('mono_ns',0)/1e9<=1. else None})
+    rows=[]
+    while self.followups and now>=self.followups[0][0]:
+      _,episode=self.followups.popleft()
+      rows.append({'phase':'after_2s','episode':episode,'context':snapshot,
+                   'overlapping_episode':self.active is not None})
+    self.pre.append(snapshot)
+    while self.pre and now-self.pre[0]['mono_ns']/1e9>2.5:
+      self.pre.popleft()
+    if not eligible:
+      rows.extend(self.finish(now,'inactive_or_stale'))
+      self.pending_since = None
+      return rows
+    if effort:
+      self.clear_since = None
+      if self.pending_since is None:
+        self.pending_since=now
+        self.pending_peak=0.
+      self.pending_peak=max(self.pending_peak,abs(torque))
+      if self.active is None and now-self.pending_since>=.2 and self.count<self.MAX_EPISODES:
+        self.count+=1
+        self.active={'episode':self.count,'started':self.pending_since,'peak':self.pending_peak,'last_emit':now}
+        rows.append({'phase':'start','episode':self.count,'pre_context':list(self.pre),
+          'classification':'possible_in_lane_position_correction_not_confirmed_intent_or_training_target'})
+      elif self.active is not None:
+        self.active['peak']=max(self.active['peak'],abs(torque))
+        if now-self.active['last_emit']>=1.:
+          rows.append({'phase':'ongoing','episode':self.active['episode'],
+                       'peak_torque_raw':self.active['peak'],'context':snapshot})
+          self.active['last_emit']=now
+    else:
+      self.pending_since=None
+      if self.active is not None:
+        if self.clear_since is None:self.clear_since=now
+        if now-self.clear_since>=.2:
+          rows.extend(self.finish(now,'effort_ended_or_signal'))
+          rows[-1]['context']=snapshot
+    return rows
 
 
 class AutoRecorder:
@@ -736,6 +840,8 @@ class AutoRecorder:
     self.last_observer_tick = None
     self.longitudinal_frames = self.longitudinal_rejected = 0
     self.video_index_stale = self.video_index_dropped = self.video_index_route_mismatch = 0
+    self.position_review = DriverPositionReview()
+    self.last_position_margin = None
 
   def trace_active(self, now):
     return self.trace is not None and int(now * 1e9) <= self.trace['until_ns']
@@ -928,6 +1034,9 @@ class AutoRecorder:
         # CurrentRoute is not cleared offroad. Only a confirmed off marks the
         # completed route stale; a missing deviceState must still recover it.
         self.stale_route, self.recording_route = self.recording_route, None
+      if not self.storage_disabled and self.state == 'recording':
+        for row in self.position_review.finish(now,reason):
+          self.store.append({'kind':'event','name':'driver_position_review','mono_ns':int(now*1e9),**row},now)
       self.priority.finish(now,reason)
       if not self.storage_disabled:self.close_trace(now, reason)
       else:self.trace = None
@@ -978,6 +1087,8 @@ class AutoRecorder:
       self.last_observer_tick = None
       self.chunk_rotations = 0
       self.max_chunk_rotation_ms = 0.0
+      self.position_review.reset()
+      self.last_position_margin = None
     self.priority.context(services,now)
     self.spi_error_flush(now)
     if self.storage_disabled:
@@ -992,6 +1103,10 @@ class AutoRecorder:
       if self.store.stream is not None:
         route_rotation_started = time.monotonic()
       if self.priority.trigger is not None:self.priority.finish(now,'route_changed')
+      for row in self.position_review.finish(now,'route_changed'):
+        self.store.append({'kind':'event','name':'driver_position_review','mono_ns':int(now*1e9),**row},now)
+      self.position_review.reset()
+      self.last_position_margin = None
       self.close_trace(now, 'route_changed')
       self.store.seal('route_changed')
       # Same-boot native pre-event evidence remains useful. Its source clock
@@ -1035,6 +1150,10 @@ class AutoRecorder:
     cs = services.get('carState', {}).get('data', {})
     cc = services.get('carControl', {}).get('data', {})
     sd = services.get('selfdriveState', {}).get('data', {})
+    if self.metadata.get('car_fingerprint') == 'HYUNDAI_PALISADE_LX3_HEV':
+      for row in self.position_review.observe(services,now,self.last_position_margin):
+        self.store.append({'kind':'event','name':'driver_position_review','mono_ns':int(now*1e9),
+                           'route':self.recording_route,'trip_id':self.trip,**row},now)
     # A side-object flag plus a same-side blinker is only a search candidate.
     # It does not identify rear closing speed, an audible warning, or vibration.
     keys = ('leftBlinker', 'rightBlinker', 'leftBlindspot', 'rightBlindspot')
@@ -1438,6 +1557,8 @@ class AutoRecorder:
       self.storage_dropped += 1
       return
     self.last_event['lateral_margin_evidence'] = now
+    self.last_position_margin = {key:row.get(key) for key in
+      ('mono_ns','applied','reason','lane_mode','lane_mode_gate','input_valid','effective_lane_speed')}
     self.store.append({'kind': 'event', 'name': 'lateral_margin_evidence', 'mono_ns': row['mono_ns'],
                        'source_log_mono_ns': source_ns, 'route': self.recording_route,
                        'trip_id': self.trip, 'boot_id': self.metadata.get('boot_id'), 'evidence': row}, now)

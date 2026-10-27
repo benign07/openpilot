@@ -7,7 +7,7 @@ from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS, HyundaiExtFlags
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
-from opendbc.car.hyundai.manual_steering import ManualSteeringCeiling
+from opendbc.car.hyundai.manual_steering import ManualSteeringCeiling, LX3_DRIVER_RELEASE_RATIO, LX3_DRIVER_YIELD_RATIO
 from opendbc.car.hyundai.lx3_haptic_notifications import HapticNotifications
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.vehicle_model import VehicleModel
@@ -25,7 +25,7 @@ MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 DRIVER_TORQUE_FILTER_TAU = 0.12
 PRE_OVERRIDE_PREDICTION_TIME = 0.15
-PRE_OVERRIDE_START_RATIO = 0.90
+PRE_OVERRIDE_START_RATIO = LX3_DRIVER_YIELD_RATIO
 PRE_OVERRIDE_MAX_TORQUE_DELTA = -10.0
 
 vibrate_intervals = [
@@ -164,11 +164,13 @@ class CarController(CarControllerBase):
     self.lx3_angle_active_last = False
     self.lx3_angle_limited = False
     self.lx3_engagement_s = 0.0
-    self.manual_steering_ceiling = ManualSteeringCeiling()
     self.haptic_notifications = HapticNotifications()
     self.haptic_notifications_enabled = False
     self.lkas_max_torque = 0
     self.angle_max_torque = 250
+    self.manual_steering_ceiling = ManualSteeringCeiling(
+      resume_seconds=.2 if uses_lx3_authority(CP) else .5,
+      recovery_maximum=self.angle_max_torque if uses_lx3_authority(CP) else None)
     self.steering_pressed_prev = False
     self.recovering_from_override = False
     self.full_recovery_frames = 0
@@ -177,6 +179,14 @@ class CarController(CarControllerBase):
     self.override_release_frames = 0
     self.driver_torque_filtered = 0.0
     self.driver_torque_filtered_prev = 0.0
+    self.lx3_recovery_anchor = 0.0
+    self.lx3_recovery_elapsed = 0.0
+    self.lx3_recovery_active = False
+    self.lx3_recovery_duration = 0.0
+    self.lx3_pre_override_frames = 0
+    self.lx3_pre_override_counter = None
+    self.lx3_yield_hold = False
+    self.lx3_recovery_from_yield = False
 
     self.canfd_debug = 0
     self.MainMode_ACC_trigger = 0
@@ -316,6 +326,7 @@ class CarController(CarControllerBase):
     if angle_control:
       apply_steer_req = lat_active
 
+    lx3_driver_recovery = lx3_guard and angle_control
     steering_pressed_rising = CS.out.steeringPressed and not self.steering_pressed_prev
     if steering_pressed_rising:
       if 0 < self.full_recovery_frames < int(5.0 / DT_CTRL):
@@ -325,7 +336,7 @@ class CarController(CarControllerBase):
 
     torque_threshold = max(self.params.STEER_THRESHOLD, 1.0)
     driver_torque_abs = abs(float(CS.out.steeringTorque))
-    if not lat_active:
+    if not lat_active or (lx3_driver_recovery and not self.lx3_angle_active_last):
       self.driver_torque_filtered = driver_torque_abs
       self.driver_torque_filtered_prev = driver_torque_abs
     else:
@@ -343,6 +354,15 @@ class CarController(CarControllerBase):
       [PRE_OVERRIDE_START_RATIO, 1.0],
       [0.0, 1.0],
     )) if lat_active and not CS.out.steeringPressed else 0.0
+    if lx3_driver_recovery:
+      counter = (getattr(CS, 'mdps', None) or {}).get('COUNTER')
+      if not lat_active or driver_torque_abs <= PRE_OVERRIDE_START_RATIO*torque_threshold:
+        self.lx3_pre_override_frames = 0
+      elif counter is not None and counter != self.lx3_pre_override_counter:
+        self.lx3_pre_override_frames = min(4, self.lx3_pre_override_frames+1)
+      self.lx3_pre_override_counter = counter
+      if self.lx3_pre_override_frames < 4:
+        pre_override_yield = 0.0
     recovery_allowed = False
 
     if CS.out.steeringPressed:
@@ -350,14 +370,25 @@ class CarController(CarControllerBase):
       self.override_latched = True
       self.override_release_frames = 0
       torque_delta = -20.0
+      if lx3_driver_recovery:
+        self.lx3_yield_hold = self.lx3_recovery_from_yield = True
     elif pre_override_yield > 0.0:
       # Start handing off gently before steeringPressed flips to avoid a sharp torque drop.
       torque_delta = PRE_OVERRIDE_MAX_TORQUE_DELTA * pre_override_yield
+      if lx3_driver_recovery:
+        self.lx3_yield_hold = self.lx3_recovery_from_yield = True
     elif self.lkas_max_torque >= self.angle_max_torque:
       # Once fully recovered, hold full authority until the next driver override.
       torque_delta = 0.0
+    elif lx3_driver_recovery and (self.override_latched or self.lx3_yield_hold):
+      # Separate entry/release boundaries prevent a holding hand from repeatedly
+      # triggering yield and recovery. Steady light force does not block starts.
+      if driver_torque_abs <= LX3_DRIVER_RELEASE_RATIO*torque_threshold:
+        self.override_latched = self.lx3_yield_hold = False
+        recovery_allowed = True
+      else:
+        torque_delta = 0.0
     elif self.override_latched:
-      # Hold reduced authority until driver torque stays below 60% for 0.2 seconds.
       self.override_release_frames = self.override_release_frames + 1 if torque_ratio < 0.6 else 0
       if self.override_release_frames >= int(0.2 / DT_CTRL):
         self.override_latched = False
@@ -368,6 +399,8 @@ class CarController(CarControllerBase):
     else:
       recovery_allowed = True
 
+    if lx3_driver_recovery and not recovery_allowed:
+      self.lx3_recovery_active = False
     if recovery_allowed:
       # Use one-second model uncertainty to set the base torque recovery time.
       # Missing or invalid model data falls back to a moderate 1.5-second recovery.
@@ -385,8 +418,25 @@ class CarController(CarControllerBase):
       )))
       base_rate_up = (self.angle_max_torque - self.params.ANGLE_MIN_TORQUE) * DT_CTRL / recovery_time
 
-      # During recovery, taper the rate to zero. Only steeringPressed can reduce authority.
-      torque_delta = base_rate_up * float(np.interp(torque_ratio, [0.6, 0.8], [1.0, 0.0]))
+      if lx3_driver_recovery:
+        handback = self.lx3_recovery_from_yield or getattr(CC, 'manualSteeringResume', False)
+        if not self.lx3_recovery_active or (handback and self.lx3_recovery_duration > .2):
+          self.lx3_recovery_anchor = self.lkas_max_torque
+          self.lx3_recovery_elapsed = 0.0
+          self.lx3_recovery_active = True
+          self.lx3_recovery_duration = .2 if handback else recovery_time
+        # Initial engagement keeps the existing model-dependent ramp. Actual
+        # driver/manual handback uses the owner's 0.2s envelope, without the
+        # old taper that made 200 raw permanently prevent recovery.
+        if handback and driver_torque_abs > LX3_DRIVER_RELEASE_RATIO*torque_threshold:
+          torque_delta = 0.0
+        else:
+          self.lx3_recovery_elapsed += DT_CTRL
+          progress = min(1., self.lx3_recovery_elapsed/self.lx3_recovery_duration)
+          target = self.lx3_recovery_anchor + (self.angle_max_torque-self.lx3_recovery_anchor)*progress
+          torque_delta = max(0., target-self.lkas_max_torque)
+      else:
+        torque_delta = base_rate_up * float(np.interp(torque_ratio, [0.6, 0.8], [1.0, 0.0]))
     self.lkas_max_torque = float(np.clip(self.lkas_max_torque + torque_delta,
                                          self.params.ANGLE_MIN_TORQUE, self.angle_max_torque))
 
@@ -414,8 +464,13 @@ class CarController(CarControllerBase):
       self.repeated_override_count = 0
       self.override_latched = False
       self.override_release_frames = 0
-      self.driver_torque_filtered = 0.0
-      self.driver_torque_filtered_prev = 0.0
+      self.driver_torque_filtered = driver_torque_abs if lx3_driver_recovery else 0.0
+      self.driver_torque_filtered_prev = self.driver_torque_filtered
+      self.lx3_recovery_active = False
+      self.lx3_recovery_elapsed = 0.0
+      self.lx3_pre_override_frames = 0
+      self.lx3_pre_override_counter = None
+      self.lx3_yield_hold = self.lx3_recovery_from_yield = False
 
     if not lat_active:
       steering_authority = 0.0

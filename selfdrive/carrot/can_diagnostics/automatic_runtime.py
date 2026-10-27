@@ -2,6 +2,8 @@
 import hashlib
 import importlib
 import json
+import math
+from bisect import bisect_left
 from itertools import islice
 from pathlib import Path
 import shutil
@@ -17,15 +19,17 @@ FIELDS = {
                   'memoryUsagePercent', 'fanSpeedPercentDesired', 'powerDrawW', 'somPowerDrawW'),
   'carState': ('vEgo', 'aEgo', 'standstill', 'gearShifter', 'canValid', 'canTimeout', 'brakePressed',
                'vCruise', 'softHoldActive',
-               'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringTorque', 'leftBlinker',
+               'gasPressed', 'steeringPressed', 'steeringAngleDeg', 'steeringRateDeg', 'steeringTorque', 'leftBlinker',
                'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'cruiseState', 'latEnabled',
-               'steerFaultTemporary', 'steerFaultPermanent', 'buttonEvents', 'lx3Authority', 'lx3SteeringLimited'),
+               'steerFaultTemporary', 'steerFaultPermanent', 'buttonEvents', 'lx3Authority', 'lx3SteeringLimited',
+               'leftLaneLine', 'rightLaneLine'),
   'carControl': ('enabled', 'latActive', 'longActive', 'actuators', 'lx3Authority',
                  'manualSteeringScale', 'manualSteeringResume', 'hudControl'),
-  'modelV2': ('frameId', 'timestampEof', 'meta'),
+  'carOutput': ('actuatorsOutput',),
+  'modelV2': ('frameId', 'timestampEof', 'meta', 'laneLineProbs', 'laneLineStds'),
   'selfdriveState': ('enabled', 'active', 'state', 'alertText1', 'alertText2', 'alertType', 'alertSound', 'lx3LongRequest', 'lx3LongRefused', 'lx3RefuseAfterSequence'),
-  'controlsState': ('longControlState', 'forceDecel'),
-  'radarState': ('leadOne', 'leadTwo', 'errors'),
+  'controlsState': ('longControlState', 'forceDecel', 'curvature', 'desiredCurvature'),
+  'radarState': ('leadOne', 'leadTwo', 'radarErrors', 'errors', 'leadsLeft', 'leadsRight', 'leadsCutIn'),
   'longitudinalPlan': ('hasLead', 'longitudinalPlanSource', 'fcw', 'shouldStop', 'speeds', 'accels',
                        'aTarget', 'vTargetNow', 'jTargetNow', 'modelMonoTime', 'cruiseTarget',
                        'jerks', 'tFollow', 'desiredDistance', 'myDrivingMode'),
@@ -53,7 +57,7 @@ PARAMS += ('UseLaneLineSpeed', 'UseLaneLineCurveSpeed', 'PathOffset', 'AdjustLan
 PARAMS += ('OpenpilotEnabledToggle', 'RecordRoadCam', 'DisableLogging')
 
 
-def settings_snapshot(params, driving_preferences=None, cruise_button_preferences=None):
+def settings_snapshot(params, driving_preferences=None, cruise_button_preferences=None, response_preferences=None):
   """Observe registered keys only; older native Params registries stay intact."""
   registered = {key.decode() if isinstance(key, bytes) else key for key in params.all_keys()}
   values = {key: read_param(params, key) for key in PARAMS if key in registered}
@@ -61,6 +65,7 @@ def settings_snapshot(params, driving_preferences=None, cruise_button_preference
   values['driving_preferences'] = (driving_preferences.read() if driving_preferences is not None
                                    else {'status': 'module_not_installed'})
   values['cruise_button_preferences'] = cruise_button_snapshot(cruise_button_preferences)
+  values['response_preferences'] = cruise_button_snapshot(response_preferences)
   return values
 
 
@@ -86,6 +91,17 @@ def optional_cruise_button_preferences():
   return reader() if reader is not None else None
 
 
+def optional_response_preferences():
+  module_name = 'openpilot.selfdrive.controls.lib.approach_comfort'
+  try:
+    module = importlib.import_module(module_name)
+  except ModuleNotFoundError as exc:
+    if exc.name != module_name:raise
+    return None
+  reader = getattr(module,'ResponsePreferences',None)
+  return reader() if reader is not None else None
+
+
 def cruise_button_snapshot(preferences):
   """Keep effective fallback values distinct from an observed stored setting."""
   if preferences is None:
@@ -105,6 +121,9 @@ def vehicle_capture_context(cp):
   return {'passive': bool(cp.passive), 'dashcam_only': bool(cp.dashcamOnly),
           'safety_configs': [{'model': str(config.safetyModel), 'param': int(config.safetyParam)}
                              for config in cp.safetyConfigs],
+          'longitudinal_control': {key: getattr(cp, key, None) for key in
+            ('openpilotLongitudinalControl', 'startingState', 'startAccel', 'stopAccel',
+             'vEgoStarting', 'stoppingDecelRate', 'longitudinalActuatorDelay')},
           'scope': 'host_CarParams_not_live_Panda_mode_or_physical_relay_verification'}
 
 
@@ -211,8 +230,14 @@ def selected_fields(reader, fields):
     value = getattr(reader, key, None)
     if key in ('gearShifter', 'state', 'longitudinalPlanSource', 'alertSound', 'longControlState', 'thermalStatus') and value is not None:
       value = str(value)
-    elif key in ('speeds', 'accels', 'jerks', 'cpuTempC', 'gpuTempC', 'pmicTempC', 'cpuUsagePercent') and value is not None:
+    elif key in ('speeds', 'accels', 'jerks', 'cpuTempC', 'gpuTempC', 'pmicTempC', 'cpuUsagePercent',
+                 'laneLineProbs', 'laneLineStds') and value is not None:
       value = list(value)
+    elif key in ('leadsLeft', 'leadsRight', 'leadsCutIn') and value is not None:
+      # Publisher order, not a claim that these are the nearest/only objects.
+      value = [{field: getattr(lead, field, None) for field in
+                ('status', 'radar', 'radarTrackId', 'dRel', 'yRel', 'dPath', 'vRel', 'vLead', 'modelProb')}
+               for lead in islice(value, 3)]
     elif key == 'errors' and value is not None:
       value = [str(error) for error in value]
     elif key == 'buttonEvents' and value is not None:
@@ -223,6 +248,31 @@ def selected_fields(reader, fields):
       value = value.to_dict()
     result[key] = value
   return result
+
+
+def lateral_geometry_summary(model):
+  """Small model-frame samples, never measured lane position or free-space proof."""
+  points = (0., 10., 20.)
+  def sample(line):
+    if line is None:
+      return None
+    xs, ys = list(islice(line.x, 65)), list(islice(line.y, 65))
+    if (not 2 <= len(xs) <= 64 or len(xs) != len(ys)
+        or not all(math.isfinite(v) for v in xs+ys) or any(b <= a for a,b in zip(xs,xs[1:]))):
+      return None
+    values=[]
+    for point in points:
+      if not xs[0] <= point <= xs[-1]:
+        values.append(None)
+        continue
+      i = max(1, bisect_left(xs, point))
+      values.append(ys[i-1]+(ys[i]-ys[i-1])*(point-xs[i-1])/(xs[i]-xs[i-1]))
+    return values
+  lanes, edges = getattr(model, 'laneLines', ()), getattr(model, 'roadEdges', ())
+  return {'forward_m': list(points), 'lane_y': [sample(lanes[i]) if len(lanes)>i else None for i in (1,2)],
+          'path_y': sample(getattr(model, 'position', None)),
+          'road_edge_y': [sample(edges[i]) if len(edges)>i else None for i in (0,1)],
+          'scope': 'model_frame_y_right_positive_not_ground_truth_or_free_space'}
 
 
 def selected_tx_identity(frame):
@@ -244,7 +294,11 @@ def panda_summary(panda):
     'rx_checks_invalid': bool(panda.safetyRxChecksInvalid),
     'faults': [str(fault) for fault in panda.faults],
     'buses': [{'rx': int(bus.totalRxCnt), 'rx_lost': int(bus.totalRxLostCnt),
-              'errors': int(bus.totalErrorCnt), 'bus_off': bool(bus.busOff)} for bus in buses],
+              'errors': int(bus.totalErrorCnt), 'bus_off': bool(bus.busOff),
+              **{out: getattr(bus, source, None) for out, source in (
+                ('tx', 'totalTxCnt'), ('tx_lost', 'totalTxLostCnt'), ('core_resets', 'canCoreResetCnt'),
+                ('tx_errors', 'transmitErrorCnt'), ('rx_errors', 'receiveErrorCnt'),
+                ('error_warning', 'errorWarning'))}} for bus in buses],
   }
   a = getattr(panda, 'lx3Authority', None)
   if a is not None and a.version:
@@ -330,6 +384,7 @@ class AutomaticController:
     params = Params()
     driving_preferences = optional_driving_preferences()
     cruise_button_preferences = optional_cruise_button_preferences()
+    response_preferences = optional_response_preferences()
     sm = messaging.SubMaster(list(FIELDS))
     sockets = {name: messaging.sub_sock(name, timeout=0, conflate=False) for name in ('can', 'sendcan')}
     panda_socket = messaging.sub_sock('pandaStates', timeout=0, conflate=True)
@@ -368,6 +423,13 @@ class AutomaticController:
     metadata['longitudinal_evidence'] = {'schema': 1, 'producer_clock': 'monotonic',
                                        'source': 'existing_logMessage_and_rlog', 'maximum_frame_bytes': 32768,
                                        'comparison': 'same_filter_state_ceiling_not_alternative_command_or_placebo_proof'}
+    metadata['driver_position_review'] = {
+      'schema':1, 'automatic':True, 'max_episodes_per_trip':128, 'pre_samples':12, 'pre_max_s':2.5,
+      'effort_raw_min':150, 'angle_error_deg_min':.5, 'confirmation_s':.2,
+      'context_hz':5, 'ongoing_event_max_hz':1, 'after_s':2,
+      'nearby_limit_per_list':3, 'nearby_order':'publisher_order_not_guaranteed_nearest_or_complete',
+      'meaning':'review_candidate_not_confirmed_driver_intent_or_training_target',
+      'geometry':'model_frame_not_measured_vehicle_lane_position', 'control_changes':False}
     metadata['blindspot_trace'] = {'pre_s': 2, 'post_s': 8, 'max_extra_windows_per_trip': 4,
                                  'min_new_window_interval_s': 30, 'raw_rear_indicator_address': '0x1BA',
                                  'trigger': 'fresh_same_side_blinker_and_object_not_confirmed_warning_or_haptic',
@@ -387,6 +449,7 @@ class AutomaticController:
                'selfdrive/carrot/manual_steering.py', 'cereal/car.capnp',
                'selfdrive/carrot/carrot_functions.py', 'selfdrive/controls/lib/approach_comfort.py',
                'selfdrive/controls/lib/flexible_gap.py', 'selfdrive/controls/lib/longitudinal_planner.py',
+               'selfdrive/controls/lib/longcontrol.py', 'selfdrive/controls/lib/drive_helpers.py',
                'selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py', 'selfdrive/controls/beep.py',
                'selfdrive/controls/lib/lateral_planner.py', 'selfdrive/controls/lib/lane_planner_2.py')
     metadata['source_hashes'] = {rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest()
@@ -436,7 +499,7 @@ class AutomaticController:
                                 meaning='clock_mapping_changed_not_producer_outage_proof')
         self.recorder.observer_tick(now)
       if now - last_metadata >= 5:
-        metadata['settings'] = settings_snapshot(params, driving_preferences, cruise_button_preferences)
+        metadata['settings'] = settings_snapshot(params, driving_preferences, cruise_button_preferences, response_preferences)
         raw = params.get('CarParams')
         update_vehicle_metadata(metadata, raw, car.CarParams, int(now*1e9))
         last_metadata = now
@@ -454,6 +517,8 @@ class AutomaticController:
                             'source_clock': SERVICE_CLOCKS[name],
                             'alive': bool(sm.alive[name]),
                             'data': selected_fields(sm[name], fields)}
+          if name == 'modelV2':
+            services[name]['data']['lateral_geometry'] = lateral_geometry_summary(sm[name])
         last_context = now
       with self.lock:
         self.recorder.update(services, now)

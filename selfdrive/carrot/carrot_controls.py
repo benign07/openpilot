@@ -2,6 +2,7 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.common.params import Params
 from openpilot.selfdrive.carrot.manual_steering import ManualSteeringPause
 from opendbc.car.hyundai.lx3_buttons import uses_lx3_authority
+from math import isfinite
 
 class CarrotControls:
   def __init__(self, CP):
@@ -10,11 +11,11 @@ class CarrotControls:
     self.lat_suspend_active = False
     self.lat_suspend_enter_t = 0.0
     self.lat_suspend_hold_t = 0.0
-    self.manual_steering = ManualSteeringPause(DT_CTRL)
+    self.manual_supported = uses_lx3_authority(CP)
+    self.manual_steering = ManualSteeringPause(DT_CTRL, quick_recovery=self.manual_supported)
     self.manual_params_frame = 0
     self.manual_steering_enabled = False
     self.manual_lane_change_off = False
-    self.manual_supported = uses_lx3_authority(CP)
     self.manual_grant_identity = None
 
   def lat_suspend_control(self, CS, latActive, explicit_resume_supported=True):
@@ -39,12 +40,20 @@ class CarrotControls:
         explicit_resume = bool(latActive and not (CS.leftBlinker or CS.rightBlinker)
                                and (int(auth.allowed) & 1) and (int(auth.armed) & 1) and (new_lat or new_long))
       self.manual_grant_identity = identity
+    driver_force = CS.steeringPressed
+    if self.manual_supported:
+      torque = getattr(CS, 'steeringTorque', None)
+      # Use confirmed native driver input for host suspension. Predictive
+      # yield/hysteresis belongs to the controller's soft ceiling; one raw
+      # spike must not latch the host lateral axis OFF.
+      driver_force = driver_force or torque is None or not isfinite(torque)
     manual_pause = self.manual_steering.update(
       enabled=self.manual_supported and self.manual_steering_enabled, lane_change_off=self.manual_lane_change_off,
       left_blinker=CS.leftBlinker, right_blinker=CS.rightBlinker,
-      steering_pressed=CS.steeringPressed, steering_angle=CS.steeringAngleDeg,
+      steering_pressed=driver_force, steering_angle=CS.steeringAngleDeg,
       can_valid=CS.canValid, can_timeout=CS.canTimeout, lateral_active=latActive,
       explicit_resume=explicit_resume,
+      speed=getattr(CS,'vEgo',0.), steering_rate=getattr(CS,'steeringRateDeg',float('nan')),
     )
     suspend_angle = float(self.params.get_int("LatSuspendAngleDeg"))
     resume_angle  = 15

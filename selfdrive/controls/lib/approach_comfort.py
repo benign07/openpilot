@@ -130,6 +130,84 @@ class CruiseButtonPreferences(DrivingPreferences):
     super().__init__(path)
 
 
+RESPONSE_PREFERENCES = {'DriverPositionHold': (0,1,0)}
+
+
+class ResponsePreferences(DrivingPreferences):
+  """Separate opt-ins; old rollback readers never see new keys in old stores."""
+  DEFINITIONS = RESPONSE_PREFERENCES
+
+  def __init__(self, path='/data/community/driving_response_preferences.json'):
+    super().__init__(path)
+
+
+class DepartureThresholdReview:
+  """Unqualified shadow calculation, NEVER a control/stop threshold input.
+
+  Transient-data loss can reassert the old criterion during low-speed motion.
+  Keep this candidate diagnostic-only until a complete transition policy and
+  physical delay cause are established. No setting can apply it to driving.
+  """
+  def __init__(self):
+    self.reset('off')
+
+  def reset(self, reason):
+    self.track = self.previous = None
+    self.since = self.opening_since = None
+    self.rest_distance = None
+    self.active = False
+    self.reason = reason
+
+  def observe(self, *args, **kwargs):
+    try:
+      return self.threshold(*args,**kwargs)
+    except Exception:
+      # Passive evidence may fail independently of normal planning/control.
+      self.reset('review_input_error')
+      return args[0]
+
+  def threshold(self, default, radar, *, enabled, eligible, stamp_ns, v_ego,
+                standstill, starting_speed, stop_distance, planned_accel):
+    if not enabled:
+      self.reset('off');return default
+    if (not eligible or not all(math.isfinite(v) for v in
+        (default,v_ego,starting_speed,stop_distance,planned_accel)) or default<=.25 or
+        v_ego>=(max(default,.1) if self.active else max(starting_speed,.1)) or v_ego<0):
+      self.reset('inactive_or_moving');return default
+    lead=radar.leadOne
+    if (not lead.status or not lead.radar or lead.radarTrackId<0 or lead.modelProb<.9 or
+        not all(math.isfinite(v) for v in (lead.dRel,lead.vRel,lead.vLead,lead.aLeadK,lead.modelProb)) or
+        lead.dRel<3. or lead.vRel<=-.1 or lead.aLeadK<-.3 or
+        any(t.status and (not math.isfinite(t.dRel) or
+            (t.radarTrackId!=lead.radarTrackId and t.dRel<lead.dRel+2.)) for t in (radar.leadTwo,))):
+      self.reset('lead_unqualified');return default
+    # Confirm with distinct radar messages. Cached or backwards observations
+    # cannot advance opening evidence; discontinuity discards the old latch.
+    if self.previous is not None:
+      old_stamp,old_distance,old_relative=self.previous
+      dt=(stamp_ns-old_stamp)/1e9
+      if dt==0:
+        if planned_accel<=0.:
+          self.active=False;self.reason='waiting_for_positive_plan';return default
+        return min(default,.25) if self.active else default
+      if not 0<dt<=.2 or abs(lead.dRel-old_distance-old_relative*dt)>1.:
+        self.reset('radar_discontinuity')
+    if self.track!=lead.radarTrackId:
+      self.reset('new_track');self.track=lead.radarTrackId;self.since=stamp_ns
+    self.previous=(stamp_ns,lead.dRel,lead.vRel)
+    if standstill and v_ego<.1 and not self.active and lead.vRel<.3:
+      self.rest_distance=lead.dRel
+    opening=(lead.vRel>0.05 and lead.vLead>=.25) if self.active else (lead.vRel>=.3 and lead.vLead>=.3)
+    if not opening or planned_accel<=0.:
+      self.opening_since=None;self.active=False;self.reason='waiting_for_opening_plan';return default
+    if self.opening_since is None:self.opening_since=stamp_ns
+    if (not self.active and (self.rest_distance is None or stamp_ns-self.since<1_000_000_000 or
+        stamp_ns-self.opening_since<300_000_000 or lead.dRel-self.rest_distance<.3)):
+      self.reason='confirming_opening';return default
+    self.active=True;self.reason='confirmed_opening_lower_stop_threshold'
+    return min(default,.25)
+
+
 class LaunchFollow:
   """Optional positive ceiling allowance behind a confirmed opening lead.
 

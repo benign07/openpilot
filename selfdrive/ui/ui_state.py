@@ -154,6 +154,14 @@ class UIState:
     self.always_on_dm = self.params.get_bool("AlwaysOnDM")
 
   def _update_status(self) -> None:
+    # Steering can run without SCC. Refresh its display state from the actual
+    # actuator request independently of selfdriveState delivery, and never keep
+    # an old green indication after control messages stop or become invalid.
+    self.lat_active = bool(
+      self.started and self.sm.alive['carControl'] and self.sm.valid['carControl'] and
+      0 <= time.monotonic() - self.sm.logMonoTime['carControl'] / 1e9 < 0.5 and
+      self.sm['carControl'].latActive
+    )
     if self.started and self.sm.updated["selfdriveState"]:
       ss = self.sm["selfdriveState"]
       state = ss.state
@@ -162,8 +170,6 @@ class UIState:
         self.status = UIStatus.OVERRIDE
       else:
         self.status = UIStatus.ENGAGED if ss.enabled else UIStatus.DISENGAGED
-
-      self.lat_active = self.sm["carControl"].latActive
 
     # Check for engagement state changes
     if self.engaged != self._engaged_prev:

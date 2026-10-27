@@ -1,4 +1,4 @@
-name: LX3 margin mode and maintenance regression
+name: LX3 driver recovery and position preference regression
 on:
   push:
     branches: [review/lx3-cruise-off-lateral-20261026]
@@ -32,6 +32,18 @@ jobs:
           path: |
             audit-regression.xml
             audit-regression.log
+      - name: Driver recovery, passive review and bounded preference regressions
+        run: |
+          set -o pipefail
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_driver_position_hold.py selfdrive/controls/tests/test_early_lead_start.py selfdrive/controls/tests/test_lx3_driver_recovery.py selfdrive/controls/tests/test_driver_position_review.py selfdrive/controls/tests/test_longitudinal_capture_fields.py selfdrive/controls/tests/test_response_preferences.py selfdrive/controls/tests/test_response_deployment_20261027.py selfdrive/ui/tests/test_lateral_status.py -q --junitxml=response-regression.xml 2>&1 | tee response-regression.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: response-regression-${{ matrix.python }}
+          path: |
+            response-regression.xml
+            response-regression.log
   native-lateral-audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -49,11 +61,13 @@ jobs:
       - name: Build actual lateral solver and runtime bindings
         run: |
           set -o pipefail
-          uv run --no-sync scons --minimal -j2 common/params_pyx.so msgq_repo/msgq/ipc_pyx.so selfdrive/controls/lib/lateral_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so 2>&1 | tee native-lateral-build.log
+          uv run --no-sync scons --minimal -j2 common/params_pyx.so msgq_repo/msgq/ipc_pyx.so selfdrive/controls/lib/lateral_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code/acados_ocp_solver_pyx.so 2>&1 | tee native-lateral-build.log
       - name: Real schema and linked lateral solver comparisons
         run: |
           set -o pipefail
           uv run --no-sync python tools/check_lx3_preferences_native.py --output native-preferences.json 2>&1 | tee native-preferences.log
+          uv run --no-sync python tools/check_lx3_response_native.py --output native-response.json 2>&1 | tee native-response.log
+          uv run --no-sync python tools/check_lx3_evidence_native.py --output native-evidence.json 2>&1 | tee native-evidence.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -62,3 +76,7 @@ jobs:
             native-lateral-build.log
             native-preferences.json
             native-preferences.log
+            native-response.json
+            native-response.log
+            native-evidence.json
+            native-evidence.log

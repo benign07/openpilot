@@ -282,7 +282,7 @@ def minimal_cs():
 def test_acceleration_limit_help_preserves_option_identity_and_is_idempotent():
   from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES
   inject=load(ROOT/'selfdrive/carrot/server/services/settings.py',{'inject_driving_preferences'},
-              {'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'CRUISE_BUTTON_PREFERENCES':{}})['inject_driving_preferences']
+              {'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'CRUISE_BUTTON_PREFERENCES':{},'RESPONSE_PREFERENCES':{}})['inject_driving_preferences']
   data={'params':[{'name':name,'descr':'기존 설명','edescr':'Existing description','cdescr':'原说明',
                    'min':0,'max':100,'default':40,'unit':5} for name in ('ApproachCoastStrength','ApproachTrafficCalm')]}
   inject(data)
@@ -331,7 +331,7 @@ def test_real_formatter_uses_only_supplied_filtered_generic_slots_with_crc(
 def test_new_menu_uses_existing_native_switch_once_and_preserves_range_default():
   from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES
   fn = load(ROOT/'selfdrive/carrot/server/services/settings.py',{'inject_driving_preferences'},
-            {'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'CRUISE_BUTTON_PREFERENCES':{}})['inject_driving_preferences']
+            {'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'CRUISE_BUTTON_PREFERENCES':{},'RESPONSE_PREFERENCES':{}})['inject_driving_preferences']
   original = json.loads((ROOT/'selfdrive/carrot_settings.json').read_text(encoding='utf8'))
   data = fn(copy.deepcopy(original)); second = fn(copy.deepcopy(data))
   assert data == second

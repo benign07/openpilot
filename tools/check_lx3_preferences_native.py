@@ -21,7 +21,7 @@ def main():
   from cereal import car,log,custom
   from openpilot.common.params import Params
   from openpilot.selfdrive.controls.lib import lateral_planner as lp
-  from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences
+  from openpilot.selfdrive.controls.lib.approach_comfort import DrivingPreferences,ResponsePreferences
   from openpilot.selfdrive.modeld.constants import ModelConstants
   fixture=Path(__file__).parent/'fixtures/lx3_lateral_ota10_before.txt'
   raw=fixture.read_bytes()
@@ -128,6 +128,28 @@ def main():
         now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm}
         sm['controlsState'].curvature=signed;shadow.update(sm,carrot)
       assert abs(shadow.margin.value)<1e-9
+      # Real native-path hold after a synthetic 6cm lane-relative movement.
+      # No actuator/ECU model: solver feasibility and timing only.
+      sm['controlsState'].curvature=0.
+      params.put_int('UseLaneLineSpeed',5);cs.useLaneLineSpeed=5
+      hold=lp.LateralPlanner(cp)
+      hold.margin_preferences=DrivingPreferences(Path(directory)/'hold-margin.json')
+      hold.response_preferences=ResponsePreferences(Path(directory)/'hold-response.json')
+      hold.response_preferences.set('DriverPositionHold',1)
+      for i in range(40):
+        now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm};hold.update(sm,carrot)
+      for i in range(15):
+        for line,y in zip(md.laneLines,(-5.1,-1.7,1.7,5.1)):line.y=[y-.06*min(1.,i/4)]*33
+        cs.steeringPressed=True
+        now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm};hold.update(sm,carrot)
+      cs.steeringPressed=False;held=[]
+      for i in range(161):
+        now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm};hold.update(sm,carrot)
+        assert hold.lat_mpc.solution_status==0 and np.isfinite(hold.lat_mpc.x_sol).all()
+        held.append(hold.driver_position_applied)
+      # Lane y is Float32 in the real schema, unlike Python-only fixtures.
+      assert all(abs(value-.06)<1e-6 for value in held[:61]),held[:3]
+      assert abs(held[110]-.03)<1e-6 and held[-1]==0.
       # A different supported vehicle never reads LX3 preference data.
       cp.carFingerprint='KIA_EV9';other=lp.LateralPlanner(cp)
       other.margin_preferences.read=lambda: (_ for _ in ()).throw(AssertionError('LX3 preferences leaked'))
@@ -143,6 +165,7 @@ def main():
       'laneless_off_shadow_path_byte_identical':True,
       'laneless_shadow_byte_identical':True,'production_curvature_sign_veto':True,
       'non_lx3_isolated':True,'diagnostic_records':len(records),
+      'manual_position_hold_native_solver_cycles':161,'manual_position_hold_3s_return_5s':True,
       'scope':'synthetic actual solver checks; no closed-loop vehicle or safety qualification'}
   args.output.write_text(json.dumps(result,indent=2),encoding='utf-8');print(json.dumps(result))
 

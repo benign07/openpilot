@@ -72,7 +72,8 @@ class Harness:
                   'CAMERA_OFFSET': 0., 'Params': lambda: self.params,
                   'log': NS(Desire=NS(none=0, laneChangeLeft=3, laneChangeRight=4))}
     definitions('common/filter_simple.py', ['FirstOrderFilter'], lane_scope)
-    definitions('selfdrive/controls/lib/lane_planner_2.py', ['LanePlanner', 'LateralMargin'], lane_scope)
+    definitions('selfdrive/controls/lib/lane_planner_2.py', ['LanePlanner', 'LateralMargin', 'DriverPositionHold'], lane_scope)
+    self.response_settings={'DriverPositionHold':0,'EarlyLeadStart':0}
     scope = {
       'np': np, 'DT_MDL': DT, 'TRAJECTORY_SIZE': 33, 'LAT_MPC_N': 16, 'MIN_SPEED': 1.,
       'LATERAL_ACCEL_COST': 0., 'LATERAL_JERK_COST': .04, 'STEERING_RATE_COST': 700.,
@@ -80,7 +81,9 @@ class Harness:
       'cloudlog': NS(debug=lambda *_: None, warning=lambda *_: None),
       'log': lane_scope['log'], 'Params': lambda: self.params, 'LateralMpc': MpcDouble,
       'DrivingPreferences': lambda: prefs, 'LanePlanner': lane_scope['LanePlanner'],
+      'ResponsePreferences':lambda:NS(values=dict(self.response_settings),read=lambda:dict(self.response_settings)),
       'LateralMargin': lane_scope['LateralMargin'],
+      'DriverPositionHold':lane_scope['DriverPositionHold'],
     }
     definitions('selfdrive/controls/lib/lateral_planner.py',
                 ['LateralPlanner', 'smooth_moving_avg', 'yaw_from_path_no_scipy'], scope)
@@ -89,14 +92,13 @@ class Harness:
     self.planner = scope['LateralPlanner'](cp)
     self.carrot = NS(atc_active=False)
 
-  def step(self, kph=60., slowdown=False, curve_speed=250., lat_active=True):
+  def step(self, kph=60., slowdown=False, curve_speed=250., lat_active=True, pressed=False, centre=.15):
     self.now_ns += 50_000_000
     t = np.arange(33) * .1
     x = np.linspace(0., 60., 33)
     zero = np.zeros(33)
     # Model starts at the vehicle origin; a lane centre 15 cm to the right
     # makes accidental controller/path substitution observable.
-    centre = .15
     lane_y = (centre - 1.5 * self.lane_width, centre - self.lane_width / 2,
               centre + self.lane_width / 2, centre + 1.5 * self.lane_width)
     lines = [NS(x=x, y=np.full(33, y), t=t) for y in lane_y]
@@ -111,7 +113,7 @@ class Harness:
             laneLineProbs=[.9, .99, .99, .9], laneLineStds=[.05] * 4,
             meta=NS(desire=0, desireState=[], laneWidthLeft=3.6, laneWidthRight=3.6))
     cs = NS(vEgo=kph / 3.6, useLaneLineSpeed=self.lane_speed, canValid=True, canTimeout=False,
-            leftBlinker=False, rightBlinker=False, steeringPressed=False,
+            leftBlinker=False, rightBlinker=False, steeringPressed=pressed,
             leftLaneLine=21, rightLaneLine=10, leftBlindspot=False, rightBlindspot=False)
     sm = SubMasterDouble(carState=cs, carControl=NS(latActive=lat_active),
                          controlsState=NS(curvature=0.), carrotMan=NS(vTurnSpeed=curve_speed),

@@ -222,6 +222,98 @@ class LateralMargin:
                              for key,row in self.tracks.items()]}
     return 0.0 if shadow else self.value
 
+class DriverPositionHold:
+  """Bounded manual position preference, not online learning or obstacle avoidance."""
+  def __init__(self):
+    self.reset('off')
+
+  def reset(self, reason):
+    self.value = self.captured = 0.0
+    self.press_since = self.press_offset = self.released_ns = None
+    self.last_ns = None
+    self.positions = []
+    self.press_variance = 0.
+    self.reason = reason
+    return 0.0
+
+  def withdraw(self, reason, dt):
+    self.press_since = self.press_offset = self.released_ns = None
+    self.positions = []
+    self.value += max(-.05*dt,min(.05*dt,-self.value))
+    self.reason=reason
+    return self.value
+
+  def update(self, *, enabled, now_ns, valid, lane_mode, lat_active, pressed, blinkers, maneuver,
+             observed_position, probabilities, stds, corridor, legacy_offset, occupied):
+    if not enabled:return self.reset('off')
+    if not lane_mode or not lat_active:return self.reset('inactive_or_unqualified')
+    if blinkers or maneuver:return self.reset('maneuver')
+    dt=.05 if self.last_ns is None else (now_ns-self.last_ns)/1e9
+    self.last_ns=now_ns
+    if not 0<dt<=.2:return self.withdraw('input_gap',.05)
+    # A positive side veto cancels the historical preference permanently.
+    if (occupied[0] and self.value<0.) or (occupied[1] and self.value>0.):
+      return self.reset('occupied_side')
+    if not valid:return self.withdraw('input_quality',dt)
+    if (len(probabilities)!=2 or len(stds)!=2 or not corridor or
+        not all(math.isfinite(v) for v in (*probabilities,*stds,observed_position,legacy_offset)) or
+        min(probabilities)<.8 or max(stds)>.15):
+      return self.withdraw('lane_quality',dt)
+    lower,upper=-.1,.1
+    for left,right,path,yaw in corridor:
+      if not all(math.isfinite(v) for v in (left,right,path,yaw)) or not 3.<=right-left<=4.:
+        return self.withdraw('corridor_quality',dt)
+      footprint=1.12+2.53*abs(math.sin(yaw))
+      lower=max(lower,left+footprint+.30-path)
+      upper=min(upper,right-footprint-.30-path)
+    lower,upper=max(lower,-.4-legacy_offset),min(upper,.4-legacy_offset)
+    if occupied[0]:lower=max(0.,lower)
+    if occupied[1]:upper=min(0.,upper)
+    if not lower<=0.<=upper:return self.reset('base_path_outside_margin')
+    previous=list(self.positions)
+    self.positions=(self.positions+[observed_position])[-6:]
+    observed_mean=sum(self.positions)/len(self.positions)
+    if pressed:
+      if self.press_since is None:
+        self.press_since=now_ns
+        self.press_offset=(sum(previous)/6 if len(previous)==6 and max(previous)-min(previous)<=.04 else None)
+        self.press_variance=(sum((v-self.press_offset)**2 for v in previous)/5
+                             if self.press_offset is not None else 0.)
+      self.released_ns=None
+      self.value=0.
+      self.reason='observing_manual_adjustment'
+      return 0.
+    if self.press_since is not None:
+      duration=now_ns-self.press_since
+      variance=sum((v-observed_mean)**2 for v in self.positions)/5 if len(self.positions)==6 else math.inf
+      threshold=max(.05,2.*max(stds)/math.sqrt(6.),3.*math.sqrt((self.press_variance+variance)/6.))
+      shifted=(self.press_offset is not None and len(self.positions)==6 and max(self.positions)-min(self.positions)<=.04 and
+               abs(observed_mean-self.press_offset)+1e-9>=threshold)
+      self.press_since=self.press_offset=None
+      if duration<300_000_000 or not shifted:return self.withdraw('no_confirmed_displacement',dt)
+      # Store a lane-relative position, not an angle or a past additional
+      # offset. A changing legacy/automatic bias must not add to the hold.
+      self.captured=legacy_offset+max(lower,min(upper,observed_mean-legacy_offset))
+      self.released_ns=now_ns
+    if self.released_ns is None:
+      if self.value!=0.:
+        # A quality withdrawal never reactivates the old captured target.
+        return self.withdraw('withdrawing_previous_position',dt)
+      self.reason='waiting_for_manual_adjustment'
+      self.value=0.
+      return 0.
+    age=(now_ns-self.released_ns)/1e9
+    if not 0<=age<8.:return self.reset('completed')
+    u=max(0.,min(1.,(age-3.)/5.))
+    smooth=u*u*u*(10.+u*(-15.+6.*u))
+    desired=(self.captured-legacy_offset)*(1.-smooth)
+    # A changing existing bias may exceed the 10cm ADDITIONAL envelope. Keep
+    # the envelope; do not turn an ordinary bias decay into an abrupt reset.
+    self.value=max(lower,min(upper,desired))
+    self.reason='holding_3s' if age<3. else 'returning_5s'
+    return self.value
+
+
 class LanePlanner:
   def __init__(self):
     self.ll_t = np.zeros((TRAJECTORY_SIZE,))

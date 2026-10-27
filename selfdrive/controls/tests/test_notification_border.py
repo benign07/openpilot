@@ -114,7 +114,7 @@ def test_reset_routes_display_default_without_unknown_native_key():
   tree=ast.parse((ROOT/'selfdrive/carrot/server/features/system.py').read_text(encoding='utf8'))
   node=next(n for n in ast.walk(tree) if isinstance(n,ast.AsyncFunctionDef) and n.name=='api_set_default')
   writes=[];native=[]
-  env={'HAS_PARAMS':True,'BORDER_KEY':pref.KEY,'DRIVING_PREFERENCES':{},'CRUISE_BUTTON_PREFERENCES':{},
+  env={'HAS_PARAMS':True,'BORDER_KEY':pref.KEY,'DRIVING_PREFERENCES':{},'CRUISE_BUTTON_PREFERENCES':{},'RESPONSE_PREFERENCES':{},
        'get_settings_cached':lambda:(None,None,{pref.KEY:{'default':1},'Existing':{'default':5}},None),
        '_is_carrot_default_reset_param':lambda *args:True,
        'notification_preferences':NS(set=lambda v:writes.append(v)),
