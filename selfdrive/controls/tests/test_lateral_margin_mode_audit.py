@@ -1,7 +1,7 @@
 """Exercise the production planner glue without native Params or an MPC binary.
 
-Off/shadow preserve the base mode; actual mode retains the owner's explicit
-30 km/h opt-in while respecting positive thresholds and existing path gates.
+All position preferences preserve native model/lane selection. Explicit
+positive thresholds and the existing path gates remain independent.
 """
 import ast
 import math
@@ -127,7 +127,7 @@ class Harness:
     return [self.step(**kwargs) for _ in range(frames)]
 
 
-@pytest.mark.parametrize('settings', [OFF, SHADOW], ids=['off', 'shadow'])
+@pytest.mark.parametrize('settings', [OFF, ACTUAL, SHADOW], ids=['off', 'actual', 'shadow'])
 @pytest.mark.parametrize('width', [2.70, 2.92, 2.96], ids=['scene_a', 'scene_b', 'scene_c'])
 def test_native_zero_never_selects_lanes_for_a_margin(settings, width):
   h = Harness(settings, lane_speed=0, lane_width=width)
@@ -136,7 +136,7 @@ def test_native_zero_never_selects_lanes_for_a_margin(settings, width):
   modes = []
   for speed in (42.7, 49.6, 55.5, 64.3, 76.1, 61.7):
     modes.extend(h.run(30, kph=speed))
-    assert h.planner.effective_lane_speed == 0
+    assert h.planner.useLaneLineSpeedApply == 0
     assert h.planner.margin_applied == 0.
     np.testing.assert_array_equal(h.planner.path_xyz[:, 1], np.zeros(33))
   assert not any(modes)
@@ -149,7 +149,7 @@ def test_native_positive_hysteresis_is_independent_of_margin_options(settings):
   assert h.run(40)[-1]
   speeds = [51., 50., 48., 47.9, 50., 51.99, 52.]
   assert [h.step(kph=speed) for speed in speeds] == [True, True, True, False, False, False, True]
-  assert h.planner.effective_lane_speed == 50
+  assert h.planner.useLaneLineSpeedApply == 50
 
 
 @pytest.mark.parametrize('settings', [OFF, ACTUAL, SHADOW], ids=['off', 'actual', 'shadow'])
@@ -196,14 +196,28 @@ def test_shadow_can_still_record_laneless_candidates_without_changing_the_path()
   np.testing.assert_array_equal(h.planner.path_xyz[:, 1], np.zeros(33))
 
 
-def test_preference_changes_follow_explicit_opt_in_without_writing_native_zero():
+def test_preference_changes_never_select_another_base_path_or_write_native_zero():
   h = Harness(ACTUAL, lane_speed=0)
   modes = []
   for settings in (ACTUAL, OFF, SHADOW, ACTUAL):
     h.settings = dict(settings)
     modes = h.run(40)
-    actual = settings == ACTUAL
-    assert h.planner.effective_lane_speed == (30 if actual else 0)
-    assert modes[-1] == actual
+    assert h.planner.useLaneLineSpeedApply == 0
+    assert not any(modes)
     assert h.planner.margin_applied == 0.
     assert h.params.values['UseLaneLineSpeed'] == 0
+
+
+@pytest.mark.parametrize('yellow', [0, 5, 10])
+@pytest.mark.parametrize('nearby', [0, 5, 10])
+@pytest.mark.parametrize('shadow', [0, 1])
+@pytest.mark.parametrize('hold', [0, 1])
+def test_native_zero_model_path_for_every_position_preference_combination(yellow, nearby, shadow, hold):
+  h = Harness({'YellowLineBiasCm':yellow, 'NearbyVehicleBiasCm':nearby,
+               'LateralMarginShadow':shadow}, lane_speed=0)
+  h.response_settings['DriverPositionHold'] = hold
+  h.planner.useLaneLineMode = True
+  assert not any(h.run(40))
+  assert h.planner.margin_applied == h.planner.driver_position_applied == 0.
+  np.testing.assert_array_equal(h.planner.path_xyz[:,1], np.zeros(33))
+  assert h.params.values['UseLaneLineSpeed'] == 0

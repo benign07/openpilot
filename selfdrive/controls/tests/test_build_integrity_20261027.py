@@ -34,7 +34,7 @@ def original_class(name):
   return scope[name]()
 
 
-def test_static_help_matches_the_published_runtime_replacement_result_exactly():
+def test_settings_preserve_published_contract_except_explicit_model_mode_help():
   from openpilot.selfdrive.carrot.server.services.settings import inject_driving_preferences
   from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES,CRUISE_BUTTON_PREFERENCES,RESPONSE_PREFERENCES
   raw=original('selfdrive/carrot/server/services/settings.py')
@@ -43,7 +43,15 @@ def test_static_help_matches_the_published_runtime_replacement_result_exactly():
   exec(compile(ast.Module(body=[node],type_ignores=[]),'published29f0_settings','exec'),scope)
   fixture=json.loads((ROOT/'selfdrive/carrot_settings.json').read_text(encoding='utf8'))
   a=scope['inject_driving_preferences'](copy.deepcopy(fixture));b=inject_driving_preferences(copy.deepcopy(fixture))
-  assert json.dumps(a,sort_keys=True,ensure_ascii=False).encode()==json.dumps(b,sort_keys=True,ensure_ascii=False).encode()
+  old={p['name']:p for p in a['params']}
+  normalized=copy.deepcopy(b)
+  changed={'DriverPositionHold','YellowLineBiasCm','NearbyVehicleBiasCm'}
+  for option in normalized['params']:
+    if option['name'] in changed:
+      for field in ('descr','edescr','cdescr'):
+        assert '모델 모드' in option[field] and '30km/h부터' not in option[field]
+        option[field]=old[option['name']][field]
+  assert json.dumps(a,sort_keys=True,ensure_ascii=False).encode()==json.dumps(normalized,sort_keys=True,ensure_ascii=False).encode()
   assert inject_driving_preferences(copy.deepcopy(b))==b
 
 

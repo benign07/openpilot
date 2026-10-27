@@ -145,19 +145,13 @@ class LateralPlanner:
     #lane_change_prob = self.LP.l_lane_change_prob + self.LP.r_lane_change_prob
     #self.DH.update(sm['carState'], md, sm['carControl'].latActive, lane_change_prob, sm)
 
-    # Explicit owner opt-in: actual margins also select stock lane following
-    # from 30 km/h when the native setting is disabled. Respect an explicitly
-    # positive native threshold; shadow/off never select another base path.
-    margin_active = (self.margin_supported and not self.margin_settings['LateralMarginShadow'] and
-                     any(self.margin_settings[k] for k in ('YellowLineBiasCm', 'NearbyVehicleBiasCm')))
-    margin_active = margin_active or (self.margin_supported and self.response_settings['DriverPositionHold'])
-    self.effective_lane_speed = (30 if margin_active and self.lane_speed_setting == 0 and self.useLaneLineSpeedApply == 0
-                                 else self.useLaneLineSpeedApply)
-    if self.effective_lane_speed == 0 or self.laneless_only:
+    # Stock default selection: native zero is model mode. Position preferences
+    # never select another base path; explicit native lane settings still work.
+    if self.useLaneLineSpeedApply == 0 or self.laneless_only:
       self.useLaneLineMode = False
-    elif speed_kph >= self.effective_lane_speed + 2:
+    elif speed_kph >= self.useLaneLineSpeedApply + 2:
       self.useLaneLineMode = True
-    elif speed_kph < self.effective_lane_speed - 2:
+    elif speed_kph < self.useLaneLineSpeedApply - 2:
       self.useLaneLineMode = False
 
     # Turn off lanes during lane change
@@ -223,7 +217,7 @@ class LateralPlanner:
       self.margin_applied=self.margin.update(self.margin_settings,sm['radarState'],now_ns=now_ns,
         radar_ns=int(sm.logMonoTime['radarState']),valid=valid,
         lane_mode=self.lanelines_active and abs(self.curve_speed)>self.lane_curve_threshold,
-        native_lane_enabled=self.effective_lane_speed != 0,
+        native_lane_enabled=self.useLaneLineSpeedApply != 0,
         lat_active=sm['carControl'].latActive,blinkers=cs.leftBlinker or cs.rightBlinker,
         steering_pressed=cs.steeringPressed or (position_enabled and self.driver_position_hold.released_ns is not None),
         maneuver=md.meta.desire!=log.Desire.none or carrot.atc_active,
@@ -257,9 +251,9 @@ class LateralPlanner:
             'lane_mode_gate':bool(self.lanelines_active and abs(self.curve_speed)>self.lane_curve_threshold),
             'lat_active':bool(sm['carControl'].latActive),'input_valid':bool(valid),
             'curve_speed':float(self.curve_speed),'lane_curve_threshold':float(self.lane_curve_threshold),
-            'native_lane_speed':float(self.useLaneLineSpeedApply),'effective_lane_speed':float(self.effective_lane_speed),
+            'native_lane_speed':float(self.useLaneLineSpeedApply),'effective_lane_speed':float(self.useLaneLineSpeedApply),
             'lane_speed_setting':int(self.lane_speed_setting),
-            'lane_source':('margin_owner_opt_in' if self.effective_lane_speed != self.useLaneLineSpeedApply else 'runtime'),
+            'lane_source':'runtime',
             'speed_mps':float(v_ego_car),'curvature':float(measured_curvature),
             'corridor':corridor,'qualification':self.margin.evidence,
             'left_occupied':bool(cs.leftBlindspot),'right_occupied':bool(cs.rightBlindspot),

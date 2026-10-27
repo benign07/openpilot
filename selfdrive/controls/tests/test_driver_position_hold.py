@@ -81,21 +81,21 @@ def test_curved_projected_footprint_and_total_legacy_bound_are_not_relaxed():
   assert h.reason=='holding_3s'
 
 
-def test_actual_planner_integration_selects_native_lane_path_and_never_changes_native_setting():
+def test_actual_planner_hold_requires_explicit_native_lane_path_and_preserves_setting():
   import importlib.util
   path=Path(__file__).with_name('test_lateral_margin_mode_audit.py')
   spec=importlib.util.spec_from_file_location('position_hold_planner_harness',path)
   harness=importlib.util.module_from_spec(spec);spec.loader.exec_module(harness)
-  h=harness.Harness(harness.OFF,lane_speed=0)
+  h=harness.Harness(harness.OFF,lane_speed=50)
   h.response_settings['DriverPositionHold']=1
   h.run(40,centre=0.)
-  assert h.planner.effective_lane_speed==30 and h.planner.lanelines_active
+  assert h.planner.useLaneLineSpeedApply==50 and h.planner.lanelines_active
   for i in range(15):h.step(centre=-.08*min(1.,i/4),pressed=True)
   h.step(centre=-.08)
   assert h.planner.driver_position_applied==pytest.approx(.08)
   for i in range(160):h.step(centre=-.08)
   assert h.planner.driver_position_applied==0.
-  assert h.params.values['UseLaneLineSpeed']==0
+  assert h.params.values['UseLaneLineSpeed']==50
 
 
 @pytest.mark.parametrize('changes',[{'valid':False},{'probabilities':[.7,.95]},

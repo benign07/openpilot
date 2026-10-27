@@ -100,38 +100,48 @@ def main():
         active_values.append(active.margin_applied)
       assert baseline.lanelines_active and active_values[-1]<-.049
       assert max(abs(v) for v in active_values)<=.05+1e-9
-      # The owner explicitly opted into stock lane following from 30 km/h
-      # when actual margins are on and native selection is disabled.
+      # Runtime zero always selects the model path, even with active margins.
       cs.useLaneLineSpeed=0
       now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm};active.readParams=0
       active.update(sm,carrot)
-      assert not active.lanelines_active and active.effective_lane_speed==0
+      assert not active.lanelines_active and active.useLaneLineSpeedApply==0
       assert active.margin_applied==0 and active.margin.reason=='native_lane_mode_disabled'
       assert params.get_int('UseLaneLineSpeed')==5
       params.put_int('UseLaneLineSpeed',0)
       active.readParams=0;active.update(sm,carrot)
-      assert active.lanelines_active and active.effective_lane_speed==30
+      assert not active.lanelines_active and active.useLaneLineSpeedApply==0
       assert params.get_int('UseLaneLineSpeed')==0
       active.margin_preferences.set('YellowLineBiasCm',0);active.readParams=0
       active.update(sm,carrot)
-      assert not active.lanelines_active and active.margin_applied==0 and active.effective_lane_speed==0
-      # OFF/shadow retain the native-zero model path; actual is a deliberate
-      # lane-mode opt-in, still bounded by all existing margin conditions.
+      assert not active.lanelines_active and active.margin_applied==0 and active.useLaneLineSpeedApply==0
+      # OFF, shadow and active position preferences share the same native-zero
+      # path and linked solver; none changes the steering base mode.
       active.margin_preferences.set('YellowLineBiasCm',5)
-      for planner in (baseline,off,shadow,active):planner.readParams=0
+      # Make a wrong lane substitution observable in the path/solver bytes,
+      # not merely the useLaneLines flag. Also cover position hold with the
+      # real linked solver, separately from the Python-only option matrix.
+      for line,y in zip(md.laneLines,(-4.95,-1.55,1.85,5.25)):line.y=[y]*33
+      zero_hold=lp.LateralPlanner(cp)
+      zero_hold.margin_preferences=DrivingPreferences(Path(directory)/'zero-hold-margin.json')
+      zero_hold.response_preferences=ResponsePreferences(Path(directory)/'zero-hold-response.json')
+      zero_hold.response_preferences.set('DriverPositionHold',1)
+      for planner in (baseline,off,shadow,active,zero_hold):planner.readParams=0
       for i in range(160):
         now[0]+=50_000_000;sm.logMonoTime={k:now[0] for k in sm}
-        for planner in (baseline,off,shadow,active):planner.update(sm,carrot)
-        for planner in (off,shadow):
-          assert not planner.lanelines_active and planner.effective_lane_speed==0
+        for planner in (baseline,off,shadow,active,zero_hold):planner.update(sm,carrot)
+        for planner in (off,shadow,active,zero_hold):
+          assert not planner.lanelines_active and planner.useLaneLineSpeedApply==0
           assert planner.margin_applied==0
+          assert planner.driver_position_applied==0
           assert planner.path_xyz.tobytes()==baseline.path_xyz.tobytes()
+          assert planner.lat_mpc.x_sol.tobytes()==baseline.lat_mpc.x_sol.tobytes()
         assert off.lat_mpc.x_sol.tobytes()==baseline.lat_mpc.x_sol.tobytes()
         assert shadow.lat_mpc.x_sol.tobytes()==baseline.lat_mpc.x_sol.tobytes()
-        assert active.lanelines_active and active.effective_lane_speed==30
+        assert not active.lanelines_active and active.useLaneLineSpeedApply==0
+        assert active.lat_mpc.x_sol.tobytes()==baseline.lat_mpc.x_sol.tobytes()
         assert active.lat_mpc.solution_status==0 and np.isfinite(active.lat_mpc.x_sol).all()
         assert abs(active.margin_applied)<=.05+1e-9
-      assert active.margin_applied<-.049
+      assert active.margin_applied==0.
       assert shadow.margin.value<-.049
       # Derive the sign from the exact production controlsd convention.
       import ast, math
@@ -152,6 +162,7 @@ def main():
       # Real native-path hold after a synthetic 6cm lane-relative movement.
       # No actuator/ECU model: solver feasibility and timing only.
       sm['controlsState'].curvature=0.
+      for line,y in zip(md.laneLines,(-5.1,-1.7,1.7,5.1)):line.y=[y]*33
       params.put_int('UseLaneLineSpeed',5);cs.useLaneLineSpeed=5
       hold=lp.LateralPlanner(cp)
       hold.margin_preferences=DrivingPreferences(Path(directory)/'hold-margin.json')
@@ -191,7 +202,8 @@ def main():
       'baseline_source_sha256':hashlib.sha256(raw).hexdigest(),
       'actual_native_lateral_cycles':160,'off_path_and_solver_byte_identical':True,
       'shadow_path_and_solver_byte_identical':True,'active_shift_bounded':True,
-      'owner_actual_margin_native_zero_lane_opt_in_preserved':True,'laneless_exit_reset':True,
+      'native_zero_model_mode_independent_of_preferences':True,'laneless_exit_reset':True,
+      'native_zero_asymmetric_corridor_and_position_hold_solver_bytes_identical':True,
       'laneless_off_shadow_path_byte_identical':True,
       'laneless_shadow_byte_identical':True,'production_curvature_sign_veto':True,
       'non_lx3_isolated':True,'diagnostic_records':len(records),
