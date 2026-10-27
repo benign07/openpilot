@@ -18,7 +18,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.approach_comfort import (ApproachComfort, ApproachSettings, apply_approach_ceiling,
                                                             LongitudinalEvidence, traffic_ceiling_comparison,
-                                                            DrivingPreferences, LaunchFollow, DepartureThresholdReview)
+                                                            DrivingPreferences, LaunchFollow)
 from openpilot.selfdrive.controls.lib.flexible_gap import FlexibleGapSettings
 
 
@@ -117,7 +117,6 @@ class LongitudinalPlanner:
     self.driving_preferences = DrivingPreferences()
     self.drive_settings = self.driving_preferences.values.copy()
     self.launch_follow = LaunchFollow(dt)
-    self.departure_review = DepartureThresholdReview()
     self.approach_settings = ApproachSettings()
     self.flex_gap_settings = FlexibleGapSettings()
     self.approach_param_time = 1.0
@@ -343,16 +342,6 @@ class LongitudinalPlanner:
     vEgoStopping = self.params.get_float("VEgoStopping") * 0.01
     action_t =  longitudinalActuatorDelay + DT_MDL
 
-    # Passive comparison only. Review found a low-speed re-stop edge case;
-    # neither a setting nor this result may change actual shouldStop.
-    candidate_stop_threshold = self.departure_review.observe(vEgoStopping,sm['radarState'],
-      enabled=self.approach_supported,
-      eligible=launch_eligible and self.mpc.mode=='acc' and not carrot.soft_hold_active and
-               not sm['carState'].cruiseState.standstill and not self.fcw and
-               all(sm.valid[k] and sm.alive[k] and 0<=now_ns-int(sm.logMonoTime[k])<=200_000_000
-                   for k in ('carControl','controlsState','selfdriveState')),
-      stamp_ns=int(sm.logMonoTime['radarState']),v_ego=v_ego,standstill=sm['carState'].standstill,
-      starting_speed=self.CP.vEgoStarting,stop_distance=carrot.stop_distance,planned_accel=self.a_desired)
     output_a_target_mpc, output_should_stop_mpc, output_v_target_mpc, _ = get_accel_from_plan(self.v_desired_trajectory, self.a_desired_trajectory, CONTROL_N_T_IDX,
                                                                         action_t=action_t, vEgoStopping=vEgoStopping)
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
@@ -396,6 +385,7 @@ class LongitudinalPlanner:
                      'flexible_enabled': bool(self.flex_gap_settings.enabled), 'flexible_minimum': int(self.flex_gap_settings.minimum_ratio),
                      'driving_preferences': dict(self.drive_settings)},
         'state': {'v_ego': float(v_ego), 'a_ego': float(sm['carState'].aEgo),
+                  'planner_mode':str(self.mpc.mode),'fcw':bool(self.fcw),'planned_accel':float(self.a_desired),
                   'standstill': bool(sm['carState'].standstill), 'cruise_standstill': bool(sm['carState'].cruiseState.standstill),
                   'soft_hold': bool(carrot.soft_hold_active), 'brake': bool(sm['carState'].brakePressed),
                   'gas': bool(sm['carState'].gasPressed), 'long_active': bool(sm['carControl'].longActive),
@@ -421,12 +411,13 @@ class LongitudinalPlanner:
         'comparison': evidence_comparison, 'actual_arm': int(self.approach_settings.traffic),
         'output': {'should_stop': bool(self.output_should_stop), 'a_target': float(self.output_a_target),
                    'source': str(self.mpc.source), 'v_target': float(self.output_v_target_now),
-                   'actuator_delay': float(longitudinalActuatorDelay), 'v_ego_stopping': float(vEgoStopping)},
+                   'actuator_delay': float(longitudinalActuatorDelay), 'v_ego_stopping': float(vEgoStopping),
+                   'stop_decision':{'contract':2,'update_mono_ns':int(now_ns),
+                     'v_at_action':float(np.interp(action_t,CONTROL_N_T_IDX,self.v_desired_trajectory)),
+                     'v_at_action_plus_1s':float(np.interp(action_t+1.,CONTROL_N_T_IDX,self.v_desired_trajectory)),
+                     'mpc_should_stop':bool(output_should_stop_mpc),'e2e_should_stop':bool(output_should_stop_e2e)}},
         'problem': self.mpc.evidence_problem,
         }
-        self.long_evidence_pending['output']['departure_review']={
-          'candidate_stop_threshold':float(candidate_stop_threshold),'reason':self.departure_review.reason,
-          'applied_to_control':False,'qualification':'unqualified_transient_restop_candidate_shadow_only'}
         self.long_evidence_pending['snapshot_us'] = (time.perf_counter_ns() - snapshot_started) / 1000.
       except Exception as exc:
         self.long_evidence.note_error(exc)

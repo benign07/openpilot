@@ -162,6 +162,14 @@ class UIState:
       0 <= time.monotonic() - self.sm.logMonoTime['carControl'] / 1e9 < 0.5 and
       self.sm['carControl'].latActive
     )
+    if self.lat_active and self.sm['carParams'].carFingerprint=='HYUNDAI_PALISADE_LX3_HEV':
+      # A host request can be waiting at the controller's angle/manual gate.
+      # Use its fresh prepared output, not permission/intent, for the green
+      # indicator. This is still not an ECU ACK or measured steering torque.
+      output=self.sm['carOutput'].actuatorsOutput
+      self.lat_active=bool(self.sm.alive['carOutput'] and self.sm.valid['carOutput'] and
+        0<=time.monotonic()-self.sm.logMonoTime['carOutput']/1e9<.5 and
+        output.torqueOutputCan>=1. and not getattr(output,'lx3AngleLimited',False))
     if self.started and self.sm.updated["selfdriveState"]:
       ss = self.sm["selfdriveState"]
       state = ss.state

@@ -38,6 +38,29 @@ def max_abs(a, b):
   return a if abs(a) > abs(b) else b
 
 
+def path_offset_limits(corridor, legacy_offset, occupied=(False,False), *, strict=False):
+  """One LX3 clearance envelope for applying AND withdrawing preferences.
+
+  Strict qualification rejects uncertain corridors. Withdrawal still enforces
+  every available finite bound. This is not measured free space.
+  """
+  if strict and not corridor:return None
+  lower,upper=-.1,.1
+  for left,right,path,yaw in corridor:
+    if not all(math.isfinite(v) for v in (left,right,path,yaw)) or (strict and not 3.<=right-left<=4.):
+      if strict:return None
+      continue
+    footprint=1.12+2.53*abs(math.sin(yaw))
+    lower=max(lower,left+footprint+.30-path)
+    upper=min(upper,right-footprint-.30-path)
+  if math.isfinite(legacy_offset):
+    lower=max(lower,-.4-legacy_offset);upper=min(upper,.4-legacy_offset)
+  elif strict:return None
+  if occupied[0]:lower=max(0.,lower)
+  if occupied[1]:upper=min(0.,upper)
+  return lower,upper
+
+
 class LateralMargin:
   """Small optional path preference, not obstacle avoidance or free-space proof.
 
@@ -71,16 +94,7 @@ class LateralMargin:
     self.hold = [0, 0]
     self.value += max(-0.05*self.dt, min(0.05*self.dt, -self.value))
     left_occupied,right_occupied,corridor,legacy_offset=self.withdraw_context
-    lower,upper=-.1,.1
-    for left,right,path,yaw in corridor:
-      if all(math.isfinite(v) for v in (left,right,path,yaw)):
-        footprint=1.12+2.53*abs(math.sin(yaw))
-        lower=max(lower,left+footprint+.30-path)
-        upper=min(upper,right-footprint-.30-path)
-    if math.isfinite(legacy_offset):
-      lower=max(lower,-.4-legacy_offset);upper=min(upper,.4-legacy_offset)
-    if left_occupied:lower=max(0.,lower)
-    if right_occupied:upper=min(0.,upper)
+    lower,upper=path_offset_limits(corridor,legacy_offset,(left_occupied,right_occupied))
     self.value=max(lower,min(upper,self.value)) if lower<=0.<=upper else 0.
     self.evidence = {'qualified':False,'lower':lower,'upper':upper,
                      'occupied':[left_occupied,right_occupied]}
@@ -128,16 +142,11 @@ class LateralMargin:
     # Every row is (left/right line y, final base path y, path heading), aligned
     # spatially for the now..2s path. A conservative2.24m lateral envelope plus
     #0.30m line margin and heading projection is used; not a mirror-clearance proof.
-    lower, upper = -0.10, 0.10
-    for left, right, path, yaw in corridor:
-      if not all(math.isfinite(v) for v in (left,right,path,yaw)) or not 3.0<=right-left<=4.0:
-        return self.withdraw('corridor_unqualified', shadow)
-      footprint = 1.12+2.53*abs(math.sin(yaw))
-      lower = max(lower, left+footprint+0.30-path)
-      upper = min(upper, right-footprint-0.30-path)
+    limits=path_offset_limits(corridor,legacy_offset,strict=True)
+    if limits is None:return self.withdraw('corridor_unqualified',shadow)
+    lower,upper=limits
     # Do not repair an already out-of-corridor stock path through this preference.
     # No new term is permitted to extend the legacy total0.4m offset bound.
-    lower, upper = max(lower,-0.4-legacy_offset), min(upper,0.4-legacy_offset)
     if not lower<=0.0<=upper:
       return self.reset('base_path_outside_margin')
     occupied = [bool(left_occupied), bool(right_occupied)]
@@ -233,6 +242,7 @@ class DriverPositionHold:
     self.last_ns = None
     self.positions = []
     self.press_variance = 0.
+    self.bounds_context = ([],0.,(False,False))
     self.reason = reason
     return 0.0
 
@@ -240,6 +250,8 @@ class DriverPositionHold:
     self.press_since = self.press_offset = self.released_ns = None
     self.positions = []
     self.value += max(-.05*dt,min(.05*dt,-self.value))
+    lower,upper=path_offset_limits(*self.bounds_context)
+    self.value=max(lower,min(upper,self.value)) if lower<=0.<=upper else 0.
     self.reason=reason
     return self.value
 
@@ -248,6 +260,7 @@ class DriverPositionHold:
     if not enabled:return self.reset('off')
     if not lane_mode or not lat_active:return self.reset('inactive_or_unqualified')
     if blinkers or maneuver:return self.reset('maneuver')
+    self.bounds_context=(corridor,legacy_offset,occupied)
     dt=.05 if self.last_ns is None else (now_ns-self.last_ns)/1e9
     self.last_ns=now_ns
     if not 0<dt<=.2:return self.withdraw('input_gap',.05)
@@ -259,16 +272,9 @@ class DriverPositionHold:
         not all(math.isfinite(v) for v in (*probabilities,*stds,observed_position,legacy_offset)) or
         min(probabilities)<.8 or max(stds)>.15):
       return self.withdraw('lane_quality',dt)
-    lower,upper=-.1,.1
-    for left,right,path,yaw in corridor:
-      if not all(math.isfinite(v) for v in (left,right,path,yaw)) or not 3.<=right-left<=4.:
-        return self.withdraw('corridor_quality',dt)
-      footprint=1.12+2.53*abs(math.sin(yaw))
-      lower=max(lower,left+footprint+.30-path)
-      upper=min(upper,right-footprint-.30-path)
-    lower,upper=max(lower,-.4-legacy_offset),min(upper,.4-legacy_offset)
-    if occupied[0]:lower=max(0.,lower)
-    if occupied[1]:upper=min(0.,upper)
+    limits=path_offset_limits(corridor,legacy_offset,occupied,strict=True)
+    if limits is None:return self.withdraw('corridor_quality',dt)
+    lower,upper=limits
     if not lower<=0.<=upper:return self.reset('base_path_outside_margin')
     previous=list(self.positions)
     self.positions=(self.positions+[observed_position])[-6:]

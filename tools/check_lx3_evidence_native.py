@@ -83,6 +83,12 @@ def main():
     try:
       planner.update(sm,carrot)
       assert planner.long_evidence_pending is not None,planner.long_evidence.last_error
+      decision=planner.long_evidence_pending['output']['stop_decision']
+      assert decision['contract']==2 and decision['update_mono_ns']<=time.monotonic_ns()
+      assert all(np.isfinite(decision[k]) for k in ('v_at_action','v_at_action_plus_1s'))
+      assert isinstance(decision['mpc_should_stop'],bool) and isinstance(decision['e2e_should_stop'],bool)
+      assert all(k in planner.long_evidence_pending['state'] for k in ('planner_mode','fcw','planned_accel'))
+      result['real_planner_stop_comparison_contract2']=True
       # Below0.1 the turn helper aliases its input list. Force the real
       # approach to lower the limit and require the recorded table to stay1.3.
       from openpilot.selfdrive.controls.lib.approach_comfort import ApproachRequest

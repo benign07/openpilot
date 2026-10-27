@@ -72,7 +72,7 @@ class Harness:
                   'CAMERA_OFFSET': 0., 'Params': lambda: self.params,
                   'log': NS(Desire=NS(none=0, laneChangeLeft=3, laneChangeRight=4))}
     definitions('common/filter_simple.py', ['FirstOrderFilter'], lane_scope)
-    definitions('selfdrive/controls/lib/lane_planner_2.py', ['LanePlanner', 'LateralMargin', 'DriverPositionHold'], lane_scope)
+    definitions('selfdrive/controls/lib/lane_planner_2.py', ['LanePlanner', 'LateralMargin', 'DriverPositionHold','path_offset_limits'], lane_scope)
     self.response_settings={'DriverPositionHold':0,'EarlyLeadStart':0}
     scope = {
       'np': np, 'DT_MDL': DT, 'TRAJECTORY_SIZE': 33, 'LAT_MPC_N': 16, 'MIN_SPEED': 1.,

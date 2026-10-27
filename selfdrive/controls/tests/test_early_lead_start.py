@@ -4,7 +4,8 @@ import ast
 from pathlib import Path
 import numpy as np
 import pytest
-from openpilot.selfdrive.controls.lib.approach_comfort import DepartureThresholdReview,ResponsePreferences,DrivingPreferences
+from openpilot.selfdrive.controls.lib.approach_comfort import ResponsePreferences,DrivingPreferences
+from tools.lx3_departure_review import DepartureThresholdReview
 
 path=Path(__file__).resolve().parents[3]/'selfdrive/controls/lib/drive_helpers.py'
 node=next(n for n in ast.parse(path.read_text(encoding='utf8')).body if isinstance(n,ast.FunctionDef) and n.name=='get_accel_from_plan')
@@ -102,7 +103,36 @@ def test_unqualified_candidate_cannot_be_enabled_or_change_actual_planner_stop_t
   assert 'EarlyLeadStart' not in RESPONSE_PREFERENCES
   source=path.with_name('longitudinal_planner.py')
   tree=ast.parse(source.read_text(encoding='utf8'))
+  assert 'DepartureThresholdReview' not in source.read_text(encoding='utf8')
+  assert 'departure_review' not in source.read_text(encoding='utf8')
   calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='get_accel_from_plan']
   assert len(calls)==1
   threshold=next(k.value for k in calls[0].keywords if k.arg=='vEgoStopping')
   assert isinstance(threshold,ast.Name) and threshold.id=='vEgoStopping'
+
+
+def test_pc_comparison_rejects_missing_fields_and_resets_across_logging_cooldown():
+  from tools.lx3_departure_review import compare_record
+  h=DepartureThresholdReview()
+  assert compare_record({},h,starting_speed=.1)['status']=='missing_or_invalid_record'
+  lead=dict(status=True,radar=True,radarTrackId=7,modelProb=.95,dRel=6.,vRel=0.,vLead=0.,aLeadK=0.)
+  state=dict(planner_mode='acc',approach_eligible=True,long_active=True,can_valid=True,can_timeout=False,
+    reset_state=False,force_decel=False,gas=False,brake=False,soft_hold=False,cruise_standstill=False,
+    fcw=False,v_ego=0.,standstill=True,planned_accel=.2)
+  frame=dict(state=state,output=dict(v_ego_stopping=.5,stop_decision=dict(contract=2,update_mono_ns=10_000_000_000,
+    v_at_action=.2,v_at_action_plus_1s=.3,mpc_should_stop=True)),
+    producer='p',cycle=10,plan_mono_ns=10_000_000_000,leads=[lead,{**lead,'status':False}],settings=dict(stop_distance=5.5),
+    services={k:dict(mono_ns=10_000_000_000,valid=True,alive=True) for k in
+      ('carState','carControl','radarState','modelV2','controlsState','selfdriveState')})
+  assert compare_record(frame,h,starting_speed=.1)['status']=='same_recorded_decision'
+  frame['cycle']=31
+  assert compare_record(frame,h,starting_speed=.1)['status']=='recording_gap_reset'
+  frame['output']['stop_decision']['mpc_should_stop']=False
+  assert compare_record(frame,h,starting_speed=.1)['status']=='baseline_decision_mismatch'
+  frame['output']['stop_decision']['mpc_should_stop']=True
+  frame['plan_mono_ns']+=500_000_000  # Delayed publication does not change eligibility.
+  frame['cycle']+=1
+  assert compare_record(frame,h,starting_speed=.1)['status']=='same_recorded_decision'
+  assert h.previous is not None
+  del frame['output']['stop_decision']['update_mono_ns']
+  assert compare_record(frame,h,starting_speed=.1)['status']=='missing_or_invalid_record'

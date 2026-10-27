@@ -14,7 +14,7 @@ def main():
   assert os.environ.get('GITHUB_ACTIONS')=='true' or (args.isolated_local and
     platform.machine().lower() in ('x86_64','amd64') and not Path('/TICI').exists())
   from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc,N,T_IDXS
-  from openpilot.selfdrive.controls.lib.approach_comfort import DepartureThresholdReview
+  from tools.lx3_departure_review import DepartureThresholdReview
   from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N,get_accel_from_plan
   from openpilot.selfdrive.modeld.constants import ModelConstants
   c=NS(get_T_FOLLOW=lambda *a:.7,dynamic_t_follow=lambda tf,*a:tf,flex_gap_nominal_tf=.7,

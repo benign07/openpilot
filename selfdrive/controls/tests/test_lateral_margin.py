@@ -9,9 +9,9 @@ import pytest
 
 def engine():
   path=Path(__file__).resolve().parents[3]/'selfdrive/controls/lib/lane_planner_2.py'
-  node=next(n for n in ast.parse(path.read_text(encoding='utf-8')).body if isinstance(n,ast.ClassDef) and n.name=='LateralMargin')
+  nodes=[n for n in ast.parse(path.read_text(encoding='utf-8')).body if isinstance(n,(ast.ClassDef,ast.FunctionDef)) and n.name in ('LateralMargin','path_offset_limits')]
   scope={'math':math,'DT_MDL':.05}
-  exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),scope)
+  exec(compile(ast.Module(body=nodes,type_ignores=[]),str(path),'exec'),scope)
   return scope['LateralMargin']()
 
 

@@ -27,6 +27,7 @@ DRIVER_TORQUE_FILTER_TAU = 0.12
 PRE_OVERRIDE_PREDICTION_TIME = 0.15
 PRE_OVERRIDE_START_RATIO = LX3_DRIVER_YIELD_RATIO
 PRE_OVERRIDE_MAX_TORQUE_DELTA = -10.0
+PRE_OVERRIDE_FILTERED_MIN_RATIO = 0.65
 
 vibrate_intervals = [
   (0.0, 0.5),
@@ -185,7 +186,6 @@ class CarController(CarControllerBase):
     self.lx3_recovery_duration = 0.0
     self.lx3_pre_override_frames = 0
     self.lx3_pre_override_counter = None
-    self.lx3_yield_hold = False
     self.lx3_recovery_from_yield = False
 
     self.canfd_debug = 0
@@ -336,18 +336,23 @@ class CarController(CarControllerBase):
 
     torque_threshold = max(self.params.STEER_THRESHOLD, 1.0)
     driver_torque_abs = abs(float(CS.out.steeringTorque))
+    # Match stock Carrot's signed filtering on LX3: alternating sensor noise
+    # must cancel BEFORE taking the magnitude used for predictive yielding.
+    driver_torque_sample = float(CS.out.steeringTorque) if lx3_driver_recovery else driver_torque_abs
     if not lat_active or (lx3_driver_recovery and not self.lx3_angle_active_last):
-      self.driver_torque_filtered = driver_torque_abs
-      self.driver_torque_filtered_prev = driver_torque_abs
+      self.driver_torque_filtered = driver_torque_sample
+      self.driver_torque_filtered_prev = driver_torque_sample
     else:
       torque_filter_alpha = DT_CTRL / (DRIVER_TORQUE_FILTER_TAU + DT_CTRL)
       self.driver_torque_filtered_prev = self.driver_torque_filtered
-      self.driver_torque_filtered += torque_filter_alpha * (driver_torque_abs - self.driver_torque_filtered)
+      self.driver_torque_filtered += torque_filter_alpha * (driver_torque_sample - self.driver_torque_filtered)
 
-    driver_torque_rate = max(0.0, (self.driver_torque_filtered - self.driver_torque_filtered_prev) / DT_CTRL)
-    torque_ratio = self.driver_torque_filtered / torque_threshold
+    filtered_magnitude = abs(self.driver_torque_filtered)
+    previous_magnitude = abs(self.driver_torque_filtered_prev)
+    driver_torque_rate = max(0.0, (filtered_magnitude - previous_magnitude) / DT_CTRL)
+    torque_ratio = filtered_magnitude / torque_threshold
     predicted_torque_ratio = (
-      self.driver_torque_filtered + driver_torque_rate * PRE_OVERRIDE_PREDICTION_TIME
+      filtered_magnitude + driver_torque_rate * PRE_OVERRIDE_PREDICTION_TIME
     ) / torque_threshold
     pre_override_yield = float(np.interp(
       predicted_torque_ratio,
@@ -361,7 +366,7 @@ class CarController(CarControllerBase):
       elif counter is not None and counter != self.lx3_pre_override_counter:
         self.lx3_pre_override_frames = min(4, self.lx3_pre_override_frames+1)
       self.lx3_pre_override_counter = counter
-      if self.lx3_pre_override_frames < 4:
+      if self.lx3_pre_override_frames < 4 or torque_ratio <= PRE_OVERRIDE_FILTERED_MIN_RATIO:
         pre_override_yield = 0.0
     recovery_allowed = False
 
@@ -371,20 +376,20 @@ class CarController(CarControllerBase):
       self.override_release_frames = 0
       torque_delta = -20.0
       if lx3_driver_recovery:
-        self.lx3_yield_hold = self.lx3_recovery_from_yield = True
+        self.lx3_recovery_from_yield = True
     elif pre_override_yield > 0.0:
       # Start handing off gently before steeringPressed flips to avoid a sharp torque drop.
       torque_delta = PRE_OVERRIDE_MAX_TORQUE_DELTA * pre_override_yield
       if lx3_driver_recovery:
-        self.lx3_yield_hold = self.lx3_recovery_from_yield = True
+        self.override_latched = self.lx3_recovery_from_yield = True
     elif self.lkas_max_torque >= self.angle_max_torque:
       # Once fully recovered, hold full authority until the next driver override.
       torque_delta = 0.0
-    elif lx3_driver_recovery and (self.override_latched or self.lx3_yield_hold):
+    elif lx3_driver_recovery and self.override_latched:
       # Separate entry/release boundaries prevent a holding hand from repeatedly
       # triggering yield and recovery. Steady light force does not block starts.
       if driver_torque_abs <= LX3_DRIVER_RELEASE_RATIO*torque_threshold:
-        self.override_latched = self.lx3_yield_hold = False
+        self.override_latched = False
         recovery_allowed = True
       else:
         torque_delta = 0.0
@@ -464,13 +469,13 @@ class CarController(CarControllerBase):
       self.repeated_override_count = 0
       self.override_latched = False
       self.override_release_frames = 0
-      self.driver_torque_filtered = driver_torque_abs if lx3_driver_recovery else 0.0
+      self.driver_torque_filtered = driver_torque_sample if lx3_driver_recovery else 0.0
       self.driver_torque_filtered_prev = self.driver_torque_filtered
       self.lx3_recovery_active = False
       self.lx3_recovery_elapsed = 0.0
       self.lx3_pre_override_frames = 0
       self.lx3_pre_override_counter = None
-      self.lx3_yield_hold = self.lx3_recovery_from_yield = False
+      self.lx3_recovery_from_yield = False
 
     if not lat_active:
       steering_authority = 0.0

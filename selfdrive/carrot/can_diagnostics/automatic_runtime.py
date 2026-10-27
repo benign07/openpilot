@@ -55,6 +55,7 @@ PARAMS += ('C3xLiteHapticEngage','C3xLiteHapticTraffic','C3xLiteHapticLaneChange
 PARAMS += ('UseLaneLineSpeed', 'UseLaneLineCurveSpeed', 'PathOffset', 'AdjustLaneOffset',
            'LatMpcInputOffset', 'LaneLineCheck')
 PARAMS += ('OpenpilotEnabledToggle', 'RecordRoadCam', 'DisableLogging')
+PARAMS += ('LatSuspendAngleDeg',)
 
 
 def settings_snapshot(params, driving_preferences=None, cruise_button_preferences=None, response_preferences=None):

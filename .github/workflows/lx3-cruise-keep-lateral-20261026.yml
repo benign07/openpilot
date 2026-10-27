@@ -36,7 +36,7 @@ jobs:
         run: |
           set -o pipefail
           export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
-          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_driver_position_hold.py selfdrive/controls/tests/test_early_lead_start.py selfdrive/controls/tests/test_lx3_driver_recovery.py selfdrive/controls/tests/test_driver_position_review.py selfdrive/controls/tests/test_longitudinal_capture_fields.py selfdrive/controls/tests/test_response_preferences.py selfdrive/controls/tests/test_response_deployment_20261027.py selfdrive/ui/tests/test_lateral_status.py -q --junitxml=response-regression.xml 2>&1 | tee response-regression.log
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_build_integrity_20261027.py selfdrive/controls/tests/test_driver_position_hold.py selfdrive/controls/tests/test_early_lead_start.py selfdrive/controls/tests/test_lx3_driver_recovery.py selfdrive/controls/tests/test_driver_position_review.py selfdrive/controls/tests/test_longitudinal_capture_fields.py selfdrive/controls/tests/test_response_preferences.py selfdrive/controls/tests/test_response_deployment_20261027.py selfdrive/ui/tests/test_lateral_status.py -q --junitxml=response-regression.xml 2>&1 | tee response-regression.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -51,6 +51,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: true
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true

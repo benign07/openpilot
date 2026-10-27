@@ -7,8 +7,8 @@ import pytest
 
 def engine():
   path=Path(__file__).resolve().parents[3]/'selfdrive/controls/lib/lane_planner_2.py'
-  node=next(n for n in ast.parse(path.read_text(encoding='utf8')).body if isinstance(n,ast.ClassDef) and n.name=='DriverPositionHold')
-  scope={'math':math};exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),scope)
+  nodes=[n for n in ast.parse(path.read_text(encoding='utf8')).body if isinstance(n,(ast.ClassDef,ast.FunctionDef)) and n.name in ('DriverPositionHold','path_offset_limits')]
+  scope={'math':math};exec(compile(ast.Module(body=nodes,type_ignores=[]),str(path),'exec'),scope)
   return scope['DriverPositionHold']()
 
 
@@ -99,12 +99,19 @@ def test_actual_planner_integration_selects_native_lane_path_and_never_changes_n
 
 
 @pytest.mark.parametrize('changes',[{'valid':False},{'probabilities':[.7,.95]},
-  {'stds':[.2,.05]},{'observed_position':float('nan')},{'corridor':[(-1.4,1.4,0.,0.)]*3}])
+  {'stds':[.2,.05]},{'observed_position':float('nan')}])
 def test_routine_quality_failure_withdraws_gradually_without_reviving_capture(changes):
   h=engine();capture(h)
   assert step(h,10.3,**changes)==pytest.approx(.0775)
   values=[step(h,10.35+i*.05) for i in range(40)]
   assert values[-1]==0. and all(b<=a for a,b in zip(values,values[1:]))
+
+
+def test_quality_withdrawal_also_enforces_new_narrow_or_curved_corridor_bounds():
+  h=engine();capture(h)
+  assert step(h,10.3,probabilities=[.7,.95],corridor=[(-1.4,1.4,0.,0.)]*3)==0.
+  h=engine();capture(h)
+  assert 0.<=step(h,10.3,probabilities=[.7,.95],corridor=[(-1.8,1.8,0.,.15)]*3)<.002
 
 
 def test_existing_margin_withdrawal_does_not_abort_the_hold_at_the_additional_bound():

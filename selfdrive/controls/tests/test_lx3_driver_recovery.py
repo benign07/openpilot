@@ -13,10 +13,10 @@ SOURCE=ROOT/'opendbc_repo/opendbc/car/hyundai/carcontroller.py'
 BEFORE=Path(__file__).with_name('fixtures')/'lx3_driver_9b9b3d5c.txt'
 
 
-def program(before=False):
+def program(before=False, source=None):
   if before:
     return compile(BEFORE.read_text(encoding='utf8'),str(BEFORE),'exec')
-  tree=ast.parse(SOURCE.read_text(encoding='utf8'))
+  tree=ast.parse(SOURCE.read_text(encoding='utf8') if source is None else source)
   cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='CarController')
   update=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='update')
   first=next(i for i,n in enumerate(update.body) if isinstance(n,ast.Assign) and any(
@@ -47,6 +47,7 @@ class Driver:
       lx3_guard=self.lx3,angle_control=True,lat_active=active,apply_torque=0.,np=np,DT_CTRL=.01,
       DRIVER_TORQUE_FILTER_TAU=.12,PRE_OVERRIDE_PREDICTION_TIME=.15,PRE_OVERRIDE_START_RATIO=.9,
       PRE_OVERRIDE_MAX_TORQUE_DELTA=-10.,LX3_DRIVER_RELEASE_RATIO=.8)
+    scope.update(PRE_OVERRIDE_FILTERED_MIN_RATIO=.65)
     exec(self.program,scope)
     self.s.lx3_angle_active_last=scope['lat_active']
     return scope['steering_authority']
@@ -95,6 +96,47 @@ def test_hand_noise_below_pre_yield_boundary_does_not_reduce_full_assistance():
   rng=np.random.default_rng(2742);d=Driver()
   for _ in range(100):d.step(200.)
   assert all(d.step(float(rng.uniform(180,220)))==250. for _ in range(1000))
+
+
+def test_alternating_subthreshold_torque_cancels_before_predictive_yield():
+  d=Driver()
+  for _ in range(100):d.step(0.)
+  assert all(d.step(230.*(-1 if i%2 else 1))==250. for i in range(1000))
+
+
+def confirmed_press_program():
+  tree=ast.parse((ROOT/'opendbc_repo/opendbc/car/interfaces.py').read_text(encoding='utf8'))
+  cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='CarStateBase')
+  method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='update_steering_pressed')
+  scope={}
+  exec(compile(ast.Module(body=[method],type_ignores=[]),'production_press_filter','exec'),scope)
+  return scope['update_steering_pressed']
+
+
+@pytest.mark.parametrize('duration',[.1,.3,.5,1.])
+@pytest.mark.parametrize('sign',[-1.,1.])
+@pytest.mark.parametrize('mdps_period',[1,2])
+def test_force_ramp_yields_by_actual_confirmed_press_and_recovers(duration,sign,mdps_period):
+  # Host100Hz; repeat each MDPS sample for one/two ticks. This tests the
+  # production confirmation method, not physical sensor or actuator latency.
+  press=confirmed_press_program();state=NS(steering_pressed_cnt=0);d=Driver()
+  for _ in range(100):d.step(0.)
+  first_yield=first_pressed=None;values=[250.];ticks=round(duration/.01)
+  for i in range(1,ticks+51):
+    sample=1+(i-1)//mdps_period*mdps_period
+    torque=sign*300.*min(1.,sample/ticks)
+    pressed=press(state,abs(torque)>250.,5)
+    value=d.step(torque,pressed=pressed,counter=sample%256);values.append(value)
+    if pressed and first_pressed is None:first_pressed=i
+    if value<250. and first_yield is None:first_yield=i
+  assert first_yield is not None and first_yield<=first_pressed
+  assert all(-20.000001<=b-a<=0. for a,b in zip(values,values[1:]))
+  assert values[-1]==25.
+  # On rapid pushes filtering can defer yielding to confirmed steeringPressed.
+  # That confirmed path still yields immediately and by no more than20/tick.
+  if duration==.1:assert first_yield==first_pressed
+  for _ in range(20):value=d.step(sign*100.,pressed=press(state,False,5))
+  assert value==250.
 
 
 def test_noisy_holding_hand_does_not_cycle_between_full_assistance_and_minimum_ceiling():
