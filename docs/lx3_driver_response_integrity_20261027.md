@@ -78,8 +78,13 @@ Regression coverage includes the authority/C host integration, deployment
 validation, settings byte equality, original/new controller traces, signed
 noise, force ramps, fresh UI output, corridor withdrawal and PC comparison
 contracts. Linked native lateral MPC comparisons require byte-identical normal
-paths and solutions against the exact published candidate. Both native MPCs,
-Params/msgq bindings and the real evidence producer run in isolated PC CI.
+paths and solutions against the exact published candidate. Local Linux
+contracts and linked native comparisons passed. The first local response
+check could not import the longitudinal generated binding; SCons built both
+bindings and the same checker then passed. The workflow is configured to build
+both native MPCs and Params/msgq bindings and run the real evidence producer.
+That exact-commit CI result is pending at the time this source note is written;
+the separate signed release verification must record its actual result.
 
 These are synthetic, source and native-runtime checks. They do not establish
 physical launch delay, closed-loop handling, full Panda/MISRA coverage, OEM
