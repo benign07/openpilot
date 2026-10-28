@@ -368,7 +368,12 @@ def test_forward_ota_profile_gate_requires_exact_ci_and_both_client_fixtures():
   from types import SimpleNamespace as NS
   path=ROOT/'tools/publish_hud_release.py';tree=ast.parse(path.read_text(encoding='utf8'));fixture=(ROOT/'selfdrive/carrot/tests/tuning_profiles_v1.json').read_bytes()
   source='a'*40;client='b'*40;fault={'mode':''}
-  def git(*args):return source.encode() if args[0]=='rev-parse' else fixture
+  def public_fixture():
+    if fault['mode']!='contract_changed':return fixture
+    d=json.loads(fixture);d['contract']['fields']['TFollowGap1']['unit']='seconds'
+    for p in d['profiles']:p['units']['TFollowGap1']='seconds'
+    return json.dumps(d).encode()
+  def git(*args):return source.encode() if args[0]=='rev-parse' else public_fixture()
   def command(args,**kwargs):
     url=args[-1]
     if '/git/ref/' in url:return json.dumps({'object':{'sha':client}})
@@ -378,12 +383,28 @@ def test_forward_ota_profile_gate_requires_exact_ci_and_both_client_fixtures():
     if fault['mode']=='wrong_sha':checks[0]['head_sha']='c'*40
     if fault['mode']=='failed_latest':checks.append({**checks[0],'id':100,'conclusion':'failure'})
     return json.dumps([{'check_runs':checks}])
-  def opened(req,**kwargs):return io.BytesIO(b'wrong' if fault['mode']=='client_bytes' else fixture)
-  scope={'git':git,'json':json,'subprocess':NS(check_output=command),'Request':lambda url,**kw:url,'urlopen':opened,'core':NS(sha=lambda v:hashlib.sha256(v).hexdigest())}
+  def opened(req,**kwargs):return io.BytesIO(b'wrong' if fault['mode']=='client_bytes' else public_fixture())
+  scope={'TUNING_V1_CONTRACT_SHA256':'4a0c60f6f9e5a97d05fbee157b3d0cb25fa6101c6e7d603ecc6ff43f09e0d468','git':git,'json':json,'subprocess':NS(check_output=command),'Request':lambda url,**kw:url,'urlopen':opened,'core':NS(sha=lambda v:hashlib.sha256(v).hexdigest())}
   nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('profile_publication_gate','_verified_profile_checks')]
   exec(compile(ast.Module(body=nodes,type_ignores=[]),str(path),'exec'),scope)
   proof=scope['profile_publication_gate'](source)
   assert proof['source_commit']==source and proof['client_commit']==client and len(proof['client_checks'])==2
-  for mode in ('wrong_sha','failed_latest','client_bytes'):
+  for mode in ('wrong_sha','failed_latest','client_bytes','contract_changed'):
     fault['mode']=mode
     with pytest.raises(ValueError):scope['profile_publication_gate'](source)
+
+
+def test_current_unattempted_recovery_cannot_be_archived(device):
+  assert apply(PROFILES[0]).status==200
+  row=service._tuning_state();row['phase']='applying';service.save_tuning_state(row)
+  with pytest.raises(ValueError):service.archive_tuning_journal(service.tuning_journal_digest(),'test-device-A')
+  row['phase']='recovery_required';service.save_tuning_state(row)
+  with pytest.raises(ValueError):service.archive_tuning_journal(service.tuning_journal_digest(),'test-device-A')
+  row['error']='restore failed';service.save_tuning_state(row)
+  service.archive_tuning_journal(service.tuning_journal_digest(),'test-device-A')
+  assert service.tuning_receipt()['unverified_previous'] and service.tuning_snapshot()['unverified_previous']
+  # A subset cannot clear uncertainty about the rest of the original transaction.
+  subset=deepcopy(PROFILES[0]);subset['values']={'MyDrivingMode':3};subset['units']={'MyDrivingMode':service.TUNING_UNITS['MyDrivingMode']}
+  assert apply(subset).status==200 and service.tuning_receipt()['unverified_previous']
+  assert apply(PROFILES[0]).status==200
+  assert not service.tuning_receipt()['unverified_previous']

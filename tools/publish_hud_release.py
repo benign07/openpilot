@@ -19,6 +19,8 @@ from selfdrive.carrot.hud_update import core
 from tools.hud_release import build
 
 CHANNEL = 'hud-device-updates-20260928'
+# Immutable v1 unit/range/default/type contract. Preset values may evolve.
+TUNING_V1_CONTRACT_SHA256 = '4a0c60f6f9e5a97d05fbee157b3d0cb25fa6101c6e7d603ecc6ff43f09e0d468'
 
 def git(*args, data=None, env=None):
   return subprocess.check_output(['git', *args], cwd=ROOT, input=data,
@@ -57,6 +59,10 @@ def profile_publication_gate(source_commit):
   document = json.loads(fixture)
   if document.get('schema') != 1 or len(document.get('profiles', [])) != 5 or document.get('contract', {}).get('schema') != 1:
     raise ValueError('Portable profile v1 compatibility fixture is missing')
+  canonical = {'kind':'CarrotTuningProfile', 'schema':1, 'family':'LX3', 'scope':'longitudinal',
+               'fields':document['contract']['fields']}
+  if core.sha(json.dumps(canonical,sort_keys=True,separators=(',',':')).encode()) != TUNING_V1_CONTRACT_SHA256:
+    raise ValueError('Immutable v1 contract changed; use a new schema instead')
   verified = _verified_profile_checks('benign07/openpilot', source, ('profile-contract (3.11)', 'profile-contract (3.12)'))
   client = json.loads(subprocess.check_output(['gh','api','repos/benign07/carrot-hud/git/ref/heads/main'], text=True))['object']['sha']
   client_checks = _verified_profile_checks('benign07/carrot-hud', client, ('windows_profiles','build'))

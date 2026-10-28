@@ -380,6 +380,10 @@ def _tuning_state():
 def save_tuning_state(row):
   from pathlib import Path
   path = Path(TUNING_STATE_PATH)
+  _save_tuning_json(path, row)
+
+
+def _save_tuning_json(path, row):
   if path.is_symlink():
     raise ValueError('프로필 기록 경로를 확인하세요.')
   path.parent.mkdir(parents=True, exist_ok=True)
@@ -415,11 +419,13 @@ def tuning_snapshot():
   except FileNotFoundError:
     preference_state = None
   behavior = tuning_behavior_revision()
+  unverified = tuning_archive_warning(state)
   generation = [state.get('request_id'), state.get('phase')] if state else None
+  generation = [generation, unverified['archive_warning_id']]
   revision = hashlib.sha256(json.dumps([context, _TUNING_SERVER_EPOCH, behavior, contract['contract_revision'], values, preference_state, generation], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
   blocked = bool(state and (state['phase'] not in ('complete', 'rolled_back') or state.get('context') != context))
   return {'ok': True, **contract, 'context': context, 'values': values, 'revision': revision,
-          'receipt': state, 'recovery_required': blocked, 'behavior_revision': behavior, 'journal_sha256': tuning_journal_digest(),
+          'receipt': state, 'recovery_required': blocked, **unverified, 'behavior_revision': behavior, 'journal_sha256': tuning_journal_digest(),
           'virtual_origin': '저장 파일' if preference_state is not None else '파일 없음 · 기존 기본값',
           'current_matches_last': bool(state and state['phase'] == 'complete' and all(values.get(k) == v for k, v in state['after'].items())),
           'note': '저장값이며 주행 중 실제 제어 적용 여부와는 별개입니다. P 정차·제어 해제 후 적용합니다.'}
@@ -521,9 +527,12 @@ def tuning_receipt():
   state = _tuning_state()
   serial = _tuning_serial()
   wrong_device = bool(state and state.get('context') and state['context']['serial'] != serial)
-  blocked = bool(state and (state['phase'] not in ('complete', 'rolled_back') or wrong_device))
+  try: current_context = _tuning_context()
+  except Exception: current_context = None
+  context_mismatch = bool(state and state.get('context') and current_context and state['context'] != current_context)
+  blocked = bool(state and (state['phase'] not in ('complete', 'rolled_back') or wrong_device or context_mismatch))
   return {'ok': True, 'schema': 1, 'family': 'LX3', 'context': {'serial': serial},
-          'receipt': state, 'recovery_required': blocked, 'wrong_device': wrong_device, 'journal_sha256': tuning_journal_digest()}
+          'receipt': state, 'recovery_required': blocked, **tuning_archive_warning(state), 'wrong_device': wrong_device, 'journal_sha256': tuning_journal_digest()}
 
 
 def tuning_journal_digest():
@@ -546,8 +555,14 @@ def archive_tuning_journal(expected_sha, serial):
     raise ValueError('기기와 보존할 원본 해시를 확인하세요.')
   if tuning_journal_digest() != expected_sha:
     raise ValueError('기록이 미리보기 이후 바뀌었습니다. 다시 확인하세요.')
+  state = _tuning_state()
+  same_context = bool(state and state.get('context') and state['context'].get('serial') == serial and state['context'] == _tuning_context())
+  if same_context and not (state['phase'] == 'recovery_required' and state.get('error')):
+    raise ValueError('동일 기기의 복구 가능한 기록은 먼저 복구를 시도하세요.')
   path = Path(TUNING_STATE_PATH)
   archived = path.with_name(path.name + '.archived.' + uuid.uuid4().hex)
+  # Persist the warning before moving the evidence; even failed archive keeps it visible.
+  _save_tuning_json(path.with_name(path.name+'.unverified'), {'serial':serial,'archive_sha256':expected_sha,'id':uuid.uuid4().hex})
   os.replace(path, archived)
   if os.name == 'posix':
     fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -559,3 +574,17 @@ def archive_tuning_journal(expected_sha, serial):
 def tuning_profile_digest(profile):
   import hashlib
   return hashlib.sha256(json.dumps(profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def tuning_archive_warning(state):
+  from pathlib import Path
+  import hashlib
+  path=Path(TUNING_STATE_PATH).with_name(Path(TUNING_STATE_PATH).name+'.unverified')
+  try:
+    if path.is_symlink() or path.stat().st_size>131072: raise ValueError('미확인 기록을 점검하세요.')
+    raw=path.read_bytes()
+  except FileNotFoundError:
+    return {'unverified_previous':False,'archive_warning_id':None}
+  digest=hashlib.sha256(raw).hexdigest()
+  verified=bool(state and state.get('phase')=='complete' and state.get('archive_warning_id')==digest and set(state.get('after',{}))==set(TUNING_UNITS))
+  return {'unverified_previous':not verified,'archive_warning_id':digest}

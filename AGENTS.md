@@ -55,3 +55,6 @@ the publication. Actual device verification belongs in the release record.
 - Every release changing settings/profile/source semantics must run test_tuning_profiles.py and existing HUD API regressions; synchronize golden JSON with Carrot HUD/Windows and run both client import/export tests.
 - Preserve /data/community/tuning_profiles, receipts and user profiles. Never migrate/clamp/discard incompatible values silently or automatically reapply a profile after OTA.
 - Preview, parked checks, optimistic revision, durable intent, raw readback, cancellation handling and recovery banners are part of the contract. Do not weaken them to make a deployment fit.
+
+- Portable schema1 unit/range/default/type contract is immutable (publisher canonical SHA256 4a0c60f6f9e5a97d05fbee157b3d0cb25fa6101c6e7d603ecc6ff43f09e0d468). Coordinating fixture edits does not authorize changing v1 semantics; introduce a new schema.
+- Archiving a profile journal preserves Params and raw evidence and must retain the unverified warning until a full27-key profile is verified. Current-context recoverable records require a recovery attempt first.

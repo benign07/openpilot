@@ -196,13 +196,13 @@ async def apply_tuning_route(request):
           body.get('profile_hash') != profile_hash):
         raise ValueError('기기·설정·프로필이 미리보기 이후 바뀌었습니다. 다시 확인하세요.')
       changes = sorted((k for k, v in values.items() if snapshot['values'][k] != v), key=lambda k: k == 'LaunchFollowStrength')
-      if not changes:
+      if not changes and not snapshot['unverified_previous']:
         return web.json_response({'ok': True, 'phase': 'unchanged', 'snapshot': snapshot})
       state = {'schema': 1, 'phase': 'applying', 'request_id': request_id, 'profile_hash': profile_hash,
                'profile_id': profile['id'], 'profile_name': profile['name'], 'context': snapshot['context'],
                'contract_revision': snapshot['contract_revision'], 'units': profile['units'],
                'before': {k: snapshot['values'][k] for k in values}, 'after': values,
-               'attempted': [], 'saved_at': tuning._now_iso(), 'server_epoch': tuning._TUNING_SERVER_EPOCH}
+               'archive_warning_id': snapshot['archive_warning_id'], 'attempted': [], 'saved_at': tuning._now_iso(), 'server_epoch': tuning._TUNING_SERVER_EPOCH}
       request.app['tuning_active_request'] = request_id
       try:
         await settled_setting_write(tuning.save_tuning_state, state)
@@ -291,7 +291,7 @@ async def archive_tuning_route(request):
       await require_parked(request)
       archived = await settled_setting_write(tuning.archive_tuning_journal, body.get('journal_sha256'), body.get('serial'))
       return web.json_response({'ok': True, 'archived': archived, 'receipt': tuning.tuning_receipt(),
-                               'note': '원본 기록을 보존했습니다. Params는 변경하지 않았으며 이전 적용 결과를 확인한 것은 아닙니다. 현재값을 다시 미리보기하세요.'})
+                               'note': '원본 기록을 보존했습니다. Params는 변경하지 않았으며 이전 적용 결과를 확인한 것은 아닙니다. 현재값을 다시 미리보기하세요. 이전 결과 미확인 표시는 전체 프로필 저장 확인 전까지 유지됩니다.'})
   except web.HTTPException:
     raise
   except Exception as error:
