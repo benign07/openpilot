@@ -53,7 +53,7 @@ def device(tmp_path,monkeypatch):
     def put_int(self,k,v):self.put(k,v)
     def put_float(self,k,v):self.put(k,v)
   monkeypatch.setattr(params,'HAS_PARAMS',True);monkeypatch.setattr(params,'Params',Params);monkeypatch.setattr(params,'ParamKeyType',Types)
-  pref=DrivingPreferences(tmp_path/'preferences.json');pref.set('LaunchFollowStrength',10);monkeypatch.setattr(params,'driving_preferences',pref)
+  pref=DrivingPreferences(tmp_path/'preferences.json');pref.set('LaunchFollowStrength',PROFILES[0]['values']['LaunchFollowStrength']);monkeypatch.setattr(params,'driving_preferences',pref)
   monkeypatch.setattr(service,'TUNING_STATE_PATH',str(tmp_path/'transaction.json'))
   monkeypatch.setattr(service,'_tuning_serial',lambda:'test-device-A')
   context={'serial':'test-device-A','fingerprint':'LX3-test-only'};monkeypatch.setattr(service,'_tuning_context',lambda:dict(context))
@@ -501,3 +501,17 @@ def test_receipt_remains_nonblocking_while_settings_write_is_active(device):
       response=await asyncio.wait_for(routes.get_tuning_receipt(request),.2)
       assert response.status==200 and decoded(response)['in_progress'] and not decoded(response)['recovery_required']
   asyncio.run(check())
+
+
+def test_combined_profiles_keep_common_functions_enabled_without_changing_contract(device):
+  for p in PROFILES:
+    v=p['values'];assert v['ApproachComfortEnabled']==v['ApproachFlexibleGap']==1
+    assert all(v[k]>0 for k in ('ApproachCoastStrength','ApproachBrakeMargin','ApproachStopSmooth','ApproachTrafficCalm','LaunchFollowStrength'))
+    assert 70<=v['ApproachFlexibleGapMin']<100 and v['MyDrivingMode']==3 and v['MyDrivingModeAuto']==0
+    assert v['StopDistanceCarrot']==550 and p['id'].startswith('lx3-combined-')
+    assert 'DisableDM' not in v and 'UseLaneLineSpeed' not in v
+
+
+def test_older_v1_profile_can_still_be_imported_after_builtin_revision(device):
+  legacy=deepcopy(PROFILES[0]);legacy['id']='legacy-v47';legacy['values']['ApproachFlexibleGap']=0
+  assert service.validate_tuning_profile(legacy)['ApproachFlexibleGap']==0
