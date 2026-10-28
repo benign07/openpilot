@@ -274,9 +274,10 @@ def _checked_tuning_write(proof, key, value):
 
 async def get_tuning_receipt(request):
   try:
-    async with settings_write_lock(request):
-      await _acknowledge_tuning_archive()
-      result = _tuning_progress(request, tuning.tuning_receipt())
+    lock=settings_write_lock(request)
+    if not lock.locked():
+      async with lock: await _acknowledge_tuning_archive()
+    result = _tuning_progress(request, tuning.tuning_receipt())
     wanted = request.query.get('request_id')
     if wanted is not None:
       if not re.fullmatch('[a-f0-9]{32}', wanted):

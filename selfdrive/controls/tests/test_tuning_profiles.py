@@ -374,7 +374,7 @@ def test_forward_ota_profile_gate_requires_exact_ci_and_both_client_fixtures():
     d=json.loads(fixture);d['contract']['fields']['TFollowGap1']['unit']='seconds'
     for p in d['profiles']:p['units']['TFollowGap1']='seconds'
     return json.dumps(d).encode()
-  bound_paths=['selfdrive/carrot/server/services/settings.py','selfdrive/carrot_settings.json',*service.TUNING_BEHAVIOR_SOURCES,'selfdrive/carrot/carrot_controls.py','selfdrive/controls/lib/lane_planner_2.py']
+  bound_paths=['selfdrive/carrot/server/services/settings.py','selfdrive/carrot_settings.json',*service.TUNING_BEHAVIOR_SOURCES,'selfdrive/carrot/carrot_controls.py','selfdrive/controls/lib/lane_planner_2.py','opendbc_repo/opendbc/car/hyundai/lx3_haptic_notifications.py']
   def data(path):return (ROOT/path).read_bytes().replace(b'\r\n',b'\n')
   catalog={'SourceHashes':{p:hashlib.sha256(data(p)).hexdigest() for p in bound_paths}}
   def git(*args):
@@ -392,14 +392,18 @@ def test_forward_ota_profile_gate_requires_exact_ci_and_both_client_fixtures():
     if fault['mode']=='failed_latest':checks.append({**checks[0],'id':100,'conclusion':'failure'})
     return json.dumps([{'check_runs':checks}])
   def opened(req,**kwargs):
-    if req.endswith('settings-catalog.json'):return io.BytesIO(json.dumps(catalog).encode())
+    if req.endswith('settings-catalog.json'):
+      doc=deepcopy(catalog)
+      if fault['mode']=='omitted_sim_source':
+        doc['SourceHashes'].pop('selfdrive/controls/lib/longitudinal_planner.py');doc['SourceHashes']['README.md']=hashlib.sha256(data('README.md')).hexdigest()
+      return io.BytesIO(json.dumps(doc).encode())
     return io.BytesIO(b'wrong' if fault['mode']=='client_bytes' else public_fixture())
   scope={'git':git,'json':json,'subprocess':NS(check_output=command),'Request':lambda url,**kw:url,'urlopen':opened,'core':NS(sha=lambda v:hashlib.sha256(v).hexdigest())}
-  nodes=[n for n in tree.body if (isinstance(n,ast.FunctionDef) and n.name in ('profile_publication_gate','_verified_profile_checks')) or (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='TUNING_V1_CONTRACT_SHA256' for t in n.targets))]
+  nodes=[n for n in tree.body if (isinstance(n,ast.FunctionDef) and n.name in ('profile_publication_gate','_verified_profile_checks')) or (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('TUNING_V1_CONTRACT_SHA256','REQUIRED_SIMULATOR_SOURCES') for t in n.targets))]
   exec(compile(ast.Module(body=nodes,type_ignores=[]),str(path),'exec'),scope)
   proof=scope['profile_publication_gate'](source)
   assert proof['source_commit']==source and proof['client_commit']==client and len(proof['client_checks'])==2
-  for mode in ('wrong_sha','failed_latest','client_bytes','contract_changed','stale_simulator'):
+  for mode in ('wrong_sha','failed_latest','client_bytes','contract_changed','stale_simulator','omitted_sim_source'):
     fault['mode']=mode
     with pytest.raises(ValueError):scope['profile_publication_gate'](source)
 
@@ -486,3 +490,14 @@ def test_old_verified_ack_remains_acknowledged_when_next_apply_fails(device,monk
   monkeypatch.setattr(service,'tuning_write',fail)
   assert apply(PROFILES[1]).status==409
   assert not service.tuning_receipt()['unverified_previous']
+
+
+def test_receipt_remains_nonblocking_while_settings_write_is_active(device):
+  assert apply(PROFILES[0]).status==200
+  row=service._tuning_state();row.update(phase='applying',server_epoch=service._TUNING_SERVER_EPOCH);service.save_tuning_state(row)
+  async def check():
+    request=Request({}, {'tuning_active_request':row['request_id']})
+    async with routes.settings_write_lock(request):
+      response=await asyncio.wait_for(routes.get_tuning_receipt(request),.2)
+      assert response.status==200 and decoded(response)['in_progress'] and not decoded(response)['recovery_required']
+  asyncio.run(check())

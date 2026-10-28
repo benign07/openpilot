@@ -21,6 +21,8 @@ from tools.hud_release import build
 CHANNEL = 'hud-device-updates-20260928'
 # Immutable v1 unit/range/default/type contract. Preset values may evolve.
 TUNING_V1_CONTRACT_SHA256 = '4a0c60f6f9e5a97d05fbee157b3d0cb25fa6101c6e7d603ecc6ff43f09e0d468'
+REQUIRED_SIMULATOR_SOURCES = ('opendbc_repo/opendbc/car/hyundai/lx3_haptic_notifications.py', 'selfdrive/carrot/carrot_controls.py', 'selfdrive/carrot/carrot_functions.py', 'selfdrive/carrot/server/services/settings.py', 'selfdrive/carrot_settings.json', 'selfdrive/controls/lib/approach_comfort.py', 'selfdrive/controls/lib/flexible_gap.py', 'selfdrive/controls/lib/lane_planner_2.py', 'selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py', 'selfdrive/controls/lib/longitudinal_planner.py')
+
 
 def git(*args, data=None, env=None):
   return subprocess.check_output(['git', *args], cwd=ROOT, input=data,
@@ -77,7 +79,7 @@ def profile_publication_gate(source_commit):
   with urlopen(Request(catalog_url,headers={'Cache-Control':'no-cache'}),timeout=30) as response:
     catalog=json.loads(response.read(262145))
   hashes=catalog.get('SourceHashes',{})
-  if not isinstance(hashes,dict) or len(hashes)<9:
+  if not isinstance(hashes,dict) or not set(REQUIRED_SIMULATOR_SOURCES).issubset(hashes):
     raise ValueError('Windows explanation source bindings are incomplete')
   for path, expected in hashes.items():
     if core.sha(git('show',source+':'+path).replace(b'\r\n',b'\n')) != expected:
