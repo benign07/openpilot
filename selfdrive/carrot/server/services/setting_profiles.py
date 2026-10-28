@@ -586,5 +586,20 @@ def tuning_archive_warning(state):
   except FileNotFoundError:
     return {'unverified_previous':False,'archive_warning_id':None}
   digest=hashlib.sha256(raw).hexdigest()
-  verified=bool(state and state.get('phase')=='complete' and state.get('archive_warning_id')==digest and set(state.get('after',{}))==set(TUNING_UNITS))
-  return {'unverified_previous':not verified,'archive_warning_id':digest}
+  return {'unverified_previous':True,'archive_warning_id':digest}
+
+
+def acknowledge_tuning_archive_warning():
+  """Called under the shared settings lock, after a durable full-domain receipt."""
+  from pathlib import Path
+  state=_tuning_state()
+  warning=tuning_archive_warning(state)
+  if not (warning['unverified_previous'] and state and state.get('phase')=='complete' and
+          state.get('archive_warning_id')==warning['archive_warning_id'] and
+          set(state.get('after',{}))==set(TUNING_UNITS) and state.get('context')==_tuning_context()):return
+  path=Path(TUNING_STATE_PATH).with_name(Path(TUNING_STATE_PATH).name+'.unverified')
+  os.replace(path,path.with_name(path.name+'.acknowledged.'+uuid.uuid4().hex))
+  if os.name=='posix':
+    fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(fd)
+    finally:os.close(fd)

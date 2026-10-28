@@ -73,6 +73,15 @@ def profile_publication_gate(source_commit):
       public = response.read(131073)
     if public.replace(b'\r\n',b'\n') != fixture.replace(b'\r\n',b'\n'):
       raise ValueError('HUD/Windows profile fixtures differ from selected firmware source')
+  catalog_url='https://raw.githubusercontent.com/benign07/carrot-hud/'+client+'/pc/tuning_lab/settings-catalog.json'
+  with urlopen(Request(catalog_url,headers={'Cache-Control':'no-cache'}),timeout=30) as response:
+    catalog=json.loads(response.read(262145))
+  hashes=catalog.get('SourceHashes',{})
+  if not isinstance(hashes,dict) or len(hashes)<9:
+    raise ValueError('Windows explanation source bindings are incomplete')
+  for path, expected in hashes.items():
+    if core.sha(git('show',source+':'+path).replace(b'\r\n',b'\n')) != expected:
+      raise ValueError('Windows simulator explanation is stale for selected source: '+path)
   return {'source_commit': source, 'client_commit': client, 'fixture_sha256': core.sha(fixture), 'checks': verified, 'client_checks': client_checks}
 
 

@@ -23,6 +23,7 @@ PROFILES=json.loads((ROOT/'selfdrive/carrot/tests/tuning_profiles_v1.json').read
 
 class Request:
   content_length=None
+  query={}
   def __init__(self,body,app=None):self.body=deepcopy(body);self.app={} if app is None else app
   async def json(self):return self.body
   async def text(self):return json.dumps(self.body)
@@ -373,7 +374,14 @@ def test_forward_ota_profile_gate_requires_exact_ci_and_both_client_fixtures():
     d=json.loads(fixture);d['contract']['fields']['TFollowGap1']['unit']='seconds'
     for p in d['profiles']:p['units']['TFollowGap1']='seconds'
     return json.dumps(d).encode()
-  def git(*args):return source.encode() if args[0]=='rev-parse' else public_fixture()
+  bound_paths=['selfdrive/carrot/server/services/settings.py','selfdrive/carrot_settings.json',*service.TUNING_BEHAVIOR_SOURCES,'selfdrive/carrot/carrot_controls.py','selfdrive/controls/lib/lane_planner_2.py']
+  def data(path):return (ROOT/path).read_bytes().replace(b'\r\n',b'\n')
+  catalog={'SourceHashes':{p:hashlib.sha256(data(p)).hexdigest() for p in bound_paths}}
+  def git(*args):
+    if args[0]=='rev-parse':return source.encode()
+    path=args[1].split(':',1)[1]
+    if path.endswith('tuning_profiles_v1.json'):return public_fixture()
+    return data(path)+(b'changed' if fault['mode']=='stale_simulator' else b'')
   def command(args,**kwargs):
     url=args[-1]
     if '/git/ref/' in url:return json.dumps({'object':{'sha':client}})
@@ -383,13 +391,15 @@ def test_forward_ota_profile_gate_requires_exact_ci_and_both_client_fixtures():
     if fault['mode']=='wrong_sha':checks[0]['head_sha']='c'*40
     if fault['mode']=='failed_latest':checks.append({**checks[0],'id':100,'conclusion':'failure'})
     return json.dumps([{'check_runs':checks}])
-  def opened(req,**kwargs):return io.BytesIO(b'wrong' if fault['mode']=='client_bytes' else public_fixture())
-  scope={'TUNING_V1_CONTRACT_SHA256':'4a0c60f6f9e5a97d05fbee157b3d0cb25fa6101c6e7d603ecc6ff43f09e0d468','git':git,'json':json,'subprocess':NS(check_output=command),'Request':lambda url,**kw:url,'urlopen':opened,'core':NS(sha=lambda v:hashlib.sha256(v).hexdigest())}
-  nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('profile_publication_gate','_verified_profile_checks')]
+  def opened(req,**kwargs):
+    if req.endswith('settings-catalog.json'):return io.BytesIO(json.dumps(catalog).encode())
+    return io.BytesIO(b'wrong' if fault['mode']=='client_bytes' else public_fixture())
+  scope={'git':git,'json':json,'subprocess':NS(check_output=command),'Request':lambda url,**kw:url,'urlopen':opened,'core':NS(sha=lambda v:hashlib.sha256(v).hexdigest())}
+  nodes=[n for n in tree.body if (isinstance(n,ast.FunctionDef) and n.name in ('profile_publication_gate','_verified_profile_checks')) or (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='TUNING_V1_CONTRACT_SHA256' for t in n.targets))]
   exec(compile(ast.Module(body=nodes,type_ignores=[]),str(path),'exec'),scope)
   proof=scope['profile_publication_gate'](source)
   assert proof['source_commit']==source and proof['client_commit']==client and len(proof['client_checks'])==2
-  for mode in ('wrong_sha','failed_latest','client_bytes','contract_changed'):
+  for mode in ('wrong_sha','failed_latest','client_bytes','contract_changed','stale_simulator'):
     fault['mode']=mode
     with pytest.raises(ValueError):scope['profile_publication_gate'](source)
 
@@ -407,4 +417,72 @@ def test_current_unattempted_recovery_cannot_be_archived(device):
   subset=deepcopy(PROFILES[0]);subset['values']={'MyDrivingMode':3};subset['units']={'MyDrivingMode':service.TUNING_UNITS['MyDrivingMode']}
   assert apply(subset).status==200 and service.tuning_receipt()['unverified_previous']
   assert apply(PROFILES[0]).status==200
+  assert not service.tuning_receipt()['unverified_previous']
+
+
+def test_archive_ack_is_durable_across_subset_rollback_and_recovery(device,monkeypatch):
+  assert apply(PROFILES[0]).status==200
+  row=service._tuning_state();row.update(phase='recovery_required',error='restore failed');service.save_tuning_state(row)
+  service.archive_tuning_journal(service.tuning_journal_digest(),'test-device-A')
+  assert apply(PROFILES[0]).status==200 and not service.tuning_receipt()['unverified_previous']
+  subset=deepcopy(PROFILES[0]);subset['values']={'ApproachCoastStrength':61};subset['units']={'ApproachCoastStrength':service.TUNING_UNITS['ApproachCoastStrength']}
+  assert apply(subset).status==200 and not service.tuning_receipt()['unverified_previous']
+  real=service.tuning_write
+  def fail_after_write(k,v):real(k,v);raise ValueError('after write')
+  monkeypatch.setattr(service,'tuning_write',fail_after_write)
+  assert apply(PROFILES[1]).status==409
+  assert not service.tuning_receipt()['unverified_previous']
+  monkeypatch.setattr(service,'tuning_write',real)
+  state=service._tuning_state();state.update(phase='recovery_required',error='retry restore');service.save_tuning_state(state)
+  response=asyncio.run(routes.recover_tuning_route(Request({'request_id':state['request_id']})))
+  assert response.status==200 and not service.tuning_receipt()['unverified_previous']
+  state=service._tuning_state();state.update(phase='recovery_required',error='new failure');service.save_tuning_state(state)
+  service.archive_tuning_journal(service.tuning_journal_digest(),'test-device-A')
+  assert service.tuning_receipt()['unverified_previous']
+
+
+def test_ack_rename_failure_retains_warning_without_undo_and_receipt_retries(device,monkeypatch):
+  assert apply(PROFILES[0]).status==200
+  row=service._tuning_state();row.update(phase='recovery_required',error='restore failed');service.save_tuning_state(row)
+  service.archive_tuning_journal(service.tuning_journal_digest(),'test-device-A')
+  real=service.os.replace
+  def fail_ack(a,b):
+    if str(a).endswith('.unverified'):raise OSError('rename fault')
+    return real(a,b)
+  monkeypatch.setattr(service.os,'replace',fail_ack)
+  assert apply(PROFILES[0]).status==200 and service.tuning_receipt()['unverified_previous']
+  monkeypatch.setattr(service.os,'replace',real)
+  response=asyncio.run(routes.get_tuning_receipt(Request({})))
+  assert response.status==200 and not decoded(response)['unverified_previous'], decoded(response)
+
+
+def test_portable_presets_bind_current_production_semantics():
+  assert all(p['behavior_revision']==service.tuning_behavior_revision() for p in PROFILES)
+
+
+def test_pre_apply_ack_never_clears_unverified_incomplete_record(device):
+  assert apply(PROFILES[0]).status==200
+  row=service._tuning_state();row.update(phase='recovery_required',error='restore failed');service.save_tuning_state(row)
+  service.archive_tuning_journal(service.tuning_journal_digest(),'test-device-A')
+  subset=deepcopy(PROFILES[0]);subset['values']={'ApproachCoastStrength':61};subset['units']={'ApproachCoastStrength':service.TUNING_UNITS['ApproachCoastStrength']}
+  assert apply(subset).status==200
+  asyncio.run(routes._acknowledge_tuning_archive())
+  assert service.tuning_receipt()['unverified_previous']
+
+
+def test_old_verified_ack_remains_acknowledged_when_next_apply_fails(device,monkeypatch):
+  assert apply(PROFILES[0]).status==200
+  row=service._tuning_state();row.update(phase='recovery_required',error='restore failed');service.save_tuning_state(row)
+  service.archive_tuning_journal(service.tuning_journal_digest(),'test-device-A')
+  replace=service.os.replace
+  def block(a,b):
+    if str(a).endswith('.unverified'):raise OSError('ack delayed')
+    return replace(a,b)
+  monkeypatch.setattr(service.os,'replace',block)
+  assert apply(PROFILES[0]).status==200 and service.tuning_receipt()['unverified_previous']
+  monkeypatch.setattr(service.os,'replace',replace)
+  write=service.tuning_write
+  def fail(k,v):write(k,v);raise ValueError('new transaction failure')
+  monkeypatch.setattr(service,'tuning_write',fail)
+  assert apply(PROFILES[1]).status==409
   assert not service.tuning_receipt()['unverified_previous']

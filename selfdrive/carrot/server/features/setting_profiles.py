@@ -137,6 +137,7 @@ async def preview_tuning_route(request):
   try:
     body = await _tuning_body(request)
     async with settings_write_lock(request):
+      await _acknowledge_tuning_archive()
       return web.json_response(tuning.preview_tuning_profile(body.get('profile')))
   except Exception as error:
     return web.json_response({'ok': False, 'error': str(error)}, status=400)
@@ -184,6 +185,7 @@ async def apply_tuning_route(request):
     profile_hash = tuning.tuning_profile_digest(profile)
     async with settings_write_lock(request):
       await require_parked(request)
+      await _acknowledge_tuning_archive()
       snapshot = tuning.tuning_snapshot()
       old_state = snapshot['receipt']
       if old_state and old_state.get('request_id') == request_id:
@@ -196,7 +198,7 @@ async def apply_tuning_route(request):
           body.get('profile_hash') != profile_hash):
         raise ValueError('기기·설정·프로필이 미리보기 이후 바뀌었습니다. 다시 확인하세요.')
       changes = sorted((k for k, v in values.items() if snapshot['values'][k] != v), key=lambda k: k == 'LaunchFollowStrength')
-      if not changes and not snapshot['unverified_previous']:
+      if not changes and not (snapshot['unverified_previous'] and set(values)==set(tuning.TUNING_UNITS)):
         return web.json_response({'ok': True, 'phase': 'unchanged', 'snapshot': snapshot})
       state = {'schema': 1, 'phase': 'applying', 'request_id': request_id, 'profile_hash': profile_hash,
                'profile_id': profile['id'], 'profile_name': profile['name'], 'context': snapshot['context'],
@@ -238,6 +240,7 @@ async def apply_tuning_route(request):
           try: await settled_setting_write(tuning.save_tuning_state, state, terminal=True)
           except Exception: pass
           return web.json_response({'ok': False, 'error': state['error'], 'receipt': state}, status=503)
+        await _acknowledge_tuning_archive(terminal=True)
         return web.json_response({'ok': True, 'phase': 'complete', 'receipt': state, 'snapshot': None})
       finally:
         if request.app.get('tuning_active_request') == request_id:
@@ -271,7 +274,9 @@ def _checked_tuning_write(proof, key, value):
 
 async def get_tuning_receipt(request):
   try:
-    result = _tuning_progress(request, tuning.tuning_receipt())
+    async with settings_write_lock(request):
+      await _acknowledge_tuning_archive()
+      result = _tuning_progress(request, tuning.tuning_receipt())
     wanted = request.query.get('request_id')
     if wanted is not None:
       if not re.fullmatch('[a-f0-9]{32}', wanted):
@@ -306,3 +311,9 @@ def _tuning_progress(request, result):
   result['in_progress'] = live
   if live: result['recovery_required'] = False
   return result
+
+
+async def _acknowledge_tuning_archive(terminal=False):
+  # A failed metadata rename retains the warning, never undoes native values.
+  try: await settled_setting_write(tuning.acknowledge_tuning_archive_warning,terminal=terminal)
+  except Exception: pass
