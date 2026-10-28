@@ -35,6 +35,41 @@ def commit_files(parent, files, message):
     tree = git('write-tree', env=env).decode().strip()
     return git('commit-tree', tree, '-p', parent, data=(message+'\n').encode()).decode().strip()
 
+
+
+def _verified_profile_checks(repository, source, names):
+  output = subprocess.check_output(['gh','api','--paginate','--slurp',
+    'repos/'+repository+'/commits/'+source+'/check-runs?per_page=100'], text=True)
+  checks = [row for page in json.loads(output) for row in page.get('check_runs', [])]
+  verified = []
+  for name in names:
+    matching = [c for c in checks if c.get('name') == name and c.get('head_sha') == source]
+    latest = max(matching, key=lambda c:c['id']) if matching else None
+    if latest is None or latest.get('status') != 'completed' or latest.get('conclusion') != 'success':
+      raise ValueError('Exact profile compatibility CI not successful: '+repository+'/'+name)
+    verified.append({'id': latest['id'], 'name': name, 'url': latest['html_url']})
+  return verified
+
+def profile_publication_gate(source_commit):
+  """All future forward OTA publications must retain the v1 client contract."""
+  source = git('rev-parse', '--verify', source_commit+'^{commit}').decode().strip()
+  fixture = git('show', source+':selfdrive/carrot/tests/tuning_profiles_v1.json')
+  document = json.loads(fixture)
+  if document.get('schema') != 1 or len(document.get('profiles', [])) != 5 or document.get('contract', {}).get('schema') != 1:
+    raise ValueError('Portable profile v1 compatibility fixture is missing')
+  verified = _verified_profile_checks('benign07/openpilot', source, ('profile-contract (3.11)', 'profile-contract (3.12)'))
+  client = json.loads(subprocess.check_output(['gh','api','repos/benign07/carrot-hud/git/ref/heads/main'], text=True))['object']['sha']
+  client_checks = _verified_profile_checks('benign07/carrot-hud', client, ('windows_profiles','build'))
+  # Immutable public client bytes, never a moving branch response.
+  for path in ('app/src/main/assets/tuning_profiles_v1.json', 'pc/tuning_lab/tuning_profiles_v1.json'):
+    url = 'https://raw.githubusercontent.com/benign07/carrot-hud/'+client+'/'+path
+    with urlopen(Request(url, headers={'Cache-Control':'no-cache'}), timeout=30) as response:
+      public = response.read(131073)
+    if public.replace(b'\r\n',b'\n') != fixture.replace(b'\r\n',b'\n'):
+      raise ValueError('HUD/Windows profile fixtures differ from selected firmware source')
+  return {'source_commit': source, 'client_commit': client, 'fixture_sha256': core.sha(fixture), 'checks': verified, 'client_checks': client_checks}
+
+
 def main():
   p = argparse.ArgumentParser(description=__doc__)
   p.add_argument('--spec', type=Path, required=True)
@@ -60,6 +95,8 @@ def main():
     print(json.dumps({'prepared':True,'release_id':template['release_id'],
                       'bundle_sha256':core.sha(raw),'published':False}))
     return
+  profile_proof = profile_publication_gate(args.source_commit)
+  core.save(args.out/'profile-compatibility-publication.json', profile_proof)
   git('fetch', 'origin', CHANNEL)
   parent = git('rev-parse', 'FETCH_HEAD').decode().strip()
   old = json.loads(git('show', parent+':updates/hud/latest.json'))
@@ -99,7 +136,7 @@ def main():
   git('tag','-a',tag,final,'-m',tag+' signed source update')
   git('push','origin','refs/tags/'+tag)
   result={'release_id':tag,'sequence':spec['sequence'],'source_commit':release['source_commit'],
-          'bundle_commit':bundle_commit,'channel_commit':final,
+          'bundle_commit':bundle_commit,'channel_commit':final,'profile_compatibility':profile_proof,
           'bundle_sha256':core.sha(raw),'bundle_bytes':len(raw),
           'remote_signature_and_bytes_verified':True,'files':[
             {k:row[k] for k in ['path','before','sha256','bytes']} for row in release['files']]}

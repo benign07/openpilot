@@ -1,3 +1,4 @@
+from ..services.setting_safety import serialize_settings_mutation
 import asyncio
 import os
 import subprocess
@@ -444,5 +445,5 @@ def register(app: web.Application) -> None:
   app.router.add_post("/api/reboot", api_reboot)
   app.router.add_post("/api/poweroff", api_poweroff)
   app.router.add_post("/api/recalibrate", api_recalibrate)
-  app.router.add_post("/api/set_default", api_set_default)
+  app.router.add_post("/api/set_default", serialize_settings_mutation(api_set_default))
   app.router.add_post("/api/time_sync", api_time_sync)

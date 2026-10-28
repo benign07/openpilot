@@ -49,3 +49,9 @@ through Carrot HUD, rather than stopping after a source-branch push.
 The 2026-10-06 source release uses diagnostic commit 013fcfdb with updater
 integration d4cf0377; the annotated release `palisade-20261006-01` identifies
 the publication. Actual device verification belongs in the release record.
+
+## Portable tuning profiles
+- Keep CarrotTuningProfile schema1/unit semantics and the27-key longitudinal-only domain compatible across OTA. Do not add hardware/DM/lateral keys without a separate reviewed contract.
+- Every release changing settings/profile/source semantics must run test_tuning_profiles.py and existing HUD API regressions; synchronize golden JSON with Carrot HUD/Windows and run both client import/export tests.
+- Preserve /data/community/tuning_profiles, receipts and user profiles. Never migrate/clamp/discard incompatible values silently or automatically reapply a profile after OTA.
+- Preview, parked checks, optimistic revision, durable intent, raw readback, cancellation handling and recovery banners are part of the contract. Do not weaken them to make a deployment fit.

@@ -1,3 +1,4 @@
+from ..services.setting_safety import serialize_settings_mutation
 import asyncio
 import json
 import os
@@ -21,7 +22,7 @@ from ..services.params import (
 )
 from ..services.settings import get_settings_cached
 from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES, CRUISE_BUTTON_PREFERENCES, RESPONSE_PREFERENCES
-from ..services.setting_safety import require_parked
+from ..services.setting_safety import require_parked, settings_write_lock, settled_setting_write
 
 
 async def api_params_bulk(request: web.Request) -> web.Response:
@@ -92,7 +93,10 @@ async def api_param_set(request: web.Request) -> web.Response:
     pass
 
   try:
-    set_param_value(name, value, p)
+    async with settings_write_lock(request):
+      if name in DRIVING_PREFERENCES or name in CRUISE_BUTTON_PREFERENCES or name in RESPONSE_PREFERENCES:
+        await require_parked(request)
+      await settled_setting_write(set_param_value, name, value, p)
     return web.json_response({"ok": True, "name": name, "value": value, "has_params": HAS_PARAMS})
   except Exception as e:
     return web.json_response({"ok": False, "error": str(e)}, status=500)
@@ -202,10 +206,10 @@ async def api_params_restore_json(request: web.Request) -> web.Response:
 def register(app: web.Application) -> None:
   app.router.add_get("/api/params_bulk", api_params_bulk)
   app.router.add_post("/api/param_set", api_param_set)
-  app.router.add_post("/api/params_restore", api_params_restore)
+  app.router.add_post("/api/params_restore", serialize_settings_mutation(api_params_restore))
   app.router.add_get("/api/params_qr_dependency", api_params_qr_dependency)
   app.router.add_post("/api/params_qr_dependency/ensure", api_params_qr_dependency_ensure)
   app.router.add_get("/api/params_qr_backup", api_params_qr_backup)
   app.router.add_post("/api/params_restore_preview", api_params_restore_preview)
-  app.router.add_post("/api/params_restore_json", api_params_restore_json)
+  app.router.add_post("/api/params_restore_json", serialize_settings_mutation(api_params_restore_json))
   app.router.add_get("/download/params_backup.json", handle_download_params_backup)

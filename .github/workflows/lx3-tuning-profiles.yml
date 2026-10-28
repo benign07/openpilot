@@ -1,0 +1,29 @@
+name: LX3 portable tuning profile compatibility
+on:
+  push:
+    branches: [review/lx3-cruise-off-lateral-20261026]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  profile-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest numpy aiohttp
+      - name: Profile transactions and unchanged maintenance gates
+        run: |
+          ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/openpilot"
+          export PYTHONPATH="$RUNNER_TEMP:$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/opendbc_repo"
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_tuning_profiles.py selfdrive/controls/tests/test_audit_services.py -q --junitxml=tuning-profile-tests.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tuning-profile-${{ matrix.python }}
+          path: tuning-profile-tests.xml
