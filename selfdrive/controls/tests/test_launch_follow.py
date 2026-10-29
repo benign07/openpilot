@@ -175,6 +175,129 @@ def test_existing_safety_and_approach_exits_win_over_the_full_growth_ceiling(kin
   assert not h.relative_speed_growing and h.extra==0.
 
 
+def full_launch():
+  h=LaunchFollow();r=scene();stopped(h,r)
+  for i in range(80):
+    run(h,r,2_500_000_000+i*50_000_000,strength=20)
+  assert h.extra==pytest.approx(.26)
+  return h,r,6_500_000_000
+
+
+@pytest.mark.parametrize('speed,factor',[(20.,1.),(30.,.5),(39.,.05),(40.,0.),(50.,0.),(60.,0.)])
+def test_launch_speed_envelope_returns_to_the_existing_curve_by_40(speed,factor):
+  h,r,stamp=full_launch()
+  # Small speed increments preserve the same qualified radar track.
+  for kph in range(8,int(speed)+1):
+    r.leadOne.vLead=kph/3.6+r.leadOne.vRel
+    value=run(h,r,stamp,v_ego=kph/3.6,strength=20)
+    stamp+=50_000_000
+  assert value==pytest.approx(1.3+.26*factor)
+  if speed>=40.:
+    assert h.extra==0. and h.stopped_ns==0
+
+
+def test_mild_withdrawal_cannot_leak_extra_past_the_speed_envelope():
+  h,r,stamp=full_launch()
+  for kph in range(8,39):
+    r.leadOne.vLead=kph/3.6+3.
+    run(h,r,stamp,v_ego=kph/3.6,strength=20);stamp+=50_000_000
+  r.leadOne.vRel=.15;r.leadOne.vLead=39/3.6+.15
+  value=run(h,r,stamp,v_ego=39/3.6,strength=20)
+  assert 1.3<=value<=1.3+.26*.05
+  assert run(h,r,stamp+50_000_000,v_ego=40/3.6,strength=20)==1.3
+  assert h.extra==0.
+
+
+@pytest.mark.parametrize('approach_active',[False,True])
+def test_reaching_40_retires_this_departure_until_a_fresh_standstill(approach_active):
+  h,r,stamp=full_launch()
+  for kph in range(8,41):
+    r.leadOne.vLead=kph/3.6+3.
+    run(h,r,stamp,v_ego=kph/3.6,strength=20,approach_active=approach_active)
+    stamp+=50_000_000
+  for kph in range(39,6,-1):
+    r.leadOne.vLead=kph/3.6+3.
+    assert run(h,r,stamp,v_ego=kph/3.6,strength=20)==1.3
+    stamp+=50_000_000
+  for i in range(30):
+    run(h,r,stamp,v_ego=0.,should_stop=True,strength=20);stamp+=50_000_000
+  r.leadOne.vLead=5.
+  assert run(h,r,stamp,v_ego=2.,strength=20)>1.3
+
+
+@pytest.mark.parametrize('bad', [{'desired_distance':float('nan')},{'table_max':float('nan')},{'v_ego':float('nan')}])
+def test_invalid_limits_retire_the_departure_even_if_the_speed_boundary_is_unobservable(bad):
+  h,r,stamp=full_launch()
+  changes={'v_ego':40/3.6,'strength':20,**bad}
+  run(h,r,stamp,**changes)
+  assert h.stopped_ns==0 and h.extra==0.
+  assert run(h,r,stamp+50_000_000,strength=20)==1.3
+
+
+def test_boundary_chatter_cannot_reenable_a_completed_departure():
+  h,r,stamp=full_launch()
+  r.leadOne.vLead=40/3.6+3.
+  for kph in (40.,39.99,40.01,39.99):
+    assert run(h,r,stamp,v_ego=kph/3.6,strength=20)==1.3
+    stamp+=50_000_000
+  assert h.stopped_ns==0
+
+
+@pytest.mark.parametrize('table',[1.3,1.4])
+def test_realistic_acceleration_tapers_the_cap_without_a_boundary_step(table):
+  h,r,stamp=full_launch();values=[];v=2.
+  for i in range(145):
+    r.leadOne.vLead=v+3.
+    cap=run(h,r,stamp,v_ego=v,strength=20,table_max=table)
+    assert table<=cap<=max(table,1.6)
+    if v>=40/3.6:assert cap==table
+    values.append(cap);v+=1.5*.05;stamp+=50_000_000
+  assert all(a-b<=.3*.05+1e-12 for a,b in zip(values,values[1:]))
+
+
+@pytest.mark.parametrize('curvature,previous_accel',[(0.,.5),(.015,.5),(0.,1.5)])
+def test_production_planner_launch_block_sends_identical_mpc_limits_at_mid_speed(curvature,previous_accel):
+  import ast,math,struct
+  from pathlib import Path
+  from openpilot.selfdrive.controls.lib.approach_comfort import ApproachRequest,apply_approach_ceiling
+  path=Path(__file__).resolve().parents[3]/'selfdrive/controls/lib/longitudinal_planner.py'
+  tree=ast.parse(path.read_text(encoding='utf-8'))
+  update=next(n for n in next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='LongitudinalPlanner').body
+              if isinstance(n,ast.FunctionDef) and n.name=='update')
+  first=next(i for i,n in enumerate(update.body) if isinstance(n,ast.Assign) and
+             isinstance(n.targets[0],ast.Name) and n.targets[0].id=='launch_table_maximum')
+  block=update.body[first:first+3]
+  assert 'apply_approach_ceiling' in ast.unparse(block[-1])
+  setter=next(n for n in update.body if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and
+              isinstance(n.value.func,ast.Attribute) and n.value.func.attr=='set_accel_limits')
+  turn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='limit_accel_in_turns')
+  code=compile(ast.Module(body=block+[setter],type_ignores=[]),str(path),'exec')
+  outputs=[]
+  for strength in (0,20):
+    helper,radar,stamp=full_launch();sent=[];rows=[]
+    self=NS(launch_follow=helper,drive_settings={'LaunchFollowStrength':strength},
+            output_should_stop=False,approach=NS(coast_weight=0.,traffic_weight=0.),
+            a_desired=previous_accel,dt=.05,mpc=NS(set_accel_limits=lambda *x:sent.append(struct.pack('!dd',*x))))
+    sm=type('SM',(dict,),{})({'radarState':radar});sm.logMonoTime={}
+    scope={'math':math,'self':self,'sm':sm,'carrot':NS(stop_distance=5.5,t_follow_last=1.),
+           'launch_eligible':True,'curvature_future':curvature,'a_lat_max':3.,
+           'approach_request':ApproachRequest(),'apply_approach_ceiling':apply_approach_ceiling}
+    exec(compile(ast.Module(body=[turn],type_ignores=[]),str(path),'exec'),scope)
+    for kph in [*range(8,46),44.,42.,40.,39.99]:
+      v=kph/3.6;radar.leadOne.vLead=v+3.
+      sm.logMonoTime['radarState']=stamp;stamp+=50_000_000
+      limits=scope['limit_accel_in_turns'](v,curvature,[-2.,1.3],3.)
+      limits[1]=max(limits[1],previous_accel-.05)
+      scope.update(v_ego=v,evidence_table_maximum=1.3,accel_limits=[-2.,1.3],accel_limits_turns=limits)
+      exec(code,scope)
+      rows.append((kph,sent[-1]))
+    outputs.append(rows)
+  for (speed,baseline),(_,boosted) in zip(*outputs):
+    if speed>=40. or speed==39.99:assert boosted==baseline
+  if curvature==0. and previous_accel==.5:
+    assert any(a[1]!=b[1] for a,b in zip(*outputs) if a[0]<20.)
+
+
 def test_preference_store_invalid_or_missing_is_all_off(tmp_path):
   f=tmp_path/'prefs.json';p=DrivingPreferences(f)
   assert p.read()['LaunchFollowStrength'] == 0 and p.read()['LateralMarginShadow'] == 1
@@ -215,6 +338,7 @@ def test_server_virtual_keys_never_reach_params_or_profiles(tmp_path,monkeypatch
 
 def test_new_virtual_setting_api_requires_parked_before_writing(monkeypatch):
   import asyncio,ast
+  from contextlib import asynccontextmanager
   from pathlib import Path
   from aiohttp import web
   from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES
@@ -224,8 +348,14 @@ def test_new_virtual_setting_api_requires_parked_before_writing(monkeypatch):
   node=next(n for n in ast.parse(path.read_text(encoding='utf-8')).body
             if isinstance(n,ast.AsyncFunctionDef) and n.name=='api_param_set')
   writes=[]
+  @asynccontextmanager
+  async def write_lock(_):
+    yield
+  async def settled_write(fn,*args):
+    fn(*args)
   scope={'web':web,'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'CRUISE_BUTTON_PREFERENCES':{},'RESPONSE_PREFERENCES':{},'HAS_PARAMS':False,
-         'get_settings_cached':lambda: ({},{},{},[]),'set_param_value':lambda *args:writes.append(args)}
+         'get_settings_cached':lambda: ({},{},{},[]),'set_param_value':lambda *args:writes.append(args),
+         'settings_write_lock':write_lock,'settled_setting_write':settled_write}
   exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),scope)
   async def body():return {'name':'LaunchFollowStrength','value':10}
   request=NS(json=body)
@@ -233,9 +363,11 @@ def test_new_virtual_setting_api_requires_parked_before_writing(monkeypatch):
   scope['require_parked']=blocked
   with pytest.raises(web.HTTPConflict):asyncio.run(scope['api_param_set'](request))
   assert not writes
-  async def parked(_):pass
+  checks=[]
+  async def parked(_):checks.append(True)
   scope['require_parked']=parked
   assert asyncio.run(scope['api_param_set'](request)).status==200 and writes
+  assert len(checks)==2
 
 
 def test_defaults_reset_virtual_store_and_parked_rejection_precedes_native_reset(tmp_path):
@@ -253,6 +385,7 @@ def test_defaults_reset_virtual_store_and_parked_rejection_precedes_native_reset
   def restore(values):
     native.append(values);return {'result':{'fail_cnt':0},'preview':{'entries':[]}}
   scope={'web':web,'DRIVING_PREFERENCES':DRIVING_PREFERENCES,'CRUISE_BUTTON_PREFERENCES':{},'RESPONSE_PREFERENCES':{},'HAS_PARAMS':True,
+    'BORDER_KEY':'NotificationBorderPulse',
     'get_settings_cached':lambda: ({},{},metadata,[]),
     '_is_carrot_default_reset_param':lambda *args:True,
     'driving_preferences':p,'restore_param_values_validated':restore}
@@ -283,6 +416,8 @@ def test_development_menu_keeps_parameter_contract_and_has_no_duplicate_entries(
   from pathlib import Path
   from collections import Counter
   from openpilot.selfdrive.carrot.server.services.settings import inject_driving_preferences,build_menu_categories
+  from openpilot.selfdrive.controls.lib.approach_comfort import CRUISE_BUTTON_PREFERENCES,RESPONSE_PREFERENCES
+  from openpilot.selfdrive.controls.lib.notification_preferences import KEY as BORDER_KEY
   path=Path(__file__).resolve().parents[3]/'selfdrive/carrot_settings.json'
   original=json.loads(path.read_text(encoding='utf-8'))
   data=inject_driving_preferences(copy.deepcopy(original))
@@ -291,7 +426,7 @@ def test_development_menu_keeps_parameter_contract_and_has_no_duplicate_entries(
       yield from node.get('params',[])
       yield from names(node.get('groups',[]))
   before=Counter(names(original['menu']));after=Counter(names(data['menu']))
-  assert set(after)==set(before)|set(DrivingPreferences().values)
+  assert set(after)==set(before)|set(DrivingPreferences().values)|set(CRUISE_BUTTON_PREFERENCES)|set(RESPONSE_PREFERENCES)|{BORDER_KEY}
   assert all(value==1 for value in after.values())
   assert data['menu'][0]['id']=='development_features' and data['menu'][0]['ko']=='개발 중 기능'
   moved=set(names([data['menu'][0]]))
@@ -306,7 +441,9 @@ def test_development_menu_keeps_parameter_contract_and_has_no_duplicate_entries(
       assert by_name[item['name']]['title']=='주변 대상 상시 표시'
     if item['name']=='ManualSteerWithBlinker':
       presentation.update(('descr','edescr','cdescr'))
-      assert '0.5초' in by_name[item['name']]['descr']
+      assert '0.2초' in by_name[item['name']]['descr']
+    if item['name'] in ('C3xLiteBuzzerMute','C3xLiteHapticNotifications'):
+      presentation.update(('title','etitle','ctitle','descr','edescr','cdescr'))
     if item['name'] in ('ApproachCoastStrength','ApproachTrafficCalm'):
       presentation.update(('descr','edescr','cdescr'))
       for field in ('descr','edescr','cdescr'):

@@ -147,6 +147,8 @@ class LaunchFollow:
 
   It never changes starting permission, hold, physical obstacles or braking.
   An increased capability is not a guaranteed command or reduced road gap.
+  Its low-speed allowance fades from 20 to 40km/h. Reaching 40 ends this
+  departure; slowing again does not rearm it without a fresh standstill.
   """
   def __init__(self, dt=0.05):
     self.dt = dt
@@ -217,6 +219,17 @@ class LaunchFollow:
       self.track = None
       self.stopped_ns = 0
       return self.withdraw(table_max, 'off_or_ineligible', immediate=True)
+    if not all(math.isfinite(x) for x in (v_ego, desired_distance, table_max)) or table_max <= 0:
+      self.stopped_ns = 0
+      return self.withdraw(table_max, 'invalid_limits', immediate=True)
+    if v_ego >= 40/3.6:
+      self.stopped_ns = 0
+      return self.withdraw(table_max, 'departure_speed_complete', immediate=True)
+    speed_factor = clamp((40/3.6-v_ego)/(20/3.6), 0., 1.)
+    speed_allowance = max(0., min(1.6, table_max*(1.+clamp(strength, 0, 20)*.01*speed_factor))-table_max)
+    # Bound residual extra before all soft withdrawals too. The slew limiter
+    # must not leave a tail above the current low-speed envelope.
+    self.extra = min(self.extra, speed_allowance)
     if v_ego <= 0.15:
       self.stopped_ns = stamp_ns
     if not lead_ok or not stamp_ok or stamp_ns-self.since_ns < 1_000_000_000:
@@ -225,8 +238,6 @@ class LaunchFollow:
       return self.withdraw(table_max, 'hold_or_approach', immediate=True)
     if not self.stopped_ns or not 0 <= stamp_ns-self.stopped_ns < 25_000_000_000:
       return self.withdraw(table_max, 'outside_launch_window')
-    if not all(math.isfinite(x) for x in (v_ego, desired_distance, table_max)) or table_max <= 0:
-      return self.withdraw(table_max, 'invalid_limits', immediate=True)
     other = radar.leadTwo
     # Selected slots may both name the first lead. Also inspect the exported
     # center tracks: a stopped queue beyond it can be absent from leadTwo.
@@ -258,7 +269,7 @@ class LaunchFollow:
     # capability only: MPC obstacles/jerk and stock turn/approach limits win.
     opening_factor = 1.0 if self.relative_speed_growing else clamp((lead.vRel-0.5)/2.5, 0., 1.)
     amount = clamp(strength, 0, 20) * 0.01 * opening_factor
-    amount *= clamp((60/3.6-v_ego)/(20/3.6), 0., 1.)
+    amount *= speed_factor
     allowed = min(1.6, table_max*(1.+amount))
     self.reason = (('opening_growth_allowance' if self.relative_speed_growing else 'opening_allowance')
                    if allowed > table_max else 'speed_or_stock_limit')
