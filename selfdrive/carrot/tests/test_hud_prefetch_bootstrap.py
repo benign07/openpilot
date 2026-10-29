@@ -39,7 +39,7 @@ class BootstrapTests(unittest.TestCase):
     helper=self.folder/'parked_atomic.py'
     helper.write_text('''import json,time\nfrom pathlib import Path\ndef atomic(path,raw,mode=0o600):\n path=Path(path);path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)\ndef save(path,value):atomic(path,json.dumps(value).encode())\ndef parked():return {'mono':time.monotonic(),'continuous_seconds':10}\ndef stopped():pass\n''')
     self.manifest={'schema':1,'kind':'HudPrefetchBootstrap','installer_sha256':tool.sha(Path(tool.__file__).read_bytes()),
-                   'helper_sha256':tool.sha(helper.read_bytes()),'files':self.files,'protected':protected,'automatic_enabled':True}
+                   'helper_sha256':tool.sha(helper.read_bytes()),'files':self.files,'protected':protected,'automatic_enabled':False}
     self.sign()
 
   def sign(self):
@@ -86,7 +86,7 @@ class BootstrapTests(unittest.TestCase):
   def test_install_and_restore_preserve_configuration_and_installed_receipts(self):
     m,c,b=self.stage();before=(self.state/'config.json').read_bytes();state=(self.state/'state.json').read_bytes()
     self.apply(m,c,b);self.assertEqual((self.root/tool.ORDER[1]).read_bytes(),self.new)
-    self.assertTrue(json.loads((self.state/'automatic.json').read_bytes())['enabled'])
+    self.assertFalse(json.loads((self.state/'automatic.json').read_bytes())['enabled'])
     self.assertEqual((self.state/'config.json').read_bytes(),before);self.assertEqual((self.state/'state.json').read_bytes(),state)
     self.apply(m,c,b,True);self.assertEqual((self.root/tool.ORDER[1]).read_bytes(),self.old)
     self.assertFalse((self.root/tool.ORDER[0]).exists());self.assertFalse((self.state/'automatic.json').exists())
@@ -119,3 +119,53 @@ class BootstrapTests(unittest.TestCase):
   def test_foreign_protected_boot_source_is_rejected(self):
     (self.root/tool.PROTECTED[0]).write_bytes(b'foreign')
     with self.assertRaises(ValueError):self.verify()
+
+  def test_service_health_failure_uses_fresh_guarded_restore_and_reports_failure(self):
+    m,c,b=self.stage();p=self.folder/'transaction.json';record=json.loads(p.read_bytes());record['phase']='installed_pending_service_verification';c.save(p,record)
+    with patch.object(tool,'verify_service',side_effect=RuntimeError('dead server')),patch.object(tool,'transaction',return_value={'phase':'restored'}) as recovery:
+      with self.assertRaisesRegex(RuntimeError,'original updater restored'):
+        tool.finish_service(self.folder,self.root,self.state,m,c,b)
+      self.assertIs(recovery.call_args.args[-1],True)
+    self.assertEqual(json.loads(p.read_bytes())['phase'],'restored_after_service_failure')
+
+  def test_failed_start_preserves_original_error_in_durable_recovery_record(self):
+    m,c,b=self.stage();p=self.folder/'transaction.json';record=json.loads(p.read_bytes())
+    with patch.object(tool.subprocess,'run',side_effect=RuntimeError('systemd unavailable')):
+      with self.assertRaisesRegex(RuntimeError,'original=ValueError'):
+        tool.start_service(self.folder,record,c,ValueError('original write failure'))
+    saved=json.loads(p.read_bytes());self.assertEqual(saved['phase'],'recovery_required')
+    self.assertIn('original write failure',saved['original_error'])
+
+  def test_local_health_requires_stable_pid_and_exact_loaded_service(self):
+    clock=[0.]
+    class Reply:
+      def __enter__(self):self.sent=False;return self
+      def __exit__(self,*_):pass
+      def geturl(self):return 'http://127.0.0.1:7000/api/hud_update/local_health'
+      def read1(self,_):
+        if self.sent:return b''
+        self.sent=True
+        return json.dumps({'ok':True,'configured':True,'policy_valid':True,'prefetch_version':1,
+                           'service_sha256':'a'*64,'automatic_enabled':True,'process_id':123}).encode()
+    fake=types.SimpleNamespace(monotonic=lambda:clock[0],sleep=lambda t:clock.__setitem__(0,clock[0]+t))
+    with patch.object(tool,'time',fake),patch.object(tool,'urlopen',return_value=Reply()):
+      self.assertEqual(tool.verify_service('a'*64)['process_id'],123)
+      self.assertGreaterEqual(clock[0],3.)
+      with self.assertRaises(RuntimeError):tool.verify_service('b'*64,2)
+
+  def test_activation_requires_verified_service_fresh_park_then_restart(self):
+    m,c,b=self.stage();self.apply(m,c,b)
+    p=self.folder/'transaction.json';record=json.loads(p.read_bytes());record.update(phase='complete',service_verified=True);c.save(p,record)
+    with patch.object(tool,'verify_service',return_value={'automatic_enabled':False}),patch.dict('sys.modules',self.modules()),patch.object(c,'parked',wraps=c.parked) as gate,patch.object(tool.subprocess,'run') as reboot:
+      result=tool.activate(self.folder,self.root,self.state,m,c)
+      gate.assert_called_once();reboot.assert_called_once()
+    self.assertEqual(result['phase'],'activation_pending_restart')
+    self.assertTrue(json.loads((self.state/'automatic.json').read_bytes())['enabled'])
+
+  def test_failed_activation_restart_restores_disabled_policy(self):
+    m,c,b=self.stage();self.apply(m,c,b)
+    p=self.folder/'transaction.json';record=json.loads(p.read_bytes());record.update(phase='complete',service_verified=True);c.save(p,record)
+    with patch.object(tool,'verify_service',return_value={'automatic_enabled':False}),patch.dict('sys.modules',self.modules()),patch.object(tool.subprocess,'run',side_effect=RuntimeError('reboot denied')):
+      with self.assertRaises(RuntimeError):tool.activate(self.folder,self.root,self.state,m,c)
+    self.assertFalse(json.loads((self.state/'automatic.json').read_bytes())['enabled'])
+    self.assertEqual(json.loads(p.read_bytes())['phase'],'complete')

@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from urllib.request import urlopen
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -33,6 +34,15 @@ def checked(root,name):
 
 
 def digest(path):return sha(path.read_bytes()) if path.is_file() else None
+
+
+def require_vehicle():
+  from openpilot.common.params import Params
+  from cereal import car
+  raw=Params().get('CarParams')
+  if not raw:raise ValueError('Missing vehicle identity')
+  with car.CarParams.from_bytes(raw) as cp:
+    if cp.carFingerprint!='HYUNDAI_PALISADE_LX3_HEV':raise ValueError('Not LX3 HEV')
 
 
 def updater_stopped(proc=Path('/proc')):
@@ -56,7 +66,7 @@ def verify(folder,root,state_root):
   if (manifest.get('schema')!=1 or manifest.get('kind')!='HudPrefetchBootstrap' or
       manifest.get('installer_sha256')!=sha(Path(__file__).read_bytes()) or
       list(manifest.get('files',{}))!=list(ORDER) or set(manifest.get('protected',{}))!=set(PROTECTED) or
-      type(manifest.get('automatic_enabled')) is not bool):raise ValueError('Bootstrap scope mismatch')
+      manifest.get('automatic_enabled') is not False):raise ValueError('Bootstrap scope mismatch')
   helper=folder/'parked_atomic.py'
   if sha(helper.read_bytes())!=manifest['helper_sha256']:raise ValueError('Gate helper changed')
   spec=importlib.util.spec_from_file_location('prefetch_parked_atomic',helper)
@@ -131,6 +141,105 @@ def restored(folder,root,state_root,record,core):
     core.atomic(policy,raw)
 
 
+def start_service(folder,record,core,original=None):
+  try:subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True,timeout=10)
+  except BaseException as exc:
+    record.update(phase='recovery_required',service_start_error=type(exc).__name__,
+                  original_error=type(original).__name__+': '+str(original) if original else None)
+    core.save(folder/'transaction.json',record)
+    raise RuntimeError('comma.service start failed; original='+str(record['original_error'])) from exc
+
+
+def verify_service(expected_sha,deadline_seconds=30):
+  deadline=time.monotonic()+deadline_seconds;since=None;pid=None
+  url='http://127.0.0.1:7000/api/hud_update/local_health'
+  while time.monotonic()<deadline:
+    try:
+      with urlopen(url,timeout=1) as response:
+        if response.geturl()!=url:raise ValueError('Unexpected health redirect')
+        chunks=[];size=0
+        while True:
+          if time.monotonic()>=deadline:raise ValueError('Health read deadline')
+          chunk=response.read1(min(4097-size,1024))
+          if not chunk:break
+          chunks.append(chunk);size+=len(chunk)
+          if size>4096:raise ValueError('Health response too large')
+        raw=b''.join(chunks)
+      if len(raw)>4096:raise ValueError('Health response too large')
+      row=json.loads(raw)
+      good=(row.get('ok') is True and row.get('configured') is True and row.get('policy_valid') is True and
+            row.get('prefetch_version')==1 and row.get('service_sha256')==expected_sha and
+            type(row.get('automatic_enabled')) is bool and type(row.get('process_id')) is int and row['process_id']>0)
+      if good:
+        if pid!=row['process_id']:pid=row['process_id'];since=time.monotonic()
+        if time.monotonic()-since>=3.:return row
+      else:since=pid=None
+    except Exception:since=pid=None
+    time.sleep(.5)
+  raise RuntimeError('New carrot_server local health not stable')
+
+
+def finish_service(folder,root,state_root,manifest,core,bundle):
+  record=json.loads((folder/'transaction.json').read_bytes())
+  if record.get('phase') not in ('installed_pending_service_verification','activation_pending_restart','complete'):
+    raise ValueError('Bootstrap not awaiting service verification')
+  try:
+    health=verify_service(manifest['files'][ORDER[1]]['sha256'])
+  except Exception as original:
+    if record.get('phase') in ('complete','activation_pending_restart'):
+      raise RuntimeError('Previously verified service differs; no automatic restore attempted') from original
+    record.update(service_verification_error=type(original).__name__+': '+str(original))
+    core.save(folder/'transaction.json',record)
+    try:
+      # The manager is running again: reacquire the full fresh parked/Panda
+      # gate before stopping it and restoring, never reuse the old lease.
+      restored_record=transaction(folder,root,state_root,manifest,core,bundle,True)
+      restored_record['phase']='restored_after_service_failure'
+      restored_record['service_verification_error']=record['service_verification_error']
+      core.save(folder/'transaction.json',restored_record)
+    except Exception as recovery:
+      record.update(phase='recovery_required',recovery_error=type(recovery).__name__+': '+str(recovery))
+      core.save(folder/'transaction.json',record)
+      raise RuntimeError('Service failed; parked recovery also failed: '+str(recovery)) from original
+    raise RuntimeError('Service failed; original updater restored under fresh parked gate') from original
+  record.update(phase='complete',service_verified=True,service_process_id=health['process_id'],
+                automatic_active=health['automatic_enabled'])
+  core.save(folder/'transaction.json',record)
+  return record
+
+
+def activate(folder,root,state_root,manifest,core):
+  record=json.loads((folder/'transaction.json').read_bytes())
+  if record.get('phase')!='complete' or record.get('service_verified') is not True:
+    raise ValueError('Verify the installed service before activation')
+  health=verify_service(manifest['files'][ORDER[1]]['sha256'])
+  if health['automatic_enabled']:
+    record['automatic_active']=True;core.save(folder/'transaction.json',record);return record
+  idle_state(state_root)
+  gate=core.parked()
+  require_vehicle()
+  idle_state(state_root)
+  for name,row in manifest['files'].items():
+    if digest(checked(root,name))!=row['sha256']:raise ValueError('Installed service changed before activation')
+  policy=json.loads((state_root/'automatic.json').read_bytes())
+  if not isinstance(policy,dict) or policy.get('schema')!=1:raise ValueError('Review automatic policy')
+  previous_policy=dict(policy)
+  policy['enabled']=True;core.save(state_root/'automatic.json',policy)
+  record.update(phase='activation_pending_restart',activation_at=time.monotonic(),automatic_active=False)
+  core.save(folder/'transaction.json',record)
+  # No source change: restart once to load the opt-in only AFTER verified
+  # startup. This keeps failed bootstrap recovery free of automatic queues.
+  try:
+    if time.monotonic()-gate['mono']>=1:raise ValueError('Fresh parked restart required')
+    subprocess.run(['sudo','-n','reboot'],check=True,timeout=5)
+  except BaseException as exc:
+    core.save(state_root/'automatic.json',previous_policy)
+    record.update(phase='complete',automatic_active=False,activation_error=type(exc).__name__)
+    core.save(folder/'transaction.json',record)
+    raise
+  return record
+
+
 def transaction(folder,root,state_root,manifest,core,bundle,restore=False):
   record=json.loads((folder/'transaction.json').read_bytes())
   if (record.get('bundle_sha256')!=bundle or record.get('root')!=str(root.resolve()) or
@@ -151,12 +260,7 @@ def transaction(folder,root,state_root,manifest,core,bundle,restore=False):
   # The qualified helper obtains10 continuous seconds of fresh P/zero/inactive
   # host and Panda state, never an old saved approval or a CLI bypass flag.
   gate=core.parked()
-  from openpilot.common.params import Params
-  from cereal import car
-  raw=Params().get('CarParams')
-  if not raw:raise ValueError('Missing vehicle identity')
-  with car.CarParams.from_bytes(raw) as cp:
-    if cp.carFingerprint!='HYUNDAI_PALISADE_LX3_HEV':raise ValueError('Not LX3 HEV')
+  require_vehicle()
   record.update(phase='stopping',parked_gate=gate);core.save(folder/'transaction.json',record)
   changed=False
   try:
@@ -183,26 +287,30 @@ def transaction(folder,root,state_root,manifest,core,bundle,restore=False):
     if time.monotonic()-gate['mono']>=15:raise ValueError('Stopped transaction exceeded15seconds')
     if preserved!={n:digest(state_root/n) for n in preserved}:raise ValueError('Existing updater records changed')
     core.save(folder/'transaction.json',record)
-  except BaseException:
+  except BaseException as original:
     if changed:
       try:
         restored(folder,root,state_root,record,core);record['phase']='restored_after_failure';core.save(folder/'transaction.json',record)
       except BaseException:
         record['phase']='recovery_required';core.save(folder/'transaction.json',record);raise
-    subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True,timeout=10)
+    start_service(folder,record,core,original)
     raise
-  subprocess.run(['sudo','-n','systemctl','start','comma.service'],check=True,timeout=10)
+  start_service(folder,record,core)
   return record
 
 
 def main():
-  parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('phase',choices=('verify','stage','install','restore'))
+  parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('phase',choices=('verify','stage','install','restore','verify-service','activate'))
   parser.add_argument('--folder',type=Path,required=True);parser.add_argument('--root',type=Path,default=Path('/data/openpilot'))
   parser.add_argument('--state-root',type=Path,default=Path('/data/community/hud_updates'))
   a=parser.parse_args();manifest,core,bundle=verify(a.folder,a.root,a.state_root)
   if a.phase=='verify':originals_match(a.root,manifest);result={'verified':True,'installed':False}
   elif a.phase=='stage':result=stage(a.folder,a.root,a.state_root,manifest,core,bundle)
-  else:result=transaction(a.folder,a.root,a.state_root,manifest,core,bundle,a.phase=='restore')
+  elif a.phase=='verify-service':result=finish_service(a.folder,a.root,a.state_root,manifest,core,bundle)
+  elif a.phase=='activate':result=activate(a.folder,a.root,a.state_root,manifest,core)
+  else:
+    result=transaction(a.folder,a.root,a.state_root,manifest,core,bundle,a.phase=='restore')
+    if a.phase=='install':result=finish_service(a.folder,a.root,a.state_root,manifest,core,bundle)
   print(json.dumps(result,ensure_ascii=True))
 
 

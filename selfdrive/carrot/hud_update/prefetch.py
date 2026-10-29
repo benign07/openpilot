@@ -1,5 +1,14 @@
 """Bounded signed-envelope cache. Never stages files or authorizes installation."""
+import json
 from . import core
+
+
+def read_metadata(path):
+  try:
+    with path.open('rb') as stream:raw=stream.read(16385)
+    if len(raw)>16384:return None
+    return json.loads(raw)
+  except (OSError,ValueError,UnicodeError):return None
 
 
 def wifi_connected(sm, now):
@@ -11,11 +20,26 @@ def wifi_connected(sm, now):
     return False
 
 
+def source_hashes(root, release):
+  return {row['path']:core.sha(target.read_bytes()) if target.is_file() else None
+          for row in release['files'] for target in (core.checked_path(root,row['path']),)}
+
+
+def source_context(root, release):
+  return core.sha(core.canonical(source_hashes(root,release)))
+
+
+class SourceMismatch(ValueError):
+  def __init__(self,path,context):
+    super().__init__('기존 파일이 게시 기준과 다릅니다: '+path)
+    self.context=context
+
+
 def check_sources(root, release):
+  hashes=source_hashes(root,release)
   for row in release['files']:
-    target = core.checked_path(root, row['path'])
-    if not target.is_file() or core.sha(target.read_bytes()) != row['before']:
-      raise ValueError('기존 파일이 게시 기준과 다릅니다: '+row['path'])
+    if hashes[row['path']] != row['before']:
+      raise SourceMismatch(row['path'],core.sha(core.canonical(hashes)))
 
 
 class BundleCache:
@@ -44,3 +68,19 @@ class BundleCache:
     # Delete only cache blob names; never release backups/profile/user files.
     for path in self.folder.glob('*.json'):
       if path.stem != digest and core.HEX.fullmatch(path.stem): path.unlink()
+
+
+def validate_block(value):
+  if not isinstance(value,dict):return None
+  expected={'schema','bundle_sha256','sequence','kind','source_context','message'}
+  if set(value)!=expected:return None
+  if type(value['schema']) is not int or value['schema']!=1:return None
+  if type(value['sequence']) is not int or value['sequence']<1:return None
+  if not isinstance(value['bundle_sha256'],str) or not core.HEX.fullmatch(value['bundle_sha256']):return None
+  if value['kind'] not in ('source','validation'):return None
+  context=value['source_context']
+  if value['kind']=='source':
+    if not isinstance(context,str) or not core.HEX.fullmatch(context):return None
+  elif context is not None:return None
+  if not isinstance(value['message'],str) or not 1<=len(value['message'])<=240:return None
+  return dict(value)

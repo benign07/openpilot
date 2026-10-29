@@ -11,14 +11,14 @@ from unittest.mock import AsyncMock,patch
 from aiohttp import web
 from aiohttp.test_utils import TestClient,TestServer
 from selfdrive.carrot.hud_update import core,prefetch,service
-from selfdrive.carrot.tests.test_hud_updater import ReleaseTests
+from selfdrive.carrot.tests import test_hud_updater as fixtures
 
 
 class PrefetchTests(unittest.IsolatedAsyncioTestCase):
-  signed=ReleaseTests.signed
+  signed=fixtures.ReleaseTests.signed
 
   async def asyncSetUp(self):
-    ReleaseTests.setUp(self)
+    fixtures.ReleaseTests.setUp(self)
     self.raw,self.index=self.signed()
     core.save(self.folder/'config.json',{'phone_ip':'127.0.0.1','token':'x'*43,'public_key':self.public})
     read=Path.read_text
@@ -32,6 +32,7 @@ class PrefetchTests(unittest.IsolatedAsyncioTestCase):
     self.svc.parked=AsyncMock(return_value=False)
     app=web.Application();app['hud_update_service']=self.svc
     app.router.add_post('/api/hud_update/action',service.action)
+    app.router.add_get('/api/hud_update/local_health',service.local_health)
     self.client=TestClient(TestServer(app));await self.client.start_server()
     self.headers={'Authorization':'Bearer '+'x'*43}
 
@@ -51,6 +52,13 @@ class PrefetchTests(unittest.IsolatedAsyncioTestCase):
     for row in self.release['files']:
       self.assertEqual(core.sha((self.root/row['path']).read_bytes()),row['before'])
 
+  def drive_sample(self,started,speed):
+    sm=type('SM',(dict,),{})(deviceState=NS(started=started,networkType='wifi'),carState=NS(canValid=True,vEgo=speed))
+    sm.alive=sm.valid={'deviceState':True,'carState':True}
+    sm.logMonoTime={k:int(service.time.monotonic()*1e9) for k in sm}
+    self.svc.observe_drive(sm)
+    return sm
+
   async def prepare(self,automatic=False):
     if automatic:await self.post('automatic',enabled=True)
     else:await self.queue()
@@ -61,6 +69,14 @@ class PrefetchTests(unittest.IsolatedAsyncioTestCase):
       await self.svc.prefetch_tick();fetch.assert_not_called()
     self.assertEqual(self.svc.state['phase'],'idle')
     self.assertFalse(self.svc.public()['automatic']['enabled'])
+
+  async def test_local_bootstrap_health_is_read_only_and_rejects_non_loopback(self):
+    response=await self.client.get('/api/hud_update/local_health');self.assertEqual(response.status,200)
+    data=await response.json();self.assertEqual(data['prefetch_version'],1)
+    self.assertNotIn('x'*43,json.dumps(data));self.assertNotIn(self.public,json.dumps(data))
+    self.assertEqual(self.svc.state['phase'],'idle')
+    with self.assertRaises(web.HTTPUnauthorized):
+      await service.local_health(NS(remote='100.98.217.122',app={'hud_update_service':self.svc}))
 
   async def test_manual_moving_request_prefetches_but_never_stages_or_reboots(self):
     with patch.object(core,'stage') as stage,patch.object(service.asyncio,'create_subprocess_exec') as reboot:
@@ -88,8 +104,53 @@ class PrefetchTests(unittest.IsolatedAsyncioTestCase):
     self.svc.parked_since=service.time.monotonic()-50
     with patch.object(core,'stage') as stage:
       await self.svc.tick();stage.assert_not_called()
-    self.svc.auto_driven=True;self.svc.parked_since=service.time.monotonic()-11
+    self.drive_sample(True,2.);self.drive_sample(True,0.);self.svc.parked_since=service.time.monotonic()-11
     await self.svc.tick();self.assertEqual(self.svc.state['phase'],'countdown')
+
+  async def test_auto_motion_cannot_survive_ignition_off_and_next_parked_start(self):
+    await self.prepare(automatic=True)
+    self.drive_sample(True,2.);self.assertTrue(self.svc.auto_driven)
+    sm=self.drive_sample(False,0.);sm.valid['carState']=False;self.svc.observe_drive(sm)
+    self.drive_sample(True,0.);self.assertFalse(self.svc.auto_driven)
+    self.svc.parked=AsyncMock(return_value=True);self.svc.parked_since=service.time.monotonic()-11
+    with patch.object(core,'stage') as stage:await self.svc.tick();stage.assert_not_called()
+
+  async def test_actual_wifi_broker_poll_observes_ignition_edges_even_with_stale_offroad_car_state(self):
+    sm=self.drive_sample(True,2.)
+    def poll(_):sm.logMonoTime['deviceState']=int(service.time.monotonic()*1e9)
+    self.svc.app.update(realtime_broker=NS(sm=sm,poll=poll),realtime_broker_poll_lock=asyncio.Lock())
+    self.assertTrue(await service.UpdateService.wifi(self.svc));self.assertTrue(self.svc.auto_driven)
+    sm['deviceState'].started=False;sm.valid['carState']=False
+    self.assertTrue(await service.UpdateService.wifi(self.svc));self.assertFalse(self.svc.auto_driven)
+    sm['deviceState'].started=True;sm.valid['carState']=True;sm['carState'].vEgo=0.
+    await service.UpdateService.wifi(self.svc);self.assertFalse(self.svc.auto_driven)
+
+  async def test_auto_off_during_final_validation_is_accepted_and_never_arms(self):
+    await self.prepare(automatic=True);self.drive_sample(True,2.);self.drive_sample(True,0.)
+    self.svc.parked=AsyncMock(return_value=True);self.svc.parked_since=service.time.monotonic()-11
+    await self.svc.tick();self.svc.countdown_since=service.time.monotonic()-11
+    entered=threading.Event();finish=threading.Event()
+    def blocked(*args):entered.set();finish.wait(5)
+    with patch.object(core,'validate_staged',side_effect=blocked),patch.object(service.asyncio,'create_subprocess_exec') as reboot:
+      work=asyncio.create_task(self.svc.tick());self.assertTrue(await asyncio.to_thread(entered.wait,2))
+      self.assertEqual((await self.post('automatic',enabled=False)).status,200)
+      finish.set();await work;reboot.assert_not_called()
+    self.assertEqual(self.svc.state['phase'],'cancelled')
+
+  async def test_persisted_auto_off_cancels_pending_request_after_interrupted_phase_write(self):
+    await self.prepare(automatic=True);self.svc.save_auto_policy(enabled=False)
+    self.svc.parked=AsyncMock(return_value=True)
+    with patch.object(core,'stage') as stage:await self.svc.tick();stage.assert_not_called()
+    self.assertEqual(self.svc.state['phase'],'cancelled')
+
+  async def test_auto_off_during_automatic_cache_commit_prevents_initial_queue(self):
+    await self.post('automatic',enabled=True);entered=threading.Event();finish=threading.Event()
+    def blocked(*args):entered.set();finish.wait(5)
+    with patch.object(service,'fetch',side_effect=self.fetch),patch.object(self.svc.cache,'save',side_effect=blocked):
+      work=asyncio.create_task(self.svc.prefetch_tick());self.assertTrue(await asyncio.to_thread(entered.wait,2))
+      self.assertEqual((await self.post('automatic',enabled=False)).status,200)
+      finish.set();await work
+    self.assertEqual(self.svc.state['phase'],'idle');self.assertFalse(self.svc.public()['automatic']['enabled'])
 
   async def test_explicit_manual_request_can_take_over_a_cold_auto_reservation(self):
     await self.prepare(automatic=True);await self.queue()
@@ -154,6 +215,44 @@ class PrefetchTests(unittest.IsolatedAsyncioTestCase):
     with patch.object(core,'stage') as stage:
       with self.assertRaises(ValueError):await self.svc.tick()
       stage.assert_not_called()
+
+  async def test_source_mismatch_before_download_is_cached_blocked_and_never_redownloaded(self):
+    await self.post('automatic',enabled=True)
+    (self.root/self.release['files'][0]['path']).write_bytes(b'wrong baseline\n')
+    with patch.object(service,'fetch',side_effect=self.fetch) as fetch:
+      await self.svc.prefetch_tick()
+      self.assertEqual(self.svc.prefetch_state['phase'],'blocked')
+      self.assertIsNotNone(self.svc.cache.load(self.index,self.public,0))
+      for _ in range(2):
+        self.svc.prefetch_due=0.;await self.svc.prefetch_tick()
+    self.assertEqual(sum(c.args[0]!=core.CHANNEL for c in fetch.call_args_list),1)
+    self.assertEqual(self.svc.state['phase'],'idle')
+    self.assertEqual(core.load(self.folder/'prefetch_block.json')['kind'],'source')
+
+  async def test_manual_source_mismatch_is_a_visible_failure_without_runtime_changes(self):
+    await self.queue();(self.root/self.release['files'][0]['path']).write_bytes(b'changed before download')
+    with patch.object(service,'fetch',side_effect=self.fetch):await self.svc.prefetch_tick()
+    self.assertEqual(self.svc.state['phase'],'failed');self.assertIn('PC',self.svc.state['message'])
+
+  async def test_invalid_signature_blocks_same_bundle_without_repeating_body_download(self):
+    await self.post('automatic',enabled=True)
+    import base64
+    envelope=json.loads(self.raw);envelope['signature']=base64.b64encode(b'0'*64).decode()
+    bad_raw=core.canonical(envelope);index={**self.index,'bundle_bytes':len(bad_raw),'bundle_sha256':core.sha(bad_raw)}
+    def bad(url,limit):return core.canonical(index) if url==core.CHANNEL else bad_raw
+    with patch.object(service,'fetch',side_effect=bad) as fetch:
+      await self.svc.prefetch_tick();self.svc.prefetch_due=0.;await self.svc.prefetch_tick()
+    self.assertEqual(self.svc.prefetch_state['phase'],'blocked')
+    self.assertEqual(sum(c.args[0]!=core.CHANNEL for c in fetch.call_args_list),1)
+
+  async def test_interrupted_download_retries_without_permanent_block_or_failed_manual_request(self):
+    await self.queue()
+    with patch.object(service,'fetch',side_effect=[self.raw[:-10],self.raw]):
+      with self.assertRaises(OSError):await self.svc.prefetch_tick()
+      self.assertIsNone(self.svc.prefetch_block)
+      self.assertEqual(self.svc.state['phase'],'waiting_parked')
+      self.svc.prefetch_due=0.;await self.svc.prefetch_tick()
+    self.assertTrue(self.svc.prefetch_state['ready']);self.assertIsNone(self.svc.prefetch_block)
 
   async def test_corrupt_cache_waits_and_never_stages(self):
     await self.prepare();(self.svc.cache.folder/(self.index['bundle_sha256']+'.json')).write_bytes(b'bad')
@@ -220,6 +319,16 @@ class PrefetchTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WiFiTests(unittest.TestCase):
+  def test_block_validator_rejects_boolean_numbers_and_invalid_metadata(self):
+    valid={'schema':1,'bundle_sha256':'a'*64,'sequence':1,'kind':'source','source_context':'b'*64,'message':'blocked'}
+    result=prefetch.validate_block(valid);self.assertEqual(result,valid);self.assertIsNot(result,valid)
+    cases=[None,{},[],{**valid,'extra':1}]
+    for key,bad_values in {'schema':[True,False,1.,2], 'sequence':[True,False,1.,0,-1],
+                           'bundle_sha256':['A'*64,'g'*64,'a'*63,None], 'kind':['unknown',None],
+                           'source_context':[None,'bad'], 'message':['','x'*241,None]}.items():
+      cases.extend({**valid,key:v} for v in bad_values)
+    for case in cases:self.assertIsNone(prefetch.validate_block(case),case)
+    self.assertIsNotNone(prefetch.validate_block({**valid,'kind':'validation','source_context':None}))
   def test_requires_fresh_valid_wifi_and_never_accepts_cellular(self):
     sm=type('SM',(dict,),{})(deviceState=NS(networkType='wifi'))
     sm.alive=sm.valid={'deviceState':True};sm.logMonoTime={'deviceState':100_000_000_000}
