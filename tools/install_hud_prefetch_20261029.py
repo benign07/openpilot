@@ -202,6 +202,8 @@ def finish_service(folder,root,state_root,manifest,core,bundle):
       core.save(folder/'transaction.json',record)
       raise RuntimeError('Service failed; parked recovery also failed: '+str(recovery)) from original
     raise RuntimeError('Service failed; original updater restored under fresh parked gate') from original
+  if record.get('phase')=='activation_pending_restart' and health['automatic_enabled'] is not True:
+    raise RuntimeError('Automatic activation not loaded yet; wait for the requested restart')
   record.update(phase='complete',service_verified=True,service_process_id=health['process_id'],
                 automatic_active=health['automatic_enabled'])
   core.save(folder/'transaction.json',record)
