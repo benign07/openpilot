@@ -1,19 +1,22 @@
-"""Authenticated phone requests persist; installation is armed only while parked."""
+"""Prefetch signed updates independently; installation is armed only while parked."""
 import asyncio
 import hmac
 import ipaddress
 import json
 import time
+import uuid
 from pathlib import Path
 from urllib.request import Request, urlopen
 
 from aiohttp import web
-from . import core
+from . import core, prefetch
 
 ACTIVE = {'waiting_parked', 'downloading', 'countdown', 'armed', 'applying', 'verifying', 'rolling_back'}
 REQUIRED = {'card', 'controlsd', 'selfdrived', 'plannerd', 'radard', 'modeld', 'carrot_server'}
 ONROAD_HEALTH_SECONDS = 30
 ONROAD_HEALTH_DEADLINE = 180
+PREFETCH_INTERVAL = 15*60
+PREFETCH_RETRY = 60
 
 
 def requires_onroad_verification(release):
@@ -24,11 +27,19 @@ def requires_onroad_verification(release):
 
 
 def fetch(url, limit):
-  with urlopen(Request(url, headers={'User-Agent': 'CarrotHUD-DeviceUpdater', 'Cache-Control': 'no-cache'}), timeout=20) as response:
+  # read1 performs at most one underlying read, so a trickling peer cannot
+  # hide an unbounded loop inside read(n). One socket operation is <=10s.
+  deadline = time.monotonic()+min(90., 20.+limit/131072.)
+  chunks, size = [], 0
+  with urlopen(Request(url, headers={'User-Agent': 'CarrotHUD-DeviceUpdater', 'Cache-Control': 'no-cache'}), timeout=10) as response:
     if not response.geturl().startswith(core.RAW): raise ValueError('Unexpected release redirect')
-    raw = response.read(limit + 1)
-  if len(raw) > limit: raise ValueError('Release response too large')
-  return raw
+    while True:
+      if time.monotonic() >= deadline: raise ValueError('Release download deadline exceeded')
+      chunk = response.read1(min(65536, limit+1-size))
+      if not chunk: break
+      chunks.append(chunk); size += len(chunk)
+      if size > limit: raise ValueError('Release response too large')
+  return b''.join(chunks)
 
 
 class UpdateService:
@@ -39,6 +50,19 @@ class UpdateService:
     self.history = core.load(state_root / 'history.json', [])
     self.latest = core.load(state_root / 'latest.json')
     self.lock = asyncio.Lock()
+    self.cache = prefetch.BundleCache(state_root)
+    self.auto_policy = core.load(state_root/'automatic.json', {})
+    if (not isinstance(self.auto_policy, dict) or self.auto_policy.get('schema') != 1 or
+        type(self.auto_policy.get('enabled',False)) is not bool or
+        type(self.auto_policy.get('skipped_sequence',0)) is not int or self.auto_policy.get('skipped_sequence',0)<0):
+      self.auto_policy = {}
+    self.prefetch_state = {'phase': 'idle', 'message': '미리 다운로드 대기', 'ready': False}
+    self.prefetch_generation = 0
+    self.prefetched_digest = None
+    self.prefetch_due = 0.
+    self.wifi_was_connected = False
+    self.prefetch_not_before = 0.
+    self.auto_driven = False
     self.parked_since = None
     self.countdown_since = None
     self.health_sm = None
@@ -80,8 +104,132 @@ class UpdateService:
     return {'ok': True, 'configured': bool(self.config), 'installed': installed, 'latest': self.latest,
             'phase': self.state.get('phase', 'idle'), 'message': self.state.get('message', ''),
             'requested_release': (self.state.get('index') or {}).get('release_id'),
+            'requested_bundle_sha256': (self.state.get('index') or {}).get('bundle_sha256'),
+            'automatic_request': self.state.get('automatic') is True,
             'history': self.history[-30:], 'rollback': rollback,
-            'cancel_available': self.state.get('phase') in ('waiting_parked', 'countdown')}
+            'automatic': {'supported': True, 'enabled': self.auto_policy.get('enabled') is True,
+                          'wifi_connected': self.wifi_was_connected, **self.prefetch_state},
+            'cancel_available': self.state.get('phase') in ('waiting_parked', 'downloading', 'countdown')}
+
+  def save_auto_policy(self, **values):
+    policy = {**self.auto_policy, **values, 'schema': 1}
+    core.save(self.folder/'automatic.json', policy)
+    self.auto_policy = policy
+
+  def request_identity(self):
+    return self.state.get('request_id') or core.sha(core.canonical({
+      'index': self.state.get('index'), 'requested_at': self.state.get('requested_at'),
+      'operation': self.state.get('operation')}))
+
+  def cancelled(self, generation):
+    return (generation != self.prefetch_generation or
+            self.auto_policy.get('cancelled_request') == self.request_identity() or
+            self.state.get('phase') == 'cancelled')
+
+  def cancel(self):
+    if self.state.get('phase') not in ('waiting_parked', 'downloading', 'countdown'):
+      raise web.HTTPConflict(text='현재 단계에서는 취소할 수 없습니다.')
+    self.save_auto_policy(suppressed_bundle=(self.state.get('index') or {}).get('bundle_sha256'),
+                          skipped_sequence=max(self.auto_policy.get('skipped_sequence',0),
+                                               (self.state.get('index') or {}).get('sequence',0)),
+                          cancelled_request=self.request_identity())
+    self.prefetch_generation += 1
+    self.change('cancelled', '사용자가 업데이트 예약을 취소했습니다 · 같은 버전 자동 재예약 안 함')
+    self.parked_since = self.countdown_since = None
+
+  def observe_drive(self, sm):
+    try:
+      now = time.monotonic()
+      if (all(sm.alive[k] and sm.valid[k] and 0 <= now-sm.logMonoTime[k]/1e9 < .5 for k in ('carState','deviceState'))
+          and sm['deviceState'].started and sm['carState'].canValid and sm['carState'].vEgo > 1.):
+        self.auto_driven = True
+    except (AttributeError, KeyError, TypeError, ValueError): pass
+
+  async def wifi(self):
+    broker, lock = self.app.get('realtime_broker'), self.app.get('realtime_broker_poll_lock')
+    if broker is None or lock is None: return False
+    async with lock:
+      await asyncio.to_thread(broker.poll, 0)
+      self.observe_drive(broker.sm)
+      return prefetch.wifi_connected(broker.sm, time.monotonic())
+
+  async def prefetch_tick(self):
+    # This loop owns all network downloads. Never hold the installation lock
+    # across network I/O, and never stage/backup/arm from this worker.
+    pending = (self.state.get('phase') == 'waiting_parked' and self.state.get('operation') != 'rollback')
+    automatic = (self.auto_policy.get('enabled') is True and
+                 self.state.get('phase', 'idle') in ('idle', 'complete', 'cancelled'))
+    if not pending and not automatic: return
+    if automatic:
+      connected = await self.wifi()
+      rising = connected and not self.wifi_was_connected
+      self.wifi_was_connected = connected
+      if not connected:
+        self.prefetch_state.update(message='Wi-Fi 연결 대기')
+        return
+      if rising: self.prefetch_due = max(self.prefetch_not_before, min(self.prefetch_due, time.monotonic()))
+    index = dict(self.state['index']) if pending else None
+    if pending and self.prefetched_digest == index.get('bundle_sha256'): return
+    if time.monotonic() < self.prefetch_due: return
+    generation = self.prefetch_generation
+    self.prefetch_due = time.monotonic()+PREFETCH_INTERVAL
+    self.prefetch_not_before = time.monotonic()+PREFETCH_RETRY
+    self.prefetch_state = {'phase': 'checking', 'message': '게시 버전 확인 중', 'ready': False}
+    if index is None:
+      index = core.validate_index(json.loads(await asyncio.to_thread(fetch, core.CHANNEL, 65536)))
+    previous = core.load(self.folder/'installed.json', {})
+    sequence = previous.get('sequence', 0)
+    if index['sequence'] <= sequence:
+      self.prefetch_state = {'phase': 'current', 'message': '게시된 최신 버전 사용 중', 'ready': False}
+      return
+    if automatic and (self.auto_policy.get('suppressed_bundle') == index['bundle_sha256'] or
+                      index['sequence'] <= self.auto_policy.get('skipped_sequence',0)):
+      self.prefetch_state = {'phase': 'cancelled', 'message': '취소한 버전 · 자동 재예약 안 함', 'ready': False}
+      return
+    if not self.vehicle_matches(): raise ValueError('LX3 차량 식별 확인 대기')
+    self.prefetch_state = {'phase': 'downloading', 'message': '미리 다운로드·서명 검증 중', 'ready': False,
+                           'release_id': index['release_id']}
+    cached = await asyncio.to_thread(self.cache.load, index, self.config['public_key'], sequence)
+    if cached is None:
+      raw = await asyncio.to_thread(fetch, core.bundle_url(index), core.LIMIT)
+      release = await asyncio.to_thread(core.verify_bundle, raw, index, self.config['public_key'], sequence)
+    else:
+      raw, release = cached
+    await asyncio.to_thread(prefetch.check_sources, self.root, release)
+    async with self.lock:
+      if generation != self.prefetch_generation: return
+      if index['sequence'] <= core.load(self.folder/'installed.json', {}).get('sequence', 0): return
+      if pending:
+        if (self.state.get('phase') != 'waiting_parked' or self.state.get('operation') == 'rollback' or
+            (self.state.get('index') or {}).get('bundle_sha256') != index['bundle_sha256']): return
+      elif (self.auto_policy.get('enabled') is not True or
+            self.state.get('phase', 'idle') not in ('idle', 'complete', 'cancelled') or
+            self.auto_policy.get('suppressed_bundle') == index['bundle_sha256']):
+        return
+      await asyncio.to_thread(self.cache.save, index, raw)
+      if generation != self.prefetch_generation: return
+      self.prefetched_digest = index['bundle_sha256']
+      self.prefetch_state = {'phase': 'ready', 'message': '다운로드·서명·현재 파일 확인 완료 · P 정차 대기',
+                             'ready': True, 'release_id': index['release_id']}
+      if not pending:
+        self.latest = index
+        core.save(self.folder/'latest.json', index)
+        self.state = {'index': index, 'automatic': True, 'request_id': uuid.uuid4().hex, 'requested_at': time.time()}
+        self.parked_since = self.countdown_since = None
+        self.change('waiting_parked', '자동 준비 완료 · P 정차·속도 0·제어 해제 후 설치합니다')
+
+  async def prefetch_run(self):
+    while True:
+      try:
+        await self.prefetch_tick()
+      except asyncio.CancelledError:
+        raise
+      except Exception as exc:
+        self.prefetch_due = time.monotonic()+PREFETCH_RETRY
+        detail = str(exc)[:200] if isinstance(exc, ValueError) else type(exc).__name__
+        self.prefetch_state = {'phase': 'retry_wait', 'ready': False,
+                               'message': '미리 받기 대기 · 기존 실행 코드 유지: '+detail}
+      await asyncio.sleep(2)
 
   def change(self, phase, message, **extra):
     self.state.update(phase=phase, message=message, **extra)
@@ -103,7 +251,12 @@ class UpdateService:
     if broker is None or lock is None: return False
     async with lock:
       await asyncio.to_thread(broker.poll, 0)
+      self.observe_drive(broker.sm)
       return parked_state_error(broker.sm) is None
+
+  async def safe_parked(self):
+    try:return await self.parked()
+    except Exception:return False
 
   def vehicle_matches(self):
     from cereal import car
@@ -148,6 +301,11 @@ class UpdateService:
   async def tick(self):
     async with self.lock:
       phase = self.state.get('phase')
+      generation = self.prefetch_generation
+      if (phase in ('waiting_parked','countdown') and
+          self.auto_policy.get('cancelled_request') == self.request_identity()):
+        self.change('cancelled', '취소 기록 확인 · 같은 요청을 설치하지 않습니다')
+        return
       if phase == 'verifying':
         release = self.state['release']
         matched = all(core.sha(core.checked_path(self.root, row['path']).read_bytes()) == row['sha256'] for row in release['files'])
@@ -199,32 +357,48 @@ class UpdateService:
           self.change('health_warning', '파일 적용됨 · 기기 정상 실행 확인 실패, PC 점검 필요')
         return
       if phase not in ('waiting_parked', 'countdown'): return
-      if not await self.parked():
+      parked = await self.safe_parked()
+      if self.cancelled(generation): return
+      if not parked:
         self.parked_since = self.countdown_since = None
         if phase == 'countdown': self.change('waiting_parked', '차량 상태 변경 · 업데이트 예약 유지')
+        return
+      if self.state.get('automatic') and not self.auto_driven:
+        self.parked_since = self.countdown_since = None
+        if self.state.get('message') != '자동 준비 완료 · 이번 부팅의 주행 후 P 정차를 기다립니다':
+          self.change('waiting_parked', '자동 준비 완료 · 이번 부팅의 주행 후 P 정차를 기다립니다')
         return
       now = time.monotonic()
       if self.parked_since is None: self.parked_since = now
       if now - self.parked_since < 10: return
-      if not self.vehicle_matches():
-        self.change('failed', '차량 식별이 일치하지 않아 중단했습니다')
-        return
+      try: matches = self.vehicle_matches()
+      except Exception: matches = False
+      if not matches: return
       if phase == 'waiting_parked':
         index = self.state['index']  # Exact user-selected release, never a moving latest pointer.
-        self.change('downloading', '선택한 버전 다운로드·서명·호환성 검사 중')
         previous = core.load(self.folder / 'installed.json', {})
         restoring = self.state.get('operation') == 'rollback'
         if restoring:
           release = self.state['release']
         else:
-          raw = await asyncio.to_thread(fetch, core.bundle_url(index), core.LIMIT)
-          release = core.verify_bundle(raw, index, self.config['public_key'], previous.get('sequence', 0))
+          cached = await asyncio.to_thread(self.cache.load, index, self.config['public_key'], previous.get('sequence', 0))
+          if self.cancelled(generation): return
+          if cached is None:
+            self.prefetched_digest = None
+            self.prefetch_due = min(self.prefetch_due,max(time.monotonic(),self.prefetch_not_before))
+            self.prefetch_state = {'phase':'retry_wait','ready':False,'message':'캐시 확인 필요 · 다시 받기 대기'}
+            return  # Worker retries independently; no network wait in the parked tick.
+          raw, release = cached
+          await asyncio.to_thread(prefetch.check_sources, self.root, release)
         # Disconnect or gear change during download leaves all production files untouched.
-        if not await self.parked():
+        if not await self.safe_parked():
           self.parked_since = None
           self.change('waiting_parked', '차량 상태 변경 · P 정차 후 다시 준비합니다')
           return
+        if self.cancelled(generation): return
+        self.change('downloading', '준비 파일 재검증·백업 중 · 다운로드 대기 없음')
         directory = await asyncio.to_thread(core.stage, self.root, self.folder, release)
+        if self.cancelled(generation): return
         if not restoring:
           core.atomic(directory / 'signed_bundle.json', raw)
           core.save(directory / 'index.json', index)
@@ -237,10 +411,12 @@ class UpdateService:
       if self.countdown_since is None: self.countdown_since = now
       if now - self.countdown_since < 10: return
       await asyncio.to_thread(core.validate_staged, self.root, self.folder, self.state['release'])
-      if not await self.parked():
+      if self.cancelled(generation): return
+      if not await self.safe_parked():
         self.parked_since = self.countdown_since = None
         self.change('waiting_parked', '차량 상태 변경 · 업데이트 예약 유지')
         return
+      if self.cancelled(generation): return
       self.change('armed', '재부팅 요청 · 시작 전에 준비된 파일을 적용합니다', armed_boot=self.boot, armed_at=time.time())
       proc = await asyncio.create_subprocess_exec('sudo', '-n', 'reboot', stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
       try:
@@ -274,6 +450,11 @@ async def action(request):
   try: body = await request.json()
   except Exception: raise web.HTTPBadRequest(text='Invalid JSON')
   if not isinstance(body, dict): raise web.HTTPBadRequest(text='Invalid JSON')
+  # Cancellation must be accepted while stage validation or the final parked
+  # poll is awaiting. Durable intent is checked immediately before arming.
+  if body.get('action') == 'cancel':
+    service.cancel()
+    return web.json_response(service.public())
   # Do not hold a long download/reboot transaction open behind a second button press.
   if service.lock.locked(): raise web.HTTPConflict(text='업데이트 처리 중입니다. 상태를 다시 확인하세요.')
   async with service.lock:
@@ -281,22 +462,23 @@ async def action(request):
     if command == 'check':
       try: await service.check()
       except Exception: raise web.HTTPBadGateway(text='GitHub 버전을 확인하지 못했습니다. 다시 시도하세요.')
-    elif command == 'cancel':
-      if service.state.get('phase') not in ('waiting_parked', 'countdown'):
-        raise web.HTTPConflict(text='현재 단계에서는 취소할 수 없습니다.')
-      service.change('cancelled', '사용자가 업데이트 예약을 취소했습니다')
-      service.parked_since = service.countdown_since = None
     elif command == 'queue':
       index = service.latest
       if index is None or body.get('release_id') != index['release_id'] or body.get('bundle_sha256') != index['bundle_sha256']:
         raise web.HTTPConflict(text='버전·변경점을 다시 확인하세요.')
       if service.state.get('phase') in ACTIVE:
         if (service.state.get('index') or {}).get('bundle_sha256') == index['bundle_sha256']:
+          if service.state.get('automatic') and service.state.get('phase') == 'waiting_parked':
+            service.state['automatic'] = False
+            service.prefetch_generation += 1
+            service.change('waiting_parked', '사용자 설치 요청 · P 정차·제어 해제 확인 후 적용')
           return web.json_response(service.public())
         raise web.HTTPConflict(text='이미 다른 업데이트가 예약되어 있습니다.')
       if index['sequence'] <= core.load(service.folder / 'installed.json', {}).get('sequence', 0):
         raise web.HTTPConflict(text='이미 설치된 버전입니다.')
-      service.state = {'index': index, 'requested_at': time.time()}
+      service.prefetch_generation += 1
+      service.prefetch_due = 0.
+      service.state = {'index': index, 'request_id': uuid.uuid4().hex, 'requested_at': time.time()}
       service.parked_since = service.countdown_since = None
       service.change('waiting_parked', '예약됨 · P 정차·속도 0·제어 해제 10초를 기다립니다')
     elif command == 'rollback':
@@ -310,11 +492,22 @@ async def action(request):
                                          installed, service.config['public_key'])
       except Exception:
         raise web.HTTPConflict(text='직전 버전 백업을 확인하지 못했습니다. 기존 파일을 유지합니다.')
+      service.prefetch_generation += 1
       service.state = {'operation': 'rollback', 'release': release,
+                       'request_id': uuid.uuid4().hex,
                        'index': {k: release[k] for k in ('release_id', 'sequence', 'notes')},
                        'requested_at': time.time()}
       service.parked_since = service.countdown_since = None
       service.change('waiting_parked', '직전 버전 복원 예약됨 · P 정차·제어 해제 후 적용합니다')
+    elif command == 'automatic':
+      enabled = body.get('enabled')
+      if type(enabled) is not bool: raise web.HTTPBadRequest(text='enabled must be boolean')
+      service.save_auto_policy(enabled=enabled)
+      service.prefetch_generation += 1
+      service.prefetch_due = 0.
+      if not enabled and service.state.get('automatic') and service.state.get('phase') in ('waiting_parked','countdown'):
+        service.change('cancelled', '자동 업데이트 꺼짐 · 자동 설치 예약 취소')
+        service.parked_since = service.countdown_since = None
     else: raise web.HTTPBadRequest(text='Unknown action')
   return web.json_response(service.public())
 
@@ -323,10 +516,15 @@ async def lifecycle(app):
   service = UpdateService(app)
   app['hud_update_service'] = service
   task = asyncio.create_task(service.run())
+  prefetch_task = asyncio.create_task(service.prefetch_run()) if service.config else None
   yield
   task.cancel()
+  if prefetch_task is not None: prefetch_task.cancel()
   try: await task
   except asyncio.CancelledError: pass
+  if prefetch_task is not None:
+    try: await prefetch_task
+    except asyncio.CancelledError: pass
 
 
 def register(app):

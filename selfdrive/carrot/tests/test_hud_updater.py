@@ -214,7 +214,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     response = await self.client.get('/api/hud_update/status', headers=self.headers)
     self.assertNotIn('x'*43, await response.text())
 
-  async def test_queue_while_moving_never_downloads_writes_or_reboots(self):
+  async def test_install_tick_while_moving_never_downloads_writes_or_reboots(self):
     response = await self.queue(); self.assertEqual(response.status, 200)
     self.svc.parked = AsyncMock(return_value=False)
     with patch.object(service, 'fetch') as fetch, patch.object(service.asyncio, 'create_subprocess_exec') as reboot:
@@ -244,7 +244,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     self.svc.parked = AsyncMock(side_effect=[True, False])
     self.svc.vehicle_matches = lambda: True
     self.svc.parked_since = service.time.monotonic() - 20
-    with patch.object(service, 'fetch', return_value=b'release'), patch.object(core, 'verify_bundle', return_value={'files': []}), patch.object(core, 'stage') as stage:
+    with patch.object(self.svc.cache, 'load', return_value=(b'release', {'files': []})), patch.object(core, 'stage') as stage:
       await self.svc.tick()
       stage.assert_not_called()
     self.assertEqual(self.svc.state['phase'], 'waiting_parked')
