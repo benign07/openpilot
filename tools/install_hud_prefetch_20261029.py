@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 from urllib.request import urlopen
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -34,6 +35,11 @@ def checked(root,name):
 
 
 def digest(path):return sha(path.read_bytes()) if path.is_file() else None
+
+
+def boot_id():
+  # A reboot can reuse a PID. Use both identities when confirming activation.
+  return str(uuid.UUID(Path('/proc/sys/kernel/random/boot_id').read_text().strip()))
 
 
 def require_vehicle():
@@ -202,7 +208,9 @@ def finish_service(folder,root,state_root,manifest,core,bundle):
       core.save(folder/'transaction.json',record)
       raise RuntimeError('Service failed; parked recovery also failed: '+str(recovery)) from original
     raise RuntimeError('Service failed; original updater restored under fresh parked gate') from original
-  if record.get('phase')=='activation_pending_restart' and health['automatic_enabled'] is not True:
+  if (record.get('phase')=='activation_pending_restart' and health['automatic_enabled'] is not True and
+      record.get('activation_boot_id')==boot_id() and
+      record.get('activation_process_id')==health['process_id']):
     raise RuntimeError('Automatic activation not loaded yet; wait for the requested restart')
   record.update(phase='complete',service_verified=True,service_process_id=health['process_id'],
                 automatic_active=health['automatic_enabled'])
@@ -226,12 +234,14 @@ def activate(folder,root,state_root,manifest,core):
   policy=json.loads((state_root/'automatic.json').read_bytes())
   if not isinstance(policy,dict) or policy.get('schema')!=1:raise ValueError('Review automatic policy')
   previous_policy=dict(policy)
-  policy['enabled']=True;core.save(state_root/'automatic.json',policy)
-  record.update(phase='activation_pending_restart',activation_at=time.monotonic(),automatic_active=False)
-  core.save(folder/'transaction.json',record)
+  activation_boot=boot_id()
   # No source change: restart once to load the opt-in only AFTER verified
   # startup. This keeps failed bootstrap recovery free of automatic queues.
   try:
+    policy['enabled']=True;core.save(state_root/'automatic.json',policy)
+    record.update(phase='activation_pending_restart',activation_at=time.monotonic(),automatic_active=False,
+                  activation_boot_id=activation_boot,activation_process_id=health['process_id'])
+    core.save(folder/'transaction.json',record)
     if time.monotonic()-gate['mono']>=1:raise ValueError('Fresh parked restart required')
     subprocess.run(['sudo','-n','reboot'],check=True,timeout=5)
   except BaseException as exc:

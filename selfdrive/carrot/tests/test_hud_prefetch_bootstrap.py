@@ -20,6 +20,8 @@ class BootstrapTests(unittest.TestCase):
   def setUp(self):
     self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
     p=Path(self.tmp.name);self.folder=p/'package';self.root=p/'root';self.state=p/'state'
+    boot=patch.object(tool,'boot_id',return_value='11111111-1111-4111-8111-111111111111')
+    boot.start();self.addCleanup(boot.stop)
     for x in (self.folder,self.root,self.state):x.mkdir()
     self.key=Ed25519PrivateKey.generate();public=self.key.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)
     patcher=patch.object(tool,'PUBLIC_SHA',tool.sha(public));patcher.start();self.addCleanup(patcher.stop)
@@ -156,7 +158,7 @@ class BootstrapTests(unittest.TestCase):
   def test_activation_requires_verified_service_fresh_park_then_restart(self):
     m,c,b=self.stage();self.apply(m,c,b)
     p=self.folder/'transaction.json';record=json.loads(p.read_bytes());record.update(phase='complete',service_verified=True);c.save(p,record)
-    with patch.object(tool,'verify_service',return_value={'automatic_enabled':False}),patch.dict('sys.modules',self.modules()),patch.object(c,'parked',wraps=c.parked) as gate,patch.object(tool.subprocess,'run') as reboot:
+    with patch.object(tool,'verify_service',return_value={'automatic_enabled':False,'process_id':123}),patch.dict('sys.modules',self.modules()),patch.object(c,'parked',wraps=c.parked) as gate,patch.object(tool.subprocess,'run') as reboot:
       result=tool.activate(self.folder,self.root,self.state,m,c)
       gate.assert_called_once();reboot.assert_called_once()
     self.assertEqual(result['phase'],'activation_pending_restart')
@@ -165,7 +167,34 @@ class BootstrapTests(unittest.TestCase):
   def test_failed_activation_restart_restores_disabled_policy(self):
     m,c,b=self.stage();self.apply(m,c,b)
     p=self.folder/'transaction.json';record=json.loads(p.read_bytes());record.update(phase='complete',service_verified=True);c.save(p,record)
-    with patch.object(tool,'verify_service',return_value={'automatic_enabled':False}),patch.dict('sys.modules',self.modules()),patch.object(tool.subprocess,'run',side_effect=RuntimeError('reboot denied')):
+    with patch.object(tool,'verify_service',return_value={'automatic_enabled':False,'process_id':123}),patch.dict('sys.modules',self.modules()),patch.object(tool.subprocess,'run',side_effect=RuntimeError('reboot denied')):
       with self.assertRaises(RuntimeError):tool.activate(self.folder,self.root,self.state,m,c)
     self.assertFalse(json.loads((self.state/'automatic.json').read_bytes())['enabled'])
     self.assertEqual(json.loads(p.read_bytes())['phase'],'complete')
+
+  def test_activation_off_after_restart_completes_and_can_be_retried(self):
+    for new_boot,new_pid in ((False,124),(True,123)):
+      with self.subTest(new_boot=new_boot):
+        m,c,b=self.verify()
+        record={'phase':'activation_pending_restart','service_verified':True,
+                'activation_boot_id':tool.boot_id(),'activation_process_id':123}
+        c.save(self.folder/'transaction.json',record)
+        health={'automatic_enabled':False,'process_id':new_pid}
+        current_boot='22222222-2222-4222-8222-222222222222' if new_boot else record['activation_boot_id']
+        with patch.object(tool,'verify_service',return_value=health),patch.object(tool,'boot_id',return_value=current_boot):
+          result=tool.finish_service(self.folder,self.root,self.state,m,c,b)
+          self.assertEqual(result['phase'],'complete');self.assertFalse(result['automatic_active'])
+          # Retrying activation reaches its fresh guard, never a manual JSON fix.
+          with patch.object(c,'parked',side_effect=RuntimeError('fresh guard required')) as gate:
+            with self.assertRaisesRegex(RuntimeError,'fresh guard required'):
+              tool.activate(self.folder,self.root,self.state,m,c)
+            gate.assert_called_once()
+
+  def test_activation_still_same_boot_and_process_remains_pending(self):
+    m,c,b=self.stage();record=json.loads((self.folder/'transaction.json').read_bytes())
+    record.update(phase='activation_pending_restart',activation_boot_id=tool.boot_id(),activation_process_id=123)
+    c.save(self.folder/'transaction.json',record)
+    with patch.object(tool,'verify_service',return_value={'automatic_enabled':False,'process_id':123}):
+      with self.assertRaisesRegex(RuntimeError,'wait for the requested restart'):
+        tool.finish_service(self.folder,self.root,self.state,m,c,b)
+    self.assertEqual(json.loads((self.folder/'transaction.json').read_bytes())['phase'],'activation_pending_restart')
