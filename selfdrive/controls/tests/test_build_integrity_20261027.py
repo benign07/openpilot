@@ -34,7 +34,7 @@ def original_class(name):
   return scope[name]()
 
 
-def test_settings_preserve_published_contract_except_explicit_model_mode_help():
+def test_settings_preserve_published_contract_except_reviewed_model_and_departure_help():
   from openpilot.selfdrive.carrot.server.services.settings import inject_driving_preferences
   from openpilot.selfdrive.controls.lib.approach_comfort import DRIVING_PREFERENCES,CRUISE_BUTTON_PREFERENCES,RESPONSE_PREFERENCES
   raw=original('selfdrive/carrot/server/services/settings.py')
@@ -47,6 +47,11 @@ def test_settings_preserve_published_contract_except_explicit_model_mode_help():
   normalized=copy.deepcopy(b)
   changed={'DriverPositionHold','YellowLineBiasCm','NearbyVehicleBiasCm'}
   for option in normalized['params']:
+    if option['name']=='LaunchFollowStrength':
+      for field in ('descr','edescr','cdescr'):
+        assert '20km/h' in option[field] and '40km/h' in option[field] and '25초' in option[field]
+        assert 'MPC' in option[field] and '상한을 높이지' in option[field]
+        option[field]=old[option['name']][field]
     if option['name'] in changed:
       for field in ('descr','edescr','cdescr'):
         assert '모델 모드' in option[field] and '30km/h부터' not in option[field]
