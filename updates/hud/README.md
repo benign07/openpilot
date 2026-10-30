@@ -121,3 +121,8 @@ GitHub에는 소스, 공개 가능한 배포 명세·서명된 bundle, 변경 �
 ## Latest verified publication
 
 [lx3-departure-low-speed-20261029-01](releases/lx3-departure-low-speed-20261029-01.md) / sequence 21. The source branch alone is not an OTA release. Publish the signed bundle, pinned index, change notes and verification record together. Application remains parked and hash-bound.
+
+
+## Latest verified publication
+
+[lx3-profiles-departure-20261030-01](releases/lx3-profiles-departure-20261030-01.md) / sequence 22. The source branch alone is not an OTA release. Publish the signed bundle, pinned index, change notes and verification record together. Application remains parked and hash-bound.
