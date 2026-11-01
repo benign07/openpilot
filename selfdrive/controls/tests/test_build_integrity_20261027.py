@@ -56,6 +56,11 @@ def test_settings_preserve_published_contract_except_reviewed_model_and_departur
       for field in ('descr','edescr','cdescr'):
         assert '모델 모드' in option[field] and '30km/h부터' not in option[field]
         option[field]=old[option['name']][field]
+    if option['name'] in ('ApproachFlexibleGap','ApproachFlexibleGapMin'):
+      assert '30초' in option['descr']
+      assert '30 seconds' in option['edescr']
+      for field in ('descr','edescr','cdescr'):
+        option[field]=old[option['name']][field]
   assert json.dumps(a,sort_keys=True,ensure_ascii=False).encode()==json.dumps(normalized,sort_keys=True,ensure_ascii=False).encode()
   assert inject_driving_preferences(copy.deepcopy(b))==b
 

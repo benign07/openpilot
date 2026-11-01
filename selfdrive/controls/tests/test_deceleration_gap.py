@@ -32,6 +32,12 @@ def test_acquisition_requires_braking_already_started_and_is_bounded():
   assert f.braking
 
 
+@pytest.mark.parametrize('minimum', [70, 75, 80, 85, 90, 95, 100])
+def test_profile_ratio_domain_and_neutral_100(minimum):
+  result = step(DecelerationGap(), 220, settings=FlexibleGapSettings(True, minimum))
+  assert result == pytest.approx(.9*(1.-minimum/100.))
+
+
 @pytest.mark.parametrize('v,tf,d', [(3., .8, 9.), (50/3.6, .9, 20.), (100/3.6, .9, 34.)])
 def test_low_middle_and_high_speed_use_only_nominal_moving_component(v, tf, d):
   f = DecelerationGap()

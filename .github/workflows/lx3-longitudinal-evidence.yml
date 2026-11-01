@@ -55,6 +55,7 @@ jobs:
       - name: Real schema and linked solver comparisons
         run: |
           set -o pipefail
+          git fetch --depth=1 origin 29f0d86f2533cb80945ab3c85d67386f49c311cb
           uv run --no-sync python -m pytest --noconftest -o addopts= selfdrive/carrot/can_diagnostics/test_runtime_schema.py -q --junitxml=schema.xml 2>&1 | tee schema.log
           uv run --no-sync python tools/check_lx3_evidence_native.py --output native-evidence.json 2>&1 | tee native-evidence.log
           uv run --no-sync python tools/check_lx3_approach_native.py --output native-comfort.json 2>&1 | tee native-comfort.log
