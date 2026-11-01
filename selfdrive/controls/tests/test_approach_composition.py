@@ -67,7 +67,7 @@ def test_opt_in_mild_stop_can_use_short_gap_without_rewriting_constraint():
   for _ in range(300):
     update(m, c, r, flex_gap_settings=FlexibleGapSettings(True, 80), flex_gap_eligible=True,
            flex_gap_gentle_stop=True, observed_a_ego=-.3)
-  assert m.flex_gap.reduction > 0.
+  assert max(m.flex_gap.reduction, m.decel_gap.reduction) > 0.
   assert np.any(m.yref[:, 0] < 0.)
   np.testing.assert_array_equal(m.params, baseline.params)
   assert m.desired_distance >= baseline.desired_distance - 3. * .8 * .2 - 1e-9
@@ -81,11 +81,12 @@ def test_mild_stop_risk_restores_unmodified_target(change):
             flex_gap_gentle_stop=True, observed_a_ego=-.3)
   for _ in range(300):
     update(m, c, r, **kw)
-  assert m.flex_gap.reduction > 0.
+  assert max(m.flex_gap.reduction, m.decel_gap.reduction) > 0.
   for key, value in change.items():
     setattr(r.leadOne, key, value)
   update(m, c, r, **kw)
   assert m.flex_gap.reduction == 0.
+  assert m.decel_gap.reduction == 0.
   np.testing.assert_array_equal(m.yref[:, 0], 0.)
 
 

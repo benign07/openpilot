@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 import numpy as np
 import pytest
-from openpilot.selfdrive.controls.lib.flexible_gap import FlexibleGap, FlexibleGapSettings, MIN_FLEX_TF
+from openpilot.selfdrive.controls.lib.flexible_gap import DecelerationGap, FlexibleGap, FlexibleGapSettings, MIN_FLEX_TF
 from openpilot.selfdrive.controls.lib.approach_comfort import additional_approach_tf, speed_gap_reduction
 
 
@@ -18,14 +18,14 @@ def production_mpc():
   ns=dict(np=np,os=__import__('os'),__file__=str(path),DT_MDL=.05,ACCEL_MIN=-3.5,
     log=NS(LongitudinalPersonality=NS(standard=1,relaxed=2,aggressive=0,moreRelaxed=3)),
     index_function=lambda idx,max_val,max_idx:max_val*(idx/max_idx)**2,
-    FlexibleGap=FlexibleGap,FlexibleGapSettings=FlexibleGapSettings,MIN_FLEX_TF=MIN_FLEX_TF,
+    FlexibleGap=FlexibleGap,DecelerationGap=DecelerationGap,FlexibleGapSettings=FlexibleGapSettings,MIN_FLEX_TF=MIN_FLEX_TF,
     additional_approach_tf=additional_approach_tf,speed_gap_reduction=speed_gap_reduction)
   exec(compile(tree,str(path),'exec'),ns)
   m=ns['LongitudinalMpc'].__new__(ns['LongitudinalMpc'])
   m.x0=np.array([0.,20.,0.]);m.x_sol=np.tile([0.,20.,0.],(13,1))
   m.yref=np.zeros((13,6));m.params=np.zeros((13,8));m.prev_a=np.zeros(13)
   m.mode='acc';m.j_lead=0.;m.max_a=1.2;m.cruise_min_a=-2.;m.crash_cnt=0
-  m.flex_gap=FlexibleGap();m.solver=NS(set=lambda *args:None)
+  m.flex_gap=FlexibleGap();m.decel_gap=DecelerationGap();m.solver=NS(set=lambda *args:None)
   m.run=lambda:None
   # Same predicted lead trajectories in each comparison; the physical lead
   # path is held fixed to isolate actual MPC cost/constraint construction.

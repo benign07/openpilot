@@ -44,6 +44,52 @@ def inject_driving_preferences(data):
   definitions = {p.get('name'):p for p in data.get('params',[])}
   # Both preferences can bind the same positive acceleration ceiling. Keep
   # the existing IDs/ranges/defaults; a display label is not a freewheel sensor.
+  # OTA-compatible descriptions for the existing, versioned parameters.
+  flex_descriptions = {'ApproachFlexibleGap': {'descr': '시험 기능·기본 끔. 앞차 접근·정차 편안함을 켜야 LX3 일반 ACC에 적용됩니다. 안정된 동일 레이더 앞차를 따라 우리 차와 '
+                                    '앞차가 이미 약하게 감속할 때 이동 시간거리 부분을 서서히 완화합니다. 감속을 더 일찍 시작시키는 기능은 아닙니다. 보통 30초에 '
+                                    '걸쳐 원래 목표로 복귀하며 다시 감속하면 복구를 잠시 멈춥니다. 정속 추종은 기존 1.25초 하한을 유지합니다. 정차거리·제동 항과 '
+                                    '기존 MPC 위험경계는 유지합니다. 급감속·끼어들기·인식 이상에는 완화를 취소하며 실제 거리가 즉시 늘어나지는 않습니다. 정차 중 '
+                                    '이 기능으로 재가속하지 않습니다. 실차 개선은 검증 전입니다.',
+                           'edescr': 'Experimental, default OFF. Requires LX3 ACC and Lead approach comfort. '
+                                     'Once the same reliable radar lead and ego are already mildly '
+                                     'decelerating, gradually relaxes only the nominal moving timegap. It does '
+                                     'not advance braking onset. Normally returns over 30 seconds; renewed '
+                                     'braking pauses the return. Cruising retains its existing 1.25s floor. '
+                                     'Standstill/braking terms and MPC danger constraints remain. Severe '
+                                     'braking, cut-ins or unreliable tracks cancel relaxation, not instantly '
+                                     'restore physical range. No additional creep at standstill. Road '
+                                     'improvement is not yet validated.',
+                           'cdescr': 'Experimental, default OFF. Requires LX3 ACC and Lead approach comfort. '
+                                     'Once the same reliable radar lead and ego are already mildly '
+                                     'decelerating, gradually relaxes only the nominal moving timegap. It does '
+                                     'not advance braking onset. Normally returns over 30 seconds; renewed '
+                                     'braking pauses the return. Cruising retains its existing 1.25s floor. '
+                                     'Standstill/braking terms and MPC danger constraints remain. Severe '
+                                     'braking, cut-ins or unreliable tracks cancel relaxation, not instantly '
+                                     'restore physical range. No additional creep at standstill. Road '
+                                     'improvement is not yet validated.'},
+   'ApproachFlexibleGapMin': {'descr': '70~100%, 기본 70%. 전체 차간거리가 아닌 이동 시간거리 부분의 최소 비율입니다. 80%면 이 부분을 최대 20% '
+                                       '완화합니다. 정차 간격·제동 항·기존 위험경계는 줄이지 않습니다. 안정 감속 뒤 원래 목표로의 정상 복구는 30초에 걸쳐 '
+                                       '진행하며 교통 흐름에 따라 더 길어질 수 있습니다. 기존 속도별 거리 보정과 감소량을 더하지 않고 큰 쪽만 사용합니다. '
+                                       '100은 추가 완화 없음. 실제 감소량과 부드러움은 상황에 따라 제한됩니다.',
+                              'edescr': '70-100%, default 70%. Minimum ratio of the moving timegap component, '
+                                        'not the whole gap. 80 permits up to 20% reduction of that component. '
+                                        'Standstill/braking terms and danger constraints remain unchanged. '
+                                        'Normal return after mild braking takes 30 seconds and may pause for '
+                                        'traffic. Existing speed-gap and flexible-gap reductions are combined '
+                                        'by maximum, not added. 100 adds no relaxation. Actual reduction and '
+                                        'comfort depend on conditions.',
+                              'cdescr': '70-100%, default 70%. Minimum ratio of the moving timegap component, '
+                                        'not the whole gap. 80 permits up to 20% reduction of that component. '
+                                        'Standstill/braking terms and danger constraints remain unchanged. '
+                                        'Normal return after mild braking takes 30 seconds and may pause for '
+                                        'traffic. Existing speed-gap and flexible-gap reductions are combined '
+                                        'by maximum, not added. 100 adds no relaxation. Actual reduction and '
+                                        'comfort depend on conditions.'}}
+  for name, notes in flex_descriptions.items():
+    if name in definitions:
+      definitions[name].update(notes)
+
   suppression_notes = {
     'descr':'화면의 가속 억제 표시는 이 기능이나 정체 추종 차분함으로 양의 가속 상한이 낮아진 상태를 뜻합니다. 정차 중에도 나타날 수 있으며, 실제 타력주행·무동력 상태를 감지했다는 뜻은 아닙니다.',
     'edescr':'The acceleration-suppression indicator means this preference or stop-go calmness has lowered the positive acceleration ceiling. It can appear at standstill and does not detect physical coasting or zero propulsion.',

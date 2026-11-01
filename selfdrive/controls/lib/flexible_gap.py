@@ -11,6 +11,119 @@ import math
 MIN_FLEX_TF = 1.25
 
 
+class DecelerationGap:
+  """A mild braking maneuver's moving-gap reference, with a 30 s return.
+
+  This returns a time-gap offset only. The MPC keeps its original physical
+  obstacles, stopping terms, danger constraint and emergency braking bounds.
+  Invalid observations/risk cancel immediately; normal recovery is gradual.
+  """
+  RECOVERY_SECONDS = 30.0
+
+  def __init__(self, dt=0.05):
+    if not math.isfinite(dt) or not 0.0 < dt <= 0.2:
+      raise ValueError('Invalid deceleration gap sample period')
+    self.dt = dt
+    self.reset()
+
+  def reset(self, reason='reset'):
+    self.phase = 'idle'
+    self.reason = reason
+    self.identity = None
+    self.previous = {}
+    self.stable_s = 0.0
+    self.reduction = 0.0
+    self.recovery_s = 0.0
+    self.recovery_start = 0.0
+    self.braking = False
+
+  def update(self, settings, leads, *, eligible, v_ego, a_ego, planned_a, base_tf, stop_distance, comfort_brake, lead_brake=2.5):
+    values = (v_ego, a_ego, planned_a, base_tf, stop_distance, comfort_brake, lead_brake)
+    leads = tuple(leads)
+    if (not eligible or not settings.enabled or settings.minimum_ratio >= 100
+        or not all(math.isfinite(x) for x in values)
+        or v_ego < 0.0 or base_tf <= 0.0 or stop_distance < 0.0 or comfort_brake <= 0.0 or lead_brake <= 0.0
+        or not leads or not leads[0].status):
+      self.reset('ineligible')
+      return 0.0
+
+    permitted = 1.0 - max(70, min(100, settings.minimum_ratio)) / 100.0
+    observed = {}
+    clearance_ok = True
+    for lead in leads:
+      if not lead.status:
+        continue
+      d, vl, vr, al, jerk, prob = lead.dRel, lead.vLead, lead.vRel, lead.aLeadK, lead.jLead, lead.modelProb
+      # Match the existing flex gate's standstill + moving-gap + closing-speed
+      # reserve. Absolute stopping equivalence remains in the unmodified MPC;
+      # using it here too would make this gate dormant during ordinary braking.
+      floor_distance = (stop_distance + v_ego * base_tf * (1.0 - permitted)
+                        + max(0.0, -vr)**2 / (2.0 * comfort_brake))
+      if (not lead.radar or lead.radarTrackId < 0
+          or not all(math.isfinite(x) for x in (d, vl, vr, al, jerk, prob))
+          or prob < 0.9 or vl < 0.0 or vr < -1.5 or al <= -1.2 or a_ego <= -1.2
+          or abs(jerk) > 0.6 or abs(vl - v_ego - vr) > 0.5
+          or d <= 0.0 or d / max(0.01, -vr) < 12.0):
+        self.reset('risk_or_observation')
+        return 0.0
+      key = int(lead.radarTrackId)
+      if key in observed and abs(d - observed[key][0]) > 0.5:
+        self.reset('duplicate_track_range')
+        return 0.0
+      observed[key] = (d, vr)
+      # Entry clearance limits new acquisition. Crossing this preference
+      # boundary during the same mild maneuver must not abruptly undo the
+      # existing offset and cause a catch-up brake; true risk still cancels.
+      clearance_ok = clearance_ok and d > floor_distance + 0.5
+
+    identity = tuple(int(lead.radarTrackId) if lead.status else None for lead in leads)
+    if identity != self.identity:
+      self.reset('track_identity_changed')
+      self.identity, self.previous = identity, observed
+      return 0.0
+    for key, (d, vr) in observed.items():
+      old_d, old_vr = self.previous[key]
+      if abs(d - old_d - old_vr * self.dt) > 0.5 or abs(vr - old_vr) > 0.1:
+        self.reset('track_discontinuity')
+        return 0.0
+    self.previous = observed
+    self.stable_s += self.dt
+    primary = leads[0]
+    nominal = (stop_distance + v_ego * base_tf
+               + max(0.0, v_ego * v_ego / (2.0 * comfort_brake) - primary.vLead * primary.vLead / (2.0 * lead_brake)))
+    # Do not start moving a distant lead's reference to influence acceleration.
+    acquiring = (clearance_ok and v_ego >= 1.0 and -1.2 < a_ego < -0.1 and planned_a < -0.1
+                 and -1.2 < primary.aLeadK < -0.1 and -1.5 <= primary.vRel <= 0.1
+                 and abs(primary.aLeadK - a_ego) <= 0.6
+                 and primary.dRel <= nominal + max(2.0, 0.1 * nominal))
+    self.braking = primary.aLeadK < -0.1 and primary.vRel <= 0.1
+    if acquiring and self.stable_s >= 0.75:
+      self.reduction = min(permitted, self.reduction + 0.04 * self.dt)
+      self.phase, self.reason = 'braking', 'mild_deceleration'
+      self.recovery_s = 0.0
+    elif self.reduction > 0.0:
+      if primary.aLeadK < -0.1 or a_ego < -0.1:
+        # Normal continued braking pauses the return. Re-start a full return
+        # from the remaining offset when traffic settles again.
+        self.phase, self.reason = 'holding', 'traffic_decelerating'
+        self.recovery_s = 0.0
+      else:
+        if self.phase != 'recovering':
+          self.recovery_start = self.reduction
+          self.recovery_s = 0.0
+        self.phase, self.reason = 'recovering', 'gradual_return'
+        self.recovery_s = min(self.RECOVERY_SECONDS, self.recovery_s + self.dt)
+        s = self.recovery_s / self.RECOVERY_SECONDS
+        remaining = max(0.0, 1.0 - s**3 * (10.0 - 15.0 * s + 6.0 * s * s))
+        self.reduction = min(permitted, self.recovery_start * remaining)
+        if self.recovery_s >= self.RECOVERY_SECONDS:
+          self.reduction = 0.0
+          self.phase, self.reason = 'idle', 'return_complete'
+    else:
+      self.phase, self.reason = 'idle', 'not_decelerating'
+    return base_tf * self.reduction
+
+
 @dataclass(frozen=True)
 class FlexibleGapSettings:
   enabled: bool = False

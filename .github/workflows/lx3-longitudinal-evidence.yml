@@ -1,7 +1,7 @@
 name: LX3 longitudinal evidence and video evaluation
 on:
   push:
-    branches: [review/lx3-longitudinal-evidence-20261014, review/lx3-always-surround-20261018]
+    branches: [review/lx3-longitudinal-evidence-20261014, review/lx3-always-surround-20261018, review/lx3-cruise-off-lateral-20261026]
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,7 +20,7 @@ jobs:
       - name: Evidence, recorder and signed updater contracts
         run: |
           set -o pipefail
-          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_longitudinal_evidence.py selfdrive/controls/tests/test_diagnostic_recovery.py selfdrive/controls/tests/test_quality_qlog.py selfdrive/controls/tests/test_launch_follow.py selfdrive/controls/tests/test_lateral_margin.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_surround_recording.py selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_preview.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_approach_composition.py selfdrive/controls/tests/test_speed_follow_gap.py selfdrive/controls/tests/test_oem_surround_overlay.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=evidence.xml 2>&1 | tee evidence.log
+          python -m pytest --noconftest -o addopts= selfdrive/controls/tests/test_longitudinal_evidence.py selfdrive/controls/tests/test_diagnostic_recovery.py selfdrive/controls/tests/test_quality_qlog.py selfdrive/controls/tests/test_launch_follow.py selfdrive/controls/tests/test_lateral_margin.py selfdrive/controls/tests/test_surround_display.py selfdrive/controls/tests/test_surround_recording.py selfdrive/controls/tests/test_approach_comfort.py selfdrive/controls/tests/test_approach_preview.py selfdrive/controls/tests/test_flexible_gap.py selfdrive/controls/tests/test_deceleration_gap.py selfdrive/controls/tests/test_flexible_gap_mpc.py selfdrive/controls/tests/test_approach_composition.py selfdrive/controls/tests/test_speed_follow_gap.py selfdrive/controls/tests/test_oem_surround_overlay.py selfdrive/carrot/can_diagnostics/test_automatic.py selfdrive/controls/tests/test_passive_diagnostic_triggers.py selfdrive/carrot/tests/test_hud_updater.py selfdrive/carrot/tests/test_hud_rollback.py -q --junitxml=evidence.xml 2>&1 | tee evidence.log
       - name: Handoff and authority regressions (separate schema process)
         run: |
           set -o pipefail
@@ -60,6 +60,11 @@ jobs:
           uv run --no-sync python tools/check_lx3_approach_native.py --output native-comfort.json 2>&1 | tee native-comfort.log
           uv run --no-sync python tools/check_lx3_preferences_native.py --output native-preferences.json 2>&1 | tee native-preferences.log
           uv run --no-sync python tools/check_lx3_launch_native.py --output native-launch.json 2>&1 | tee native-launch.log
+      - name: Exact source22 and candidate deceleration reference comparison
+        run: |
+          set -o pipefail
+          git fetch --depth=1 origin dd81cf729baf6316cc8517b377dc39f6aaa137b6
+          uv run --no-sync python tools/compare_lx3_deceleration_native.py --output native-deceleration.json 2>&1 | tee native-deceleration.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -76,3 +81,5 @@ jobs:
             native-preferences.log
             native-launch.json
             native-launch.log
+            native-deceleration.json
+            native-deceleration.log

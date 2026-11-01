@@ -11,7 +11,7 @@ from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 # from openpilot.selfdrive.carrot.carrot_functions import CarrotPlanner
 from openpilot.selfdrive.carrot.carrot_functions import XState
-from openpilot.selfdrive.controls.lib.flexible_gap import FlexibleGap, FlexibleGapSettings, MIN_FLEX_TF
+from openpilot.selfdrive.controls.lib.flexible_gap import DecelerationGap, FlexibleGap, FlexibleGapSettings, MIN_FLEX_TF
 from openpilot.selfdrive.controls.lib.approach_comfort import additional_approach_tf, speed_gap_reduction
 
 if __name__ == '__main__':  # generating code
@@ -253,6 +253,7 @@ class LongitudinalMpc:
 
   def reset(self):
     self.flex_gap = FlexibleGap(self.dt)
+    self.decel_gap = DecelerationGap(self.dt)
     # self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.solver.reset()
     # self.solver.options_set('print_level', 2)
@@ -400,14 +401,23 @@ class LongitudinalMpc:
 
     nominal_tf = getattr(carrot, 'flex_gap_nominal_tf', 0.0)
     gentle_stop = flex_gap_gentle_stop and 1.0 <= v_ego < 6.0 and -0.8 < observed_a_ego < -0.1
-    reduce_tf = self.flex_gap.update(
+    decel_tf = self.decel_gap.update(
       flex_gap_settings, (radarstate.leadOne, radarstate.leadTwo),
       eligible=(flex_gap_eligible and mode == 'acc' and not reset_state
+                and nominal_tf > 0.0 and t_follow >= nominal_tf - 0.005),
+      v_ego=v_ego, a_ego=observed_a_ego, planned_a=a_ego,
+      base_tf=min(t_follow, nominal_tf) if nominal_tf > 0.0 else t_follow,
+      stop_distance=stop_distance, comfort_brake=comfort_brake, lead_brake=COMFORT_BRAKE,
+    )
+    legacy_reduce_tf = self.flex_gap.update(
+      flex_gap_settings, (radarstate.leadOne, radarstate.leadTwo),
+      eligible=(flex_gap_eligible and mode == 'acc' and not reset_state and decel_tf <= 0.0
                 and (t_follow >= nominal_tf - 0.005 if gentle_stop else abs(t_follow - nominal_tf) < 0.005)),
       v_ego=v_ego, a_ego=observed_a_ego, base_tf=min(t_follow, nominal_tf) if gentle_stop else t_follow,
       stop_distance=stop_distance, comfort_brake=comfort_brake, gentle_stop=gentle_stop,
     )
-    if reduce_tf > 0.0:
+    reduce_tf = max(legacy_reduce_tf, decel_tf)
+    if legacy_reduce_tf > 0.0 or (decel_tf > 0.0 and self.decel_gap.braking):
       # Never accelerate deliberately toward the relaxed reference. Preserve
       # the existing feasible initial acceleration floor and negative bounds.
       self.max_a = min(self.max_a, max(0.0, a_ego - 0.05))
@@ -495,7 +505,7 @@ class LongitudinalMpc:
             # asymmetric danger cost stay intact. Leave 5% headroom outside
             # that cost boundary at the current predicted speeds.
             full_distance = get_safe_obstacle_distance(gap_v, t_follow, comfort_brake, stop_distance)
-            reduction = np.minimum(gap_v * reduce_tf,
+            reduction = np.minimum(gap_v * legacy_reduce_tf,
                                    np.maximum(0.0, (1.0 - LEAD_DANGER_FACTOR - 0.05) * full_distance))
             if gentle_stop:
               # Relax only the nominal moving term, leaving stock decel/dynamic
@@ -504,6 +514,14 @@ class LongitudinalMpc:
               reduction = np.where(gap_v < 6.0, np.minimum(reduction, gap_v * limit_tf), 0.0)
             else:
               reduction = np.minimum(reduction, gap_v * max(0.0, t_follow - MIN_FLEX_TF))
+            # The braking maneuver can span speed/mode thresholds of the old
+            # cruising gate. Its offset never includes standstill/braking terms.
+            decel_reduction = np.minimum(np.minimum(gap_v, max(0.0, v_ego)) * decel_tf,
+                                        np.maximum(0.0, (1.0 - LEAD_DANGER_FACTOR - 0.05) * full_distance))
+            nominal_distance = desired_follow_distance(gap_v, lead_xv_0[:, 1], comfort_brake,
+                                                       stop_distance, min(t_follow, nominal_tf) if nominal_tf > 0.0 else t_follow)
+            decel_reduction = np.minimum(decel_reduction, np.maximum(0.0, nominal_distance - stop_distance))
+            reduction = np.maximum(reduction, decel_reduction)
             if speed_gap_eligible:
               # Scale the nominal following distance, not the whole stopped
               # obstacle. Preserve stock decel/dynamic TF headroom and the
@@ -565,7 +583,11 @@ class LongitudinalMpc:
                     'flex': {'eligible': bool(flex_gap_eligible), 'gentle_stop': bool(gentle_stop),
                              'reason': self.flex_gap.last_reason,
                              'stable_s': float(self.flex_gap.stable_time), 'reduction_ratio': float(self.flex_gap.reduction),
-                             'reduce_tf_s': float(reduce_tf), 'nominal_tf': float(nominal_tf)}}
+                             'reduce_tf_s': float(reduce_tf), 'nominal_tf': float(nominal_tf)},
+                    'deceleration_gap': {'phase': self.decel_gap.phase, 'reason': self.decel_gap.reason,
+                                        'reduction_ratio': float(self.decel_gap.reduction),
+                                        'reduce_tf_s': float(decel_tf), 'recovery_s': float(self.decel_gap.recovery_s),
+                                        'recovery_duration_s': self.decel_gap.RECOVERY_SECONDS}}
         evidence['copy_us'] = (time.perf_counter_ns() - evidence_started)/1000.
       except Exception:
         evidence = {'capture_error': True}
