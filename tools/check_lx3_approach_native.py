@@ -102,7 +102,7 @@ def main():
           stop_distance=c.stop_distance, maximum_accel=c.get_carrot_accel(v), comfort_brake=c.comfort_brake,
           cruise_speed=c.v_cruise, planned_accel=a)
         next_a = solve(m, c, r, v, a, request, flexible=enabled)
-        flex_seen |= m.flex_gap.reduction > 0.
+        flex_seen |= max(m.flex_gap.reduction, m.decel_gap.reduction) > 0.
         if next_a < -.1 and first_decel is None: first_decel = t
         max_jerk = max(max_jerk, abs(next_a-a)/.05)
         next_v, next_vl = max(0., v+next_a*.05), max(0., vl+al*.05)
@@ -120,11 +120,12 @@ def main():
     r = radar(3., 2.8, 8., -.3)
     for _ in range(300):
       solve(m, c, r, 3., -.3, ApproachRequest(), flexible=True)
-    assert m.flex_gap.reduction > 0. and np.any(m.yref[:,0] < 0.)
-    acquired = m.flex_gap.reduction
+    assert max(m.flex_gap.reduction, m.decel_gap.reduction) > 0. and np.any(m.yref[:,0] < 0.)
+    acquired = max(m.flex_gap.reduction, m.decel_gap.reduction)
     r.leadOne.radarTrackId = 2
     solve(m, c, r, 3., -.3, ApproachRequest(), flexible=True)
     assert m.flex_gap.reduction == 0.
+    assert m.decel_gap.reduction == 0.
     records.append({'case':'native_mild_stop_and_identity_reset','acquired':acquired,'reset':True})
 
     # Requested speed preference with the real linked solver. Idealised fixed

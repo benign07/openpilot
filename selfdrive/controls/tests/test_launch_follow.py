@@ -449,6 +449,10 @@ def test_development_menu_keeps_parameter_contract_and_has_no_duplicate_entries(
       for field in ('descr','edescr','cdescr'):
         assert by_name[item['name']][field].startswith(item[field])
       assert '가속 억제' in by_name[item['name']]['descr']
+    if item['name'] in ('ApproachFlexibleGap','ApproachFlexibleGapMin'):
+      presentation.update(('descr','edescr','cdescr'))
+      assert '30초' in by_name[item['name']]['descr']
+      assert '30 seconds' in by_name[item['name']]['edescr']
     assert {k:v for k,v in item.items() if k not in presentation}=={
       k:v for k,v in by_name[item['name']].items() if k not in presentation}
   categories=build_menu_categories(data,by_name)
